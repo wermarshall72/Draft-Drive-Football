@@ -1,0 +1,52 @@
+# CFB Auto-Battler: Master Rulebook & System Architecture
+
+## 1. Core Identity & Architecture
+This project is a 15-minute roguelike college football auto-battler built in Python. It merges Campus-to-Canton style roster-building with Super Auto Pets asynchronous multiplayer snapshots. 
+
+## 2. The 8-Slot UI Board
+The player manages exactly 8 unit slots. Spreadsheets are strictly avoided to ensure fast-paced, readable gameplay.
+*   **Offense (4 slots):** Quarterback (QB), Running Back (RB), Wide Receiver (WR), Offensive Line (O-Line)
+*   **Defense (2 slots):** Front 7, Secondary
+*   **Modifiers (2 slots):** Coach (Locked at start), Special Teams
+
+## 3. Game Progression Loop
+A single run lasts ~15 minutes and follows three strict phases:
+*   **Phase 1: National Signing Day (Mins 0-3).** The player receives a large starting Action Point (AP) budget to draft their foundational 8 cards from the transfer portal.
+*   **Phase 2: Regular Season (Mins 3-12).** A gauntlet of ~10 games against asynchronous snapshots of real player teams. Accumulating 3 losses terminates the run ("Fired").
+*   **Phase 3: The Playoffs (Mins 12-15).** A do-or-die elimination bracket against high-MMR opponent snapshots.
+
+## 4. Coaching & Synergies (The Run Anchor)
+*   At run initialization, the player selects one Coach from 3 randomized pairings (e.g., "Air Raid / Bend-Don't-Break").
+*   The Coach occupies a modifier slot automatically and cannot be sold or swapped.
+*   The Coach dictates mathematical synergies (e.g., +20% passing efficiency, -10% run stop rate), forcing unique roster-building archetypes every run.
+
+## 5. The 6-Day AP Economy
+*   Between matches, currency is represented by Time: 6 "Days" (Action Points) per shop phase.
+*   Days are spent making strategic decisions: rolling the transfer portal, practicing for stat bumps, or healing injuries.
+
+## 6. Simulation & Match Resolution
+*   Matches are entirely hands-off (true auto-battler).
+*   Games simulate rapidly across 8-10 abstract "drives".
+*   UI displays a visual Tug-of-War / Momentum bar.
+*   Drives resolve mathematically by pitting the attacking team's Offense snapshot against the defending team's Defense snapshot, modified by Coach synergies and Special Teams rolls.
+
+## 7. SQLite Database Schema (Async Snapshots)
+The asynchronous multiplayer requires storing and fetching past player builds at specific round intervals.
+
+**Table: snapshots**
+| Column | Type | Description |
+|---|---|---|
+| id | TEXT (PK) | UUID for the snapshot |
+| player_name | TEXT | Display name of the user |
+| round_number | INTEGER | The regular season week (1-10) or playoff stage |
+| wins | INTEGER | Current wins of the team when snapshot was saved |
+| losses | INTEGER | Current losses of the team when snapshot was saved |
+| coach_id | TEXT | Identifier for the locked Coach archetype |
+| qb_data | TEXT | JSON string of QB stats, tier, and modifiers |
+| rb_data | TEXT | JSON string of RB stats, tier, and modifiers |
+| wr_data | TEXT | JSON string of WR stats, tier, and modifiers |
+| oline_data | TEXT | JSON string of O-Line stats, tier, and modifiers |
+| front7_data | TEXT | JSON string of Front 7 stats, tier, and modifiers |
+| secondary_data| TEXT | JSON string of Secondary stats, tier, and modifiers |
+| st_data | TEXT | JSON string of Special Teams stats, tier, and modifiers |
+| created_at | TIMESTAMP| When the snapshot was submitted |
