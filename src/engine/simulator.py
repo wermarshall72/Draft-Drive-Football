@@ -31,3 +31,29 @@ def simulate_drive(offense: Roster, defense: Roster) -> float:
     momentum_shift = active_off - active_def
     
     return momentum_shift
+
+def simulate_match(team_a: Roster, team_b: Roster, num_drives: int = 10) -> dict:
+    """
+    Runs a full game by clashing Offenses vs Defenses over multiple drives.
+    """
+    momentum = 0.0  # Positive favors team_a, Negative favors team_b
+    
+    for _ in range(num_drives):
+        # A single cycle: Team A attacks, then Team B attacks
+        shift_a = simulate_drive(team_a, team_b)
+        shift_b = simulate_drive(team_b, team_a)
+        
+        # Net momentum change for the cycle
+        momentum += (shift_a - shift_b)
+        
+    if momentum > 0:
+        winner = team_a.player_name
+    elif momentum < 0:
+        winner = team_b.player_name
+    else:
+        winner = "Tie"
+        
+    return {
+        "winner": winner,
+        "final_momentum": momentum
+    }
