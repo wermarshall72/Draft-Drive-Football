@@ -1,37 +1,102 @@
-from src.engine.units import Roster, Unit, Coach, SpecialTeams
-from src.engine.simulator import simulate_match
+from src.db.schema import init_db
+from src.engine.game_run import GameRun
+from src.engine.shop import Shop
+from src.engine.units import Coach, Roster, SpecialTeams, Unit
 
-def build_dummy_team(name: str, coach_off: float, coach_def: float) -> Roster:
+
+def create_starter_team(name: str) -> Roster:
     return Roster(
         player_name=name,
-        qb=Unit(name="Basic QB", position="QB", power=12.0),
-        rb=Unit(name="Basic RB", position="RB", power=10.0),
-        wr=Unit(name="Basic WR", position="WR", power=10.0),
-        oline=Unit(name="Basic OLINE", position="OLINE", power=15.0),
-        # Doubled defensive power to balance the 4 vs 2 slot discrepancy
-        front7=Unit(name="Basic FRONT7", position="FRONT7", power=25.0),
-        secondary=Unit(name="Basic SEC", position="SECONDARY", power=22.0),
-        coach=Coach(name="Head Coach", off_scheme="Scheme", def_scheme="Scheme", 
-                    off_modifier=coach_off, def_modifier=coach_def),
-        special_teams=SpecialTeams()
+        qb=Unit(name="Walk-on QB", position="QB", power=10.0),
+        rb=Unit(name="Walk-on RB", position="RB", power=10.0),
+        wr=Unit(name="Walk-on WR", position="WR", power=10.0),
+        oline=Unit(name="Walk-on O-Line", position="OLINE", power=10.0),
+        front7=Unit(name="Walk-on Front 7", position="FRONT7", power=20.0),
+        secondary=Unit(name="Walk-on Secondary", position="SECONDARY", power=20.0),
+        coach=Coach(
+            name="Head Coach",
+            off_scheme="Balanced",
+            def_scheme="Balanced",
+            off_modifier=1.0,
+            def_modifier=1.0,
+        ),
+        special_teams=SpecialTeams(),
     )
 
+
+def build_dummy_team(name: str, coach_off: float, coach_def: float) -> Roster:
+    roster = create_starter_team(name)
+    roster.qb = Unit(name="Basic QB", position="QB", power=12.0)
+    roster.rb = Unit(name="Basic RB", position="RB", power=10.0)
+    roster.wr = Unit(name="Basic WR", position="WR", power=10.0)
+    roster.oline = Unit(name="Basic OLINE", position="OLINE", power=15.0)
+    roster.front7 = Unit(name="Basic FRONT7", position="FRONT7", power=25.0)
+    roster.secondary = Unit(name="Basic SEC", position="SECONDARY", power=22.0)
+    roster.coach.off_scheme = "Scheme"
+    roster.coach.def_scheme = "Scheme"
+    roster.coach.off_modifier = coach_off
+    roster.coach.def_modifier = coach_def
+    return roster
+
+
+def main() -> None:
+    init_db()
+
+    team_name = input("Enter your team name: ").strip()
+    while not team_name:
+        print("Team name cannot be empty.")
+        team_name = input("Enter your team name: ").strip()
+
+    roster = create_starter_team(team_name)
+    shop = Shop(roster)
+    game = GameRun(roster, shop)
+
+    print(f"\nWelcome, {team_name}! Build your roster and take on the season.")
+    while not game.is_game_over():
+        game.prep_phase()
+        print(f"\n=== Week {game.round_number} | Transfer Portal ===")
+
+        while game.shop.days > 0:
+            print(f"\nDays remaining: {game.shop.days}")
+            action = input("Enter 1 to Roll Portal or 2 to Skip to Match: ").strip()
+
+            if action == "1":
+                portal = game.shop.roll_portal()
+                print("\nTransfer portal:")
+                for index, unit in enumerate(portal, start=1):
+                    print(
+                        f"{index}. {unit.name} ({unit.position}) - "
+                        f"Power {unit.power:.1f}"
+                    )
+
+                while True:
+                    selection = input(
+                        "Enter 1-3 to draft a unit, or 4 to pass: "
+                    ).strip()
+                    if selection in {"1", "2", "3"}:
+                        drafted_unit = portal[int(selection) - 1]
+                        game.shop.draft_unit(drafted_unit)
+                        print(f"Drafted {drafted_unit.name}!")
+                        break
+                    if selection == "4":
+                        print("Passed on the portal units.")
+                        break
+                    print("Please enter 1, 2, 3, or 4.")
+            elif action == "2":
+                break
+            else:
+                print("Please enter 1 or 2.")
+
+        print("\n=== Combat ===")
+        result = game.combat_phase()
+        match_summary = {
+            "Final Score": result["final_momentum"],
+            "Winner": result["winner"],
+        }
+        print(match_summary)
+        print(f"Record: {game.wins} wins - {game.losses} losses")
+        input("Press Enter to continue...")
+
+
 if __name__ == "__main__":
-    # Team A: +20% offense buff, -20% defense penalty
-    team_a = build_dummy_team("Air Raid Monsters", coach_off=1.2, coach_def=0.8)
-    
-    # Team B: -20% offense penalty, +20% defense buff
-    team_b = build_dummy_team("Grind & Pound", coach_off=0.8, coach_def=1.2)
-    
-    print(f"Simulating 1,000 matches: {team_a.player_name} vs {team_b.player_name}...\n")
-    
-    results = {team_a.player_name: 0, team_b.player_name: 0, "Tie": 0}
-    
-    for _ in range(1000):
-        match_result = simulate_match(team_a, team_b)
-        results[match_result["winner"]] += 1
-            
-    print("Results after 1,000 games:")
-    print(f"{team_a.player_name}: {results[team_a.player_name]} wins")
-    print(f"{team_b.player_name}: {results[team_b.player_name]} wins")
-    print(f"Ties: {results['Tie']}")
+    main()
