@@ -17,8 +17,10 @@ A single run lasts ~15 minutes and follows three strict phases:
 
 ## 4. Coaching & Synergies (The Run Anchor)
 *   At run initialization, the player selects one Coach from 3 randomized pairings (e.g., "Air Raid / Bend-Don't-Break").
+*   Pairings are generated from five offensive styles and five defensive styles. Styles apply position-specific power multipliers; groups not explicitly listed use x1.0.
+*   New coaches use only their position-specific multipliers. Legacy `off_modifier` and `def_modifier` fields remain supported as side-wide fallbacks only when no position modifiers are present; they are never stacked with position-specific modifiers.
 *   The Coach occupies a modifier slot automatically and cannot be sold or swapped.
-*   The Coach dictates mathematical synergies (e.g., +20% passing efficiency, -10% run stop rate), forcing unique roster-building archetypes every run.
+*   Coach effects change the listed players' contributions to team power and are shown during coach selection.
 
 ## 5. The 6-Day AP Economy
 *   At run start, the 6 opening Action Points each pay for one position pick. Between matches, currency is represented by Time: 6 "Days" (Action Points) per shop phase.
@@ -32,7 +34,7 @@ A single run lasts ~15 minutes and follows three strict phases:
 *   Player stamina is a 0-to-1 value. Fatigue ramps linearly through a match, with a maximum 10% power reduction for zero-stamina players by the final drive; volatility is applied using the average of the players contributing to that side.
 
 ## Player Archetypes
-*   The opening pool has at least six archetypes for each of the six player position groups. Each player has `power`, `volatility`, and `stamina`; the in-season portal may also offer Special Teams, but Special Teams is excluded from opening draft offers.
+*   The opening pool has six described archetypes for each of the six player position groups. Each player has `power`, `volatility`, and `stamina`; descriptions refer only to these simulated stats. The in-season portal may also offer Special Teams, but Special Teams is excluded from opening draft offers.
 *   A tied match is replayed until a decisive result.
 
 ## 7. SQLite Database Schema (Async Snapshots)

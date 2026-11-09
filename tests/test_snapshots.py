@@ -18,6 +18,9 @@ def test_snapshot_round_trip_and_self_exclusion(tmp_path: Path) -> None:
             def_scheme="Zone",
             off_modifier=1.25,
             def_modifier=0.9,
+            position_modifiers={"QB": 1.1, "WR": 1.2, "SECONDARY": 1.1},
+            off_description="Favor QB and WR power.",
+            def_description="Favor Secondary power.",
         ),
     )
     roster.qb = Unit(
@@ -27,6 +30,7 @@ def test_snapshot_round_trip_and_self_exclusion(tmp_path: Path) -> None:
         power=18.5,
         volatility=0.1,
         synergy_tags=["Air_Raid", "Scrambler"],
+        description="Custom snapshot profile.",
     )
     roster.special_teams = SpecialTeams(
         name="Return Unit",
@@ -114,3 +118,35 @@ def test_legacy_snapshot_without_stamina_uses_default(tmp_path: Path) -> None:
 
     assert restored is not None
     assert restored.qb.stamina == 0.75
+
+
+def test_legacy_coach_snapshot_uses_side_wide_modifiers(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-coach.db"
+    roster = create_starter_team("Legacy Coach Team")
+    snapshot_id = save_snapshot(roster, 1, 0, 0, db_path=db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE snapshots SET coach_data = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "name": "Legacy Coach",
+                        "off_scheme": "Old Offense",
+                        "def_scheme": "Old Defense",
+                        "off_modifier": 1.25,
+                        "def_modifier": 0.9,
+                    }
+                ),
+                snapshot_id,
+            ),
+        )
+
+    restored = get_random_snapshot(1, db_path=db_path)
+
+    assert restored is not None
+    assert restored.coach.position_modifiers == {}
+    assert restored.coach.off_modifier == 1.25
+    assert restored.coach.def_modifier == 0.9
+    assert restored.get_offensive_power() == 50.0
+    assert restored.get_defensive_power() == 36.0

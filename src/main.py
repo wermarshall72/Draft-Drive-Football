@@ -3,6 +3,7 @@ from src.engine.game_run import GameRun
 from src.engine.shop import PortalCard, Shop
 from src.engine.units import (
     Coach,
+    Position,
     Roster,
     SpecialTeams,
     Unit,
@@ -48,9 +49,16 @@ def _choose_coach() -> Coach:
     options = random_coach_options()
     print("\nChoose your coach:")
     for index, coach in enumerate(options, start=1):
+        offensive_effects = _format_coach_effects(
+            coach, ("QB", "RB", "WR", "OLINE")
+        )
+        defensive_effects = _format_coach_effects(
+            coach, ("FRONT7", "SECONDARY")
+        )
         print(
-            f"{index}. {coach.name} "
-            f"(offense x{coach.off_modifier:.2f}, defense x{coach.def_modifier:.2f})"
+            f"{index}. {coach.name}\n"
+            f"   Offense: {coach.off_description} Effects: {offensive_effects}\n"
+            f"   Defense: {coach.def_description} Effects: {defensive_effects}"
         )
     while True:
         selection = input("Select 1-3: ").strip()
@@ -59,16 +67,43 @@ def _choose_coach() -> Coach:
         print("Please enter 1, 2, or 3.")
 
 
+def _format_coach_effects(
+    coach: Coach, positions: tuple[Position, ...]
+) -> str:
+    labels: dict[Position, str] = {
+        "QB": "QB",
+        "RB": "RB",
+        "WR": "WR",
+        "OLINE": "O-Line",
+        "FRONT7": "Front 7",
+        "SECONDARY": "Secondary",
+    }
+    effects = [
+        f"{labels[position]} x{coach.position_modifiers[position]:.2f}"
+        for position in positions
+        if coach.position_modifiers.get(position, 1.0) != 1.0
+    ]
+    return ", ".join(effects) if effects else "all groups x1.00"
+
+
 def _format_card(card: PortalCard) -> str:
     if isinstance(card, Unit):
-        return (
+        stats = (
             f"{card.name} ({card.position}) - Power {card.power:.1f}, "
             f"Volatility {card.volatility:.0%}, Stamina {card.stamina:.0%}"
         )
+        return f"{stats} | {card.description}" if card.description else stats
     return (
         f"{card.name} (Special Teams) - "
         f"Momentum-swing chance {card.momentum_swing_chance:.0%}"
     )
+
+
+def _print_opening_lineup(roster: Roster) -> None:
+    print("\nOpening lineup:")
+    for position in Shop.OPENING_ORDER:
+        unit = getattr(roster, Shop.ROSTER_SLOTS[position])
+        print(f"- {_format_card(unit)}")
 
 
 def _run_opening_draft(game: GameRun) -> None:
@@ -86,8 +121,9 @@ def _run_opening_draft(game: GameRun) -> None:
                 game.shop.draft_opening_unit(selected)
                 break
             print("Please enter 1, 2, or 3.")
-        print(f"Drafted {selected.name}.")
+        print(f"Selected: {_format_card(selected)}")
         print(f"Opening AP remaining: {game.shop.days}")
+        print(f"Roster {position}: {selected.name}")
 
 
 def _run_shop(game: GameRun, phase_title: str) -> None:
@@ -144,6 +180,7 @@ def main(db_path: DatabasePath = DB_PATH) -> None:
         f"\nNational Signing Day begins with {shop.days} AP."
     )
     _run_opening_draft(game)
+    _print_opening_lineup(roster)
     game.start_regular_season()
 
     while not game.is_game_over():

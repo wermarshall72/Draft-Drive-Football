@@ -36,10 +36,15 @@ def test_cli_completes_setup_regular_season_and_playoffs(
 
     output = capsys.readouterr().out
     assert "Choose your coach" in output
+    assert "Offense:" in output
+    assert "Defense:" in output
+    assert "Effects:" in output
     assert "National Signing Day" in output
     assert output.index("Choose your QB") < output.index("Choose your RB")
     assert output.index("Choose your RB") < output.index("Choose your WR")
+    assert "Roster QB:" in output
     assert "Opening AP remaining: 0" in output
+    assert output.index("Opening lineup:") < output.index("Week 1 of 10")
     assert "Week 1 of 10" in output
     assert "Week 10 of 10" in output
     assert "Playoff Round 3 of 3" in output

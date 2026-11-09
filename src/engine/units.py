@@ -1,5 +1,6 @@
 import random
 from dataclasses import dataclass, field, replace
+from itertools import product
 from typing import Literal
 
 Position = Literal["QB", "RB", "WR", "OLINE", "FRONT7", "SECONDARY"]
@@ -13,14 +14,26 @@ class Unit:
     volatility: float = 0.2  # RNG variance factor (0.2 = +/- 20% swing on drives)
     stamina: float = 0.75  # 0 to 1; higher stamina reduces late-game fatigue
     synergy_tags: list[str] = field(default_factory=list) # e.g., ["Air_Raid", "Scrambler"]
+    description: str = ""
 
 @dataclass
 class Coach:
     name: str
     off_scheme: str
     def_scheme: str
-    off_modifier: float = 1.0  # e.g., 1.2 for +20% Offense
-    def_modifier: float = 1.0  # e.g., 1.1 for +10% Defense
+    off_modifier: float = 1.0
+    def_modifier: float = 1.0
+    position_modifiers: dict[Position, float] = field(default_factory=dict)
+    off_description: str = ""
+    def_description: str = ""
+
+    def modifier_for(self, position: Position) -> float:
+        """Return a position multiplier, falling back to legacy side-wide values."""
+        if self.position_modifiers:
+            return self.position_modifiers.get(position, 1.0)
+        if position in ("QB", "RB", "WR", "OLINE"):
+            return self.off_modifier
+        return self.def_modifier
 
 @dataclass
 class SpecialTeams:
@@ -43,13 +56,17 @@ class Roster:
 
     def get_offensive_power(self) -> float:
         """Calculates raw offensive baseline before RNG."""
-        base_off = sum(u.power for u in [self.qb, self.rb, self.wr, self.oline])
-        return base_off * self.coach.off_modifier
+        return sum(
+            unit.power * self.coach.modifier_for(unit.position)
+            for unit in self.get_offensive_units()
+        )
 
     def get_defensive_power(self) -> float:
         """Calculates raw defensive baseline before RNG."""
-        base_def = sum(u.power for u in [self.front7, self.secondary])
-        return base_def * self.coach.def_modifier
+        return sum(
+            unit.power * self.coach.modifier_for(unit.position)
+            for unit in self.get_defensive_units()
+        )
 
     def get_offensive_units(self) -> tuple[Unit, ...]:
         return self.qb, self.rb, self.wr, self.oline
@@ -58,43 +75,80 @@ class Roster:
         return self.front7, self.secondary
 
 
-COACH_ARCHETYPES = (
-    Coach(
-        name="Air Raid / Bend-Don't-Break",
-        off_scheme="Air Raid",
-        def_scheme="Bend-Don't-Break",
-        off_modifier=1.2,
-        def_modifier=0.9,
+@dataclass(frozen=True)
+class CoachStyle:
+    name: str
+    description: str
+    position_modifiers: dict[Position, float]
+
+
+OFFENSIVE_STYLES = (
+    CoachStyle(
+        "Air Raid",
+        "Favor QB and WR power over RB power.",
+        {"QB": 1.1, "WR": 1.1, "RB": 0.9},
     ),
-    Coach(
-        name="Option / Pressure Defense",
-        off_scheme="Option",
-        def_scheme="Pressure Defense",
-        off_modifier=1.1,
-        def_modifier=1.1,
+    CoachStyle(
+        "Ground-and-Pound",
+        "Boost RB power while reducing WR power.",
+        {"RB": 1.2, "WR": 0.8},
     ),
-    Coach(
-        name="Balanced",
-        off_scheme="Balanced",
-        def_scheme="Balanced",
+    CoachStyle(
+        "Option",
+        "Boost QB and RB power at the expense of WR power.",
+        {"QB": 1.1, "RB": 1.1, "WR": 0.8},
     ),
-    Coach(
-        name="Ground-and-Pound / Shut Down",
-        off_scheme="Ground-and-Pound",
-        def_scheme="Shut Down",
-        off_modifier=0.9,
-        def_modifier=1.2,
+    CoachStyle("Balanced", "No position-specific power changes.", {}),
+    CoachStyle(
+        "Spread",
+        "Favor WR and O-Line power over RB power.",
+        {"WR": 1.1, "OLINE": 1.1, "RB": 0.9},
     ),
-    Coach(
-        name="Spread / Aggressive",
-        off_scheme="Spread",
-        def_scheme="Aggressive",
-        off_modifier=1.15,
-        def_modifier=0.95,
+)
+
+DEFENSIVE_STYLES = (
+    CoachStyle(
+        "Bend-Don't-Break",
+        "Lean on Secondary power while giving up Front 7 power.",
+        {"FRONT7": 0.8, "SECONDARY": 1.2},
     ),
+    CoachStyle(
+        "Pressure Defense",
+        "Boost Front 7 power while reducing Secondary power.",
+        {"FRONT7": 1.2, "SECONDARY": 0.8},
+    ),
+    CoachStyle("Balanced", "No position-specific power changes.", {}),
+    CoachStyle(
+        "Shut Down",
+        "Favor Secondary power over Front 7 power.",
+        {"FRONT7": 0.9, "SECONDARY": 1.1},
+    ),
+    CoachStyle(
+        "Aggressive",
+        "Favor Front 7 power over Secondary power.",
+        {"FRONT7": 1.1, "SECONDARY": 0.9},
+    ),
+)
+
+COACH_PAIRINGS = tuple(
+    Coach(
+        name=f"{offense.name} / {defense.name}",
+        off_scheme=offense.name,
+        def_scheme=defense.name,
+        position_modifiers={
+            **offense.position_modifiers,
+            **defense.position_modifiers,
+        },
+        off_description=offense.description,
+        def_description=defense.description,
+    )
+    for offense, defense in product(OFFENSIVE_STYLES, DEFENSIVE_STYLES)
 )
 
 
 def random_coach_options() -> list[Coach]:
     """Offer three distinct coach archetypes at the start of a run."""
-    return [replace(coach) for coach in random.sample(COACH_ARCHETYPES, 3)]
+    return [
+        replace(coach, position_modifiers=dict(coach.position_modifiers))
+        for coach in random.sample(COACH_PAIRINGS, 3)
+    ]
