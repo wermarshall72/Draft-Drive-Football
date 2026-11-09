@@ -1,3 +1,5 @@
+import json
+import sqlite3
 from pathlib import Path
 
 from src.db.schema import get_random_snapshot, init_db, save_snapshot
@@ -88,3 +90,27 @@ def test_snapshot_db_initializes_independent_of_working_directory(
     assert get_random_snapshot(
         1, exclude_id=snapshot_id, db_path=database
     ) is None
+
+
+def test_legacy_snapshot_without_stamina_uses_default(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy-snapshot.db"
+    roster = create_starter_team("Legacy Team")
+    save_snapshot(roster, 1, 0, 0, db_path=db_path)
+
+    with sqlite3.connect(db_path) as connection:
+        qb_data = json.loads(
+            connection.execute(
+                "SELECT qb_data FROM snapshots WHERE player_name = ?",
+                ("Legacy Team",),
+            ).fetchone()[0]
+        )
+        qb_data.pop("stamina")
+        connection.execute(
+            "UPDATE snapshots SET qb_data = ? WHERE player_name = ?",
+            (json.dumps(qb_data), "Legacy Team"),
+        )
+
+    restored = get_random_snapshot(1, db_path=db_path)
+
+    assert restored is not None
+    assert restored.qb.stamina == 0.75

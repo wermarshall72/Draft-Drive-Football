@@ -121,7 +121,9 @@ def get_random_snapshot(
         return None
 
     def load_unit(data: str) -> Unit:
-        return Unit(**json.loads(data))
+        unit_data = json.loads(data)
+        unit_data.setdefault("stamina", 0.75)
+        return Unit(**unit_data)
 
     if row["coach_data"]:
         coach = Coach(**json.loads(row["coach_data"]))

@@ -61,11 +61,33 @@ def _choose_coach() -> Coach:
 
 def _format_card(card: PortalCard) -> str:
     if isinstance(card, Unit):
-        return f"{card.name} ({card.position}) - Power {card.power:.1f}"
+        return (
+            f"{card.name} ({card.position}) - Power {card.power:.1f}, "
+            f"Volatility {card.volatility:.0%}, Stamina {card.stamina:.0%}"
+        )
     return (
         f"{card.name} (Special Teams) - "
         f"Momentum-swing chance {card.momentum_swing_chance:.0%}"
     )
+
+
+def _run_opening_draft(game: GameRun) -> None:
+    print("\n=== National Signing Day | Opening Draft ===")
+    for position in Shop.OPENING_ORDER:
+        offer = game.shop.roll_opening_offer(position)
+        print(f"\nChoose your {position}:")
+        for index, card in enumerate(offer, start=1):
+            print(f"{index}. {_format_card(card)}")
+
+        while True:
+            selection = input("Select 1-3: ").strip()
+            if selection in {"1", "2", "3"}:
+                selected = offer[int(selection) - 1]
+                game.shop.draft_opening_unit(selected)
+                break
+            print("Please enter 1, 2, or 3.")
+        print(f"Drafted {selected.name}.")
+        print(f"Opening AP remaining: {game.shop.days}")
 
 
 def _run_shop(game: GameRun, phase_title: str) -> None:
@@ -121,7 +143,7 @@ def main(db_path: DatabasePath = DB_PATH) -> None:
         f"\nWelcome, {team_name}! Coach {coach.name} is locked for this run."
         f"\nNational Signing Day begins with {shop.days} AP."
     )
-    _run_shop(game, "National Signing Day")
+    _run_opening_draft(game)
     game.start_regular_season()
 
     while not game.is_game_over():

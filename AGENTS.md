@@ -11,7 +11,7 @@ The player manages exactly 8 unit slots. Spreadsheets are strictly avoided to en
 
 ## 3. Game Progression Loop
 A single run lasts ~15 minutes and follows three strict phases:
-*   **Phase 1: National Signing Day (Mins 0-3).** The player receives 6 Action Points (AP) to draft their foundational cards from the transfer portal.
+*   **Phase 1: National Signing Day (Mins 0-3).** The player selects a Coach, then spends 6 Action Points to make exactly one player pick for each position group in order: QB, RB, WR, O-Line, Front 7, and Secondary. Each pick offers 3 uniformly random players from that position's pool.
 *   **Phase 2: Regular Season (Mins 3-12).** A gauntlet of ~10 games against asynchronous snapshots of real player teams. Accumulating 3 losses terminates the run ("Fired").
 *   **Phase 3: The Playoffs (Mins 12-15).** A three-round, single-elimination bracket against opponent snapshots; losing any playoff match ends the run.
 
@@ -21,14 +21,18 @@ A single run lasts ~15 minutes and follows three strict phases:
 *   The Coach dictates mathematical synergies (e.g., +20% passing efficiency, -10% run stop rate), forcing unique roster-building archetypes every run.
 
 ## 5. The 6-Day AP Economy
-*   Between matches, currency is represented by Time: 6 "Days" (Action Points) per shop phase.
+*   At run start, the 6 opening Action Points each pay for one position pick. Between matches, currency is represented by Time: 6 "Days" (Action Points) per shop phase.
 *   Days are spent making strategic decisions: rolling the transfer portal, practicing for stat bumps, or healing injuries.
 
 ## 6. Simulation & Match Resolution
 *   Matches are entirely hands-off (true auto-battler).
 *   Games simulate rapidly across 8-10 abstract "drives".
 *   UI displays a visual Tug-of-War / Momentum bar.
-*   Drives resolve mathematically by pitting the attacking team's Offense snapshot against the defending team's Defense snapshot, modified by Coach synergies and Special Teams rolls.
+*   Drives resolve mathematically by pitting the attacking team's Offense snapshot against the defending team's Defense snapshot, modified by Coach synergies and Special Teams rolls. Player power contributes to team strength, volatility controls drive-to-drive variance, and stamina reduces late-game fatigue.
+*   Player stamina is a 0-to-1 value. Fatigue ramps linearly through a match, with a maximum 10% power reduction for zero-stamina players by the final drive; volatility is applied using the average of the players contributing to that side.
+
+## Player Archetypes
+*   The opening pool has at least six archetypes for each of the six player position groups. Each player has `power`, `volatility`, and `stamina`; the in-season portal may also offer Special Teams, but Special Teams is excluded from opening draft offers.
 *   A tied match is replayed until a decisive result.
 
 ## 7. SQLite Database Schema (Async Snapshots)

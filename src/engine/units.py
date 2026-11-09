@@ -11,6 +11,7 @@ class Unit:
     tier: int = 1  # 1 to 3 (Bronze, Silver, Gold like Super Auto Pets)
     power: float = 10.0  # Base stat for Tug-of-War clashes
     volatility: float = 0.2  # RNG variance factor (0.2 = +/- 20% swing on drives)
+    stamina: float = 0.75  # 0 to 1; higher stamina reduces late-game fatigue
     synergy_tags: list[str] = field(default_factory=list) # e.g., ["Air_Raid", "Scrambler"]
 
 @dataclass
@@ -49,6 +50,12 @@ class Roster:
         """Calculates raw defensive baseline before RNG."""
         base_def = sum(u.power for u in [self.front7, self.secondary])
         return base_def * self.coach.def_modifier
+
+    def get_offensive_units(self) -> tuple[Unit, ...]:
+        return self.qb, self.rb, self.wr, self.oline
+
+    def get_defensive_units(self) -> tuple[Unit, ...]:
+        return self.front7, self.secondary
 
 
 COACH_ARCHETYPES = (

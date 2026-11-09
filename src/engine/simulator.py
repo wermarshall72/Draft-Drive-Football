@@ -1,7 +1,7 @@
 import random
-from typing import TypedDict
+from typing import Literal, TypedDict
 
-from src.engine.units import Roster
+from src.engine.units import Roster, Unit
 
 
 class MatchResult(TypedDict):
@@ -14,7 +14,12 @@ def apply_volatility(base_power: float, volatility: float = 0.2) -> float:
     modifier = random.uniform(1.0 - volatility, 1.0 + volatility)
     return base_power * modifier
 
-def simulate_drive(offense: Roster, defense: Roster) -> float:
+def simulate_drive(
+    offense: Roster,
+    defense: Roster,
+    drive_index: int = 0,
+    num_drives: int = 10,
+) -> float:
     """
     Simulates a single drive. 
     Returns a float representing the momentum shift:
@@ -27,18 +32,50 @@ def simulate_drive(offense: Roster, defense: Roster) -> float:
     if random.random() < defense.special_teams.momentum_swing_chance:
         return -15.0 # Defense gets a huge swing (e.g., blocked punt)
 
-    # 2. Retrieve base power (already scaled by Coach modifiers in the Roster class)
-    base_off = offense.get_offensive_power()
-    base_def = defense.get_defensive_power()
+    # 2. Fatigue accumulates across the match, based on the players on each side.
+    base_off = _apply_fatigue(
+        offense.get_offensive_power(),
+        offense.get_offensive_units(),
+        drive_index,
+        num_drives,
+    )
+    base_def = _apply_fatigue(
+        defense.get_defensive_power(),
+        defense.get_defensive_units(),
+        drive_index,
+        num_drives,
+    )
 
-    # 3. Apply RNG to simulate drive chaos
-    active_off = apply_volatility(base_off)
-    active_def = apply_volatility(base_def)
+    # 3. Apply each side's average player volatility to simulate drive chaos.
+    active_off = apply_volatility(
+        base_off, _average_stat(offense.get_offensive_units(), "volatility")
+    )
+    active_def = apply_volatility(
+        base_def, _average_stat(defense.get_defensive_units(), "volatility")
+    )
 
     # 4. Tug-of-War Math
     momentum_shift = active_off - active_def
     
     return momentum_shift
+
+
+def _average_stat(
+    roster_units: tuple[Unit, ...], stat: Literal["volatility", "stamina"]
+) -> float:
+    return sum(getattr(unit, stat) for unit in roster_units) / len(roster_units)
+
+
+def _apply_fatigue(
+    base_power: float,
+    roster_units: tuple[Unit, ...],
+    drive_index: int,
+    num_drives: int,
+) -> float:
+    stamina = min(1.0, max(0.0, _average_stat(roster_units, "stamina")))
+    progress = drive_index / max(num_drives - 1, 1)
+    return base_power * (1.0 - (1.0 - stamina) * 0.1 * progress)
+
 
 def simulate_match(
     team_a: Roster, team_b: Roster, num_drives: int = 10
@@ -48,10 +85,10 @@ def simulate_match(
     """
     momentum = 0.0  # Positive favors team_a, Negative favors team_b
     
-    for _ in range(num_drives):
+    for drive_index in range(num_drives):
         # A single cycle: Team A attacks, then Team B attacks
-        shift_a = simulate_drive(team_a, team_b)
-        shift_b = simulate_drive(team_b, team_a)
+        shift_a = simulate_drive(team_a, team_b, drive_index, num_drives)
+        shift_b = simulate_drive(team_b, team_a, drive_index, num_drives)
         
         # Net momentum change for the cycle
         momentum += (shift_a - shift_b)

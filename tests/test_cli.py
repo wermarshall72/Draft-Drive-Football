@@ -11,7 +11,7 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     database = tmp_path / "cli-game.db"
-    responses = ["CLI Team", "1", "2"]
+    responses = ["CLI Team", "1", *("1" for _ in range(6))]
     for match_number in range(1, 14):
         responses.append("2")
         if match_number < 13:
@@ -37,6 +37,10 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     output = capsys.readouterr().out
     assert "Choose your coach" in output
     assert "National Signing Day" in output
+    assert output.index("Choose your QB") < output.index("Choose your RB")
+    assert output.index("Choose your RB") < output.index("Choose your WR")
+    assert "Opening AP remaining: 0" in output
+    assert "Week 1 of 10" in output
     assert "Week 10 of 10" in output
     assert "Playoff Round 3 of 3" in output
     assert "Championship! You won the run." in output
