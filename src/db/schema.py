@@ -1,114 +1,145 @@
-import sqlite3
 import json
-import uuid
 import os
-from datetime import datetime
+import sqlite3
+import uuid
+from contextlib import closing
 from dataclasses import asdict
-from src.engine.units import Roster, Unit, Coach, SpecialTeams
+from datetime import datetime
+from pathlib import Path
+from typing import TypeAlias
 
-DB_PATH = "data/cfb_battler.db"
+from src.engine.units import Coach, Roster, SpecialTeams, Unit
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS snapshots (
-            id TEXT PRIMARY KEY,
-            player_name TEXT,
-            round_number INTEGER,
-            wins INTEGER,
-            losses INTEGER,
-            coach_id TEXT,
-            qb_data TEXT,
-            rb_data TEXT,
-            wr_data TEXT,
-            oline_data TEXT,
-            front7_data TEXT,
-            secondary_data TEXT,
-            st_data TEXT,
-            created_at TIMESTAMP
+DB_PATH = Path(__file__).resolve().parents[2] / "data" / "cfb_battler.db"
+DatabasePath: TypeAlias = str | os.PathLike[str]
+
+
+def _connect(db_path: DatabasePath) -> sqlite3.Connection:
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(path)
+
+
+def init_db(db_path: DatabasePath = DB_PATH) -> None:
+    with closing(_connect(db_path)) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS snapshots (
+                id TEXT PRIMARY KEY,
+                player_name TEXT,
+                round_number INTEGER,
+                wins INTEGER,
+                losses INTEGER,
+                coach_id TEXT,
+                coach_data TEXT,
+                qb_data TEXT,
+                rb_data TEXT,
+                wr_data TEXT,
+                oline_data TEXT,
+                front7_data TEXT,
+                secondary_data TEXT,
+                st_data TEXT,
+                created_at TIMESTAMP
+            )
+            """
         )
-    ''')
-    conn.commit()
-    conn.close()
+        columns = {
+            row[1] for row in cursor.execute("PRAGMA table_info(snapshots)")
+        }
+        if "coach_data" not in columns:
+            cursor.execute("ALTER TABLE snapshots ADD COLUMN coach_data TEXT")
+        conn.commit()
 
-def save_snapshot(roster: Roster, round_number: int, wins: int, losses: int):
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
+
+def save_snapshot(
+    roster: Roster,
+    round_number: int,
+    wins: int,
+    losses: int,
+    db_path: DatabasePath = DB_PATH,
+) -> str:
+    init_db(db_path)
     snapshot_id = str(uuid.uuid4())
-    created_at = datetime.now().isoformat()
-    
-    cursor.execute('''
-        INSERT INTO snapshots (
-            id, player_name, round_number, wins, losses, coach_id,
-            qb_data, rb_data, wr_data, oline_data, front7_data, secondary_data, st_data,
-            created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        snapshot_id,
-        roster.player_name,
-        round_number,
-        wins,
-        losses,
-        roster.coach.name, # Using name as coach_id for now
-        json.dumps(asdict(roster.qb)),
-        json.dumps(asdict(roster.rb)),
-        json.dumps(asdict(roster.wr)),
-        json.dumps(asdict(roster.oline)),
-        json.dumps(asdict(roster.front7)),
-        json.dumps(asdict(roster.secondary)),
-        json.dumps(asdict(roster.special_teams)),
-        created_at
-    ))
-    
-    conn.commit()
-    conn.close()
+    with closing(_connect(db_path)) as conn:
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO snapshots (
+                    id, player_name, round_number, wins, losses, coach_id,
+                    coach_data, qb_data, rb_data, wr_data, oline_data,
+                    front7_data, secondary_data, st_data, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    roster.player_name,
+                    round_number,
+                    wins,
+                    losses,
+                    roster.coach.name,
+                    json.dumps(asdict(roster.coach)),
+                    json.dumps(asdict(roster.qb)),
+                    json.dumps(asdict(roster.rb)),
+                    json.dumps(asdict(roster.wr)),
+                    json.dumps(asdict(roster.oline)),
+                    json.dumps(asdict(roster.front7)),
+                    json.dumps(asdict(roster.secondary)),
+                    json.dumps(asdict(roster.special_teams)),
+                    datetime.now().isoformat(),
+                ),
+            )
     return snapshot_id
 
-def get_random_snapshot(round_number: int, exclude_id: str = None) -> Roster:
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    query = "SELECT * FROM snapshots WHERE round_number = ?"
-    params = [round_number]
+
+def get_random_snapshot(
+    round_number: int,
+    exclude_id: str | None = None,
+    exclude_player_name: str | None = None,
+    db_path: DatabasePath = DB_PATH,
+) -> Roster | None:
+    init_db(db_path)
+    query = """
+        SELECT player_name, coach_id, coach_data, qb_data, rb_data, wr_data,
+               oline_data, front7_data, secondary_data, st_data
+        FROM snapshots
+        WHERE round_number = ?
+    """
+    params: list[str | int] = [round_number]
     if exclude_id:
         query += " AND id != ?"
         params.append(exclude_id)
-    
+    if exclude_player_name:
+        query += " AND player_name COLLATE NOCASE != ?"
+        params.append(exclude_player_name)
     query += " ORDER BY RANDOM() LIMIT 1"
-    
-    cursor.execute(query, params)
-    row = cursor.fetchone()
-    conn.close()
-    
-    if not row:
+
+    with closing(_connect(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(query, params).fetchone()
+    if row is None:
         return None
-        
-    # Mapping row to Roster object (Assuming column order from CREATE TABLE)
-    # id, player_name, round_number, wins, losses, coach_id, qb_data, rb_data, wr_data, oline_data, front7_data, secondary_data, st_data, created_at
-    
-    def load_unit(data_str):
-        data = json.loads(data_str)
-        return Unit(**data)
 
-    def load_coach(coach_id):
-        # This is a bit of a placeholder since we don't have a coach registry yet
-        # For now, we'll just reconstruct a basic one or look it up if we had a registry
-        return Coach(name=coach_id, off_scheme="Unknown", def_scheme="Unknown")
+    def load_unit(data: str) -> Unit:
+        return Unit(**json.loads(data))
 
-    def load_st(data_str):
-        data = json.loads(data_str)
-        return SpecialTeams(**data)
+    if row["coach_data"]:
+        coach = Coach(**json.loads(row["coach_data"]))
+    else:
+        coach = Coach(
+            name=row["coach_id"],
+            off_scheme="Unknown",
+            def_scheme="Unknown",
+        )
 
     return Roster(
-        player_name=row[1],
-        qb=load_unit(row[6]),
-        rb=load_unit(row[7]),
-        wr=load_unit(row[8]),
-        oline=load_unit(row[9]),
-        front7=load_unit(row[10]),
-        secondary=load_unit(row[11]),
-        coach=load_coach(row[5]),
-        special_teams=load_st(row[12])
+        player_name=row["player_name"],
+        qb=load_unit(row["qb_data"]),
+        rb=load_unit(row["rb_data"]),
+        wr=load_unit(row["wr_data"]),
+        oline=load_unit(row["oline_data"]),
+        front7=load_unit(row["front7_data"]),
+        secondary=load_unit(row["secondary_data"]),
+        coach=coach,
+        special_teams=SpecialTeams(**json.loads(row["st_data"])),
     )

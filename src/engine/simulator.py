@@ -1,5 +1,13 @@
 import random
+from typing import TypedDict
+
 from src.engine.units import Roster
+
+
+class MatchResult(TypedDict):
+    winner: str
+    final_momentum: float
+
 
 def apply_volatility(base_power: float, volatility: float = 0.2) -> float:
     """Applies RNG variance to base power (e.g., 0.2 means +/- 20% swing)."""
@@ -32,7 +40,9 @@ def simulate_drive(offense: Roster, defense: Roster) -> float:
     
     return momentum_shift
 
-def simulate_match(team_a: Roster, team_b: Roster, num_drives: int = 10) -> dict:
+def simulate_match(
+    team_a: Roster, team_b: Roster, num_drives: int = 10
+) -> MatchResult:
     """
     Runs a full game by clashing Offenses vs Defenses over multiple drives.
     """

@@ -11,9 +11,9 @@ The player manages exactly 8 unit slots. Spreadsheets are strictly avoided to en
 
 ## 3. Game Progression Loop
 A single run lasts ~15 minutes and follows three strict phases:
-*   **Phase 1: National Signing Day (Mins 0-3).** The player receives a large starting Action Point (AP) budget to draft their foundational 8 cards from the transfer portal.
+*   **Phase 1: National Signing Day (Mins 0-3).** The player receives 6 Action Points (AP) to draft their foundational cards from the transfer portal.
 *   **Phase 2: Regular Season (Mins 3-12).** A gauntlet of ~10 games against asynchronous snapshots of real player teams. Accumulating 3 losses terminates the run ("Fired").
-*   **Phase 3: The Playoffs (Mins 12-15).** A do-or-die elimination bracket against high-MMR opponent snapshots.
+*   **Phase 3: The Playoffs (Mins 12-15).** A three-round, single-elimination bracket against opponent snapshots; losing any playoff match ends the run.
 
 ## 4. Coaching & Synergies (The Run Anchor)
 *   At run initialization, the player selects one Coach from 3 randomized pairings (e.g., "Air Raid / Bend-Don't-Break").
@@ -29,6 +29,7 @@ A single run lasts ~15 minutes and follows three strict phases:
 *   Games simulate rapidly across 8-10 abstract "drives".
 *   UI displays a visual Tug-of-War / Momentum bar.
 *   Drives resolve mathematically by pitting the attacking team's Offense snapshot against the defending team's Defense snapshot, modified by Coach synergies and Special Teams rolls.
+*   A tied match is replayed until a decisive result.
 
 ## 7. SQLite Database Schema (Async Snapshots)
 The asynchronous multiplayer requires storing and fetching past player builds at specific round intervals.
@@ -42,6 +43,7 @@ The asynchronous multiplayer requires storing and fetching past player builds at
 | wins | INTEGER | Current wins of the team when snapshot was saved |
 | losses | INTEGER | Current losses of the team when snapshot was saved |
 | coach_id | TEXT | Identifier for the locked Coach archetype |
+| coach_data | TEXT | JSON string preserving the Coach schemes and modifiers |
 | qb_data | TEXT | JSON string of QB stats, tier, and modifiers |
 | rb_data | TEXT | JSON string of RB stats, tier, and modifiers |
 | wr_data | TEXT | JSON string of WR stats, tier, and modifiers |
@@ -50,3 +52,9 @@ The asynchronous multiplayer requires storing and fetching past player builds at
 | secondary_data| TEXT | JSON string of Secondary stats, tier, and modifiers |
 | st_data | TEXT | JSON string of Special Teams stats, tier, and modifiers |
 | created_at | TIMESTAMP| When the snapshot was submitted |
+
+## Development and Tests
+*   Supported Python version: 3.10 or newer.
+*   Install the test dependency with `python -m pip install -e ".[test]"`.
+*   Run the automated tests with `python -m pytest`.
+*   Tests use temporary SQLite databases and never access the local game database.

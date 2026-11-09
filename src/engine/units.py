@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+import random
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 Position = Literal["QB", "RB", "WR", "OLINE", "FRONT7", "SECONDARY"]
@@ -22,6 +23,7 @@ class Coach:
 
 @dataclass
 class SpecialTeams:
+    name: str = "Special Teams"
     tier: int = 1
     momentum_swing_chance: float = 0.05 # 5% chance to randomly flip drive momentum
     field_goal_reliability: float = 0.80 # 80% chance to secure points on stalled drives
@@ -47,3 +49,45 @@ class Roster:
         """Calculates raw defensive baseline before RNG."""
         base_def = sum(u.power for u in [self.front7, self.secondary])
         return base_def * self.coach.def_modifier
+
+
+COACH_ARCHETYPES = (
+    Coach(
+        name="Air Raid / Bend-Don't-Break",
+        off_scheme="Air Raid",
+        def_scheme="Bend-Don't-Break",
+        off_modifier=1.2,
+        def_modifier=0.9,
+    ),
+    Coach(
+        name="Option / Pressure Defense",
+        off_scheme="Option",
+        def_scheme="Pressure Defense",
+        off_modifier=1.1,
+        def_modifier=1.1,
+    ),
+    Coach(
+        name="Balanced",
+        off_scheme="Balanced",
+        def_scheme="Balanced",
+    ),
+    Coach(
+        name="Ground-and-Pound / Shut Down",
+        off_scheme="Ground-and-Pound",
+        def_scheme="Shut Down",
+        off_modifier=0.9,
+        def_modifier=1.2,
+    ),
+    Coach(
+        name="Spread / Aggressive",
+        off_scheme="Spread",
+        def_scheme="Aggressive",
+        off_modifier=1.15,
+        def_modifier=0.95,
+    ),
+)
+
+
+def random_coach_options() -> list[Coach]:
+    """Offer three distinct coach archetypes at the start of a run."""
+    return [replace(coach) for coach in random.sample(COACH_ARCHETYPES, 3)]

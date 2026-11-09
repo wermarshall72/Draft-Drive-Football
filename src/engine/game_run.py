@@ -1,64 +1,119 @@
-from src.db.schema import get_random_snapshot, save_snapshot
+from typing import Literal
+
+from src.db.schema import DB_PATH, DatabasePath, get_random_snapshot, save_snapshot
 from src.engine.shop import Shop
-from src.engine.simulator import simulate_match
+from src.engine.simulator import MatchResult, simulate_match
 from src.engine.units import Coach, Roster, SpecialTeams, Unit
+
+RunPhase = Literal["opening_draft", "regular_season", "playoffs", "won", "lost"]
 
 
 class GameRun:
     """Tracks progression through a single roguelike run."""
 
-    WINS_TO_WIN = 10
-    LOSSES_TO_BE_FIRED = 5
+    REGULAR_SEASON_GAMES = 10
+    LOSSES_TO_BE_FIRED = 3
+    PLAYOFF_ROUNDS = 3
 
-    def __init__(self, roster: Roster, shop: Shop) -> None:
+    def __init__(
+        self,
+        roster: Roster,
+        shop: Shop,
+        db_path: DatabasePath = DB_PATH,
+    ) -> None:
         self.roster = roster
         self.shop = shop
+        self.db_path = db_path
         self.wins = 0
         self.losses = 0
         self.round_number = 1
+        self.playoff_round = 0
+        self.phase: RunPhase = "opening_draft"
+
+    def start_regular_season(self) -> None:
+        """Finish National Signing Day and prepare for the first game."""
+        if self.phase != "opening_draft":
+            raise RuntimeError("The regular season has already started.")
+        self.phase = "regular_season"
+        self.prep_phase()
 
     def prep_phase(self) -> None:
-        """Restore the shop's action-point budget for the new week."""
+        """Restore the shop's action-point budget for the current match."""
+        if self.phase not in ("regular_season", "playoffs"):
+            raise RuntimeError("The shop is not available during this phase.")
         self.shop.days = self.shop.DAYS_PER_SHOP
 
-    def combat_phase(self) -> dict[str, object]:
-        """Save the current team, play its round, and record the result."""
+    def combat_phase(self) -> MatchResult:
+        """Play one regular-season or playoff match and advance the run."""
+        if self.phase not in ("regular_season", "playoffs"):
+            raise RuntimeError("The run is not ready for a match.")
+
+        is_playoff = self.phase == "playoffs"
+        match_round = (
+            self.REGULAR_SEASON_GAMES + self.playoff_round
+            if is_playoff
+            else self.round_number
+        )
         snapshot_id = save_snapshot(
             self.roster,
-            round_number=self.round_number,
+            round_number=match_round,
             wins=self.wins,
             losses=self.losses,
+            db_path=self.db_path,
         )
         opponent = get_random_snapshot(
-            round_number=self.round_number,
+            round_number=match_round,
             exclude_id=snapshot_id,
+            exclude_player_name=self.roster.player_name,
+            db_path=self.db_path,
         )
         if opponent is None:
-            opponent = self._build_dummy_opponent()
+            opponent = self._build_dummy_opponent(self.roster.player_name)
 
         result = simulate_match(self.roster, opponent)
-        if result["winner"] == self.roster.player_name:
+        while result["winner"] == "Tie":
+            result = simulate_match(self.roster, opponent)
+
+        won_match = result["winner"] == self.roster.player_name
+        if won_match:
             self.wins += 1
-        elif result["winner"] == opponent.player_name:
+        else:
             self.losses += 1
 
-        self.round_number += 1
+        if is_playoff:
+            self._advance_playoffs(won_match)
+        else:
+            self._advance_regular_season()
         return result
 
-    def is_game_over(self) -> bool:
-        """Report whether the run has reached its win or loss limit."""
-        if self.wins >= self.WINS_TO_WIN:
-            print("Championship! You won the run.")
-            return True
+    def _advance_regular_season(self) -> None:
         if self.losses >= self.LOSSES_TO_BE_FIRED:
-            print("Fired! Your run is over.")
-            return True
-        return False
+            self.phase = "lost"
+        elif self.round_number == self.REGULAR_SEASON_GAMES:
+            self.phase = "playoffs"
+            self.playoff_round = 1
+        else:
+            self.round_number += 1
+
+    def _advance_playoffs(self, won_match: bool) -> None:
+        if not won_match:
+            self.phase = "lost"
+        elif self.playoff_round >= self.PLAYOFF_ROUNDS:
+            self.phase = "won"
+        else:
+            self.playoff_round += 1
+
+    def is_game_over(self) -> bool:
+        """Report whether the run reached a final win or loss state."""
+        return self.phase in ("won", "lost")
 
     @staticmethod
-    def _build_dummy_opponent() -> Roster:
+    def _build_dummy_opponent(player_name: str) -> Roster:
+        opponent_name = "FCS Cupcake"
+        while opponent_name == player_name:
+            opponent_name += " CPU"
         return Roster(
-            player_name="FCS Cupcake",
+            player_name=opponent_name,
             qb=Unit(name="Basic QB", position="QB", power=12.0),
             rb=Unit(name="Basic RB", position="RB", power=10.0),
             wr=Unit(name="Basic WR", position="WR", power=10.0),
