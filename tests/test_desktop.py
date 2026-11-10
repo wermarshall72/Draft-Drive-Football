@@ -29,6 +29,20 @@ def test_desktop_startup_uses_saved_profile_without_initializing_database(
     assert not database_path.exists()
 
 
+def test_dark_team_color_gets_a_saturated_readable_interface_accent(
+    tmp_path: Path,
+) -> None:
+    controller = ApplicationController(tmp_path / "team.json", tmp_path / "game.db")
+    profile = controller.create_profile("Blue Team", "navy", "gold")
+
+    theme = Theme.from_profile(profile)
+
+    assert theme.primary == pygame.Color(profile.primary_color.hex_value)
+    assert theme.primary_accent.b > 200
+    assert theme.primary_accent.r > 80
+    assert theme.primary_ink == pygame.Color("#fffaf0")
+
+
 def test_missing_profile_has_clear_fallback_and_start_is_disabled(
     tmp_path: Path,
 ) -> None:
@@ -80,12 +94,18 @@ def test_mouse_routes_to_settings_preview(tmp_path: Path) -> None:
         for button in desktop.router.current.buttons
         if button.label == "SETTINGS"
     )
-    event = pygame.event.Event(
+    down_event = pygame.event.Event(
         pygame.MOUSEBUTTONDOWN,
         {"pos": settings_button.rect.center, "button": 1},
     )
+    up_event = pygame.event.Event(
+        pygame.MOUSEBUTTONUP,
+        {"pos": settings_button.rect.center, "button": 1},
+    )
 
-    desktop.router.handle_event(event)
+    desktop.router.handle_event(down_event)
+    assert desktop.router.current_id == "main_menu"
+    desktop.router.handle_event(up_event)
 
     assert desktop.router.current_id == "settings"
     assert not (tmp_path / "game.db").exists()
@@ -107,7 +127,11 @@ def test_quit_button_exits_the_window_loop(tmp_path: Path) -> None:
                 pygame.event.Event(
                     pygame.MOUSEBUTTONDOWN,
                     {"pos": quit_button.rect.center, "button": 1},
-                )
+                ),
+                pygame.event.Event(
+                    pygame.MOUSEBUTTONUP,
+                    {"pos": quit_button.rect.center, "button": 1},
+                ),
             ],
         )
     )
@@ -117,6 +141,38 @@ def test_quit_button_exits_the_window_loop(tmp_path: Path) -> None:
     assert not desktop.running
     assert not pygame.get_init()
     assert not (tmp_path / "game.db").exists()
+
+
+def test_route_transition_is_brief_and_does_not_block_quit(
+    tmp_path: Path,
+) -> None:
+    desktop = DesktopApplication(
+        ApplicationController(tmp_path / "team.json", tmp_path / "game.db")
+    )
+    pygame.init()
+    try:
+        pygame.display.set_mode(LOGICAL_SIZE)
+        desktop.running = True
+        desktop.navigate("settings")
+
+        assert desktop.router.current_id == "settings"
+        transition_start = desktop._transition_started
+        assert transition_start is not None
+        assert desktop._transition_is_active(transition_start)
+        canvas = pygame.Surface(LOGICAL_SIZE)
+        desktop.router.draw(canvas)
+        original_pixel = canvas.get_at((640, 288))
+        desktop._draw_transition(canvas, transition_start)
+        assert canvas.get_at((640, 288)) != original_pixel
+        assert not desktop._transition_is_active(
+            transition_start + desktop.TRANSITION_MS
+        )
+        assert desktop._transition_started is None
+
+        desktop.quit()
+        assert not desktop.running
+    finally:
+        pygame.quit()
 
 
 def test_corrupt_profile_shows_recovery_message_and_quit_button_exits(

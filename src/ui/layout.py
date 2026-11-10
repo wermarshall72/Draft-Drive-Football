@@ -16,25 +16,25 @@ class Layout:
 
     @property
     def margin(self) -> int:
-        return max(24, min(round(self.width * 0.05), 64))
+        return max(24, min(round(self.width * 0.045), 56))
 
     @property
     def header(self) -> pygame.Rect:
         return pygame.Rect(
             self.margin,
-            max(24, round(self.height * 0.055)),
+            max(20, round(self.height * 0.042)),
             self.width - self.margin * 2,
-            max(70, round(self.height * 0.12)),
+            max(58, round(self.height * 0.095)),
         )
 
     @property
     def content(self) -> pygame.Rect:
-        top = self.header.bottom + max(20, round(self.height * 0.035))
+        top = self.header.bottom + max(68, round(self.height * 0.105))
         return pygame.Rect(
             self.margin,
             top,
             self.width - self.margin * 2,
-            self.height - top - self.margin,
+            self.height - top - self.margin - max(26, round(self.height * 0.045)),
         )
 
     def centered_panel(self, width_ratio: float, height_ratio: float) -> pygame.Rect:
