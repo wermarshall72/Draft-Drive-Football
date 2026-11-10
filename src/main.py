@@ -2,18 +2,25 @@ from dataclasses import replace
 from os import PathLike
 from typing import Callable
 
-from src.db.schema import DB_PATH, DatabasePath, init_db
-from src.engine.coaching_actions import POSITIONS, CoachingAction
+from src.application import (
+    ApplicationController,
+    CoachView,
+    MatchView,
+    MainMenuState,
+    RosterView,
+    RunState,
+    UnitView,
+)
+from src.db.schema import DB_PATH, DatabasePath
+from src.engine.coaching_actions import CoachingAction
 from src.engine.game_run import GameRun
 from src.engine.shop import Shop
-from src.engine.simulator import MatchResult
 from src.engine.units import (
     Coach,
     Position,
     Roster,
-    SpecialTeams,
     Unit,
-    random_coach_options,
+    create_starter_team,
 )
 from src.profile import (
     COLOR_CHOICES,
@@ -22,8 +29,6 @@ from src.profile import (
     TeamColor,
     TeamProfile,
     format_color_grid,
-    load_profile,
-    new_team_profile,
     save_profile,
     style_text,
     supports_ansi_color,
@@ -122,11 +127,13 @@ def _choose_color(
 def _load_or_create_profile(
     profile_path: str | PathLike[str] = PROFILE_PATH,
     *,
+    application: ApplicationController | None = None,
     reader: InputReader | None = None,
     writer: OutputWriter | None = None,
     ansi_enabled: bool | None = None,
 ) -> TeamProfile:
-    profile = load_profile(profile_path)
+    application = application or ApplicationController(profile_path=profile_path)
+    profile = application.load_profile()
     if profile is not None:
         return profile
 
@@ -148,10 +155,9 @@ def _load_or_create_profile(
         writer=writer,
         ansi_enabled=ansi_enabled,
     )
-    profile = new_team_profile(
+    profile = application.create_profile(
         team_name, primary_color.id, secondary_color.id
     )
-    save_profile(profile, profile_path)
     _write_output(writer, f"Saved profile for {profile.team_name}.")
     return profile
 
@@ -160,6 +166,7 @@ def _edit_settings(
     profile: TeamProfile,
     profile_path: str | PathLike[str] = PROFILE_PATH,
     *,
+    application: ApplicationController | None = None,
     reader: InputReader | None = None,
     writer: OutputWriter | None = None,
     ansi_enabled: bool | None = None,
@@ -235,13 +242,17 @@ def _edit_settings(
         else:
             _write_output(writer, "Please choose 1, 2, 3, 4, or 0.")
             continue
-        save_profile(profile, profile_path)
+        if application is None:
+            save_profile(profile, profile_path)
+        else:
+            application.save_profile(profile)
         _write_output(writer, "Settings saved.")
 
 
 def _main_menu_text(
-    profile: TeamProfile, ansi_enabled: bool | None = None
+    state: MainMenuState, ansi_enabled: bool | None = None
 ) -> str:
+    profile = state.profile
     header = _profile_header("CFB AUTO-BATTLER", profile, ansi_enabled)
     start_run = style_text(
         "1. Start Run", foreground=profile.primary_color, enabled=ansi_enabled
@@ -263,25 +274,6 @@ def _main_menu_text(
     )
 
 
-def create_starter_team(name: str, coach: Coach | None = None) -> Roster:
-    return Roster(
-        player_name=name,
-        qb=Unit(name="Walk-on QB", position="QB", power=10.0),
-        rb=Unit(name="Walk-on RB", position="RB", power=10.0),
-        wr=Unit(name="Walk-on WR", position="WR", power=10.0),
-        oline=Unit(name="Walk-on O-Line", position="OLINE", power=10.0),
-        front7=Unit(name="Walk-on Front 7", position="FRONT7", power=20.0),
-        secondary=Unit(name="Walk-on Secondary", position="SECONDARY", power=20.0),
-        coach=coach
-        or Coach(
-            name="Balanced",
-            off_scheme="Balanced",
-            def_scheme="Balanced",
-        ),
-        special_teams=SpecialTeams(),
-    )
-
-
 def build_dummy_team(name: str, coach_off: float, coach_def: float) -> Roster:
     roster = create_starter_team(name)
     roster.qb = Unit(name="Basic QB", position="QB", power=12.0)
@@ -297,10 +289,10 @@ def build_dummy_team(name: str, coach_off: float, coach_def: float) -> Roster:
     return roster
 
 
-def _choose_coach() -> Coach:
-    options = random_coach_options()
+def _choose_coach(application: ApplicationController) -> RunState:
+    state = application.run_state()
     print("\nChoose your coach:")
-    for index, coach in enumerate(options, start=1):
+    for index, coach in enumerate(state.coach_choices, start=1):
         offensive_effects = _format_coach_effects(
             coach, ("QB", "RB", "WR", "OLINE")
         )
@@ -315,12 +307,12 @@ def _choose_coach() -> Coach:
     while True:
         selection = input("Select 1-3: ").strip()
         if selection in {"1", "2", "3"}:
-            return options[int(selection) - 1]
+            return application.select_coach(int(selection))
         print("Please enter 1, 2, or 3.")
 
 
 def _format_coach_effects(
-    coach: Coach, positions: tuple[Position, ...]
+    coach: Coach | CoachView, positions: tuple[Position, ...]
 ) -> str:
     labels: dict[Position, str] = {
         "QB": "QB",
@@ -330,15 +322,16 @@ def _format_coach_effects(
         "FRONT7": "Front 7",
         "SECONDARY": "Secondary",
     }
+    modifiers = dict(coach.position_modifiers)
     effects = [
-        f"{labels[position]} x{coach.position_modifiers[position]:.2f}"
+        f"{labels[position]} x{modifiers[position]:.2f}"
         for position in positions
-        if coach.position_modifiers.get(position, 1.0) != 1.0
+        if modifiers.get(position, 1.0) != 1.0
     ]
     return ", ".join(effects) if effects else "all groups x1.00"
 
 
-def _format_card(card: Unit) -> str:
+def _format_card(card: Unit | UnitView) -> str:
     stats = (
         f"{card.name} ({card.position}) - Power {card.power:.1f}, "
         f"Volatility {card.volatility:.0%}, Stamina {card.stamina:.0%}"
@@ -398,26 +391,36 @@ def _format_action(action: CoachingAction) -> str:
 
 
 def _print_opening_lineup(
-    roster: Roster, profile: TeamProfile | None = None
+    roster: Roster | RosterView, profile: TeamProfile | None = None
 ) -> None:
     heading = "Opening lineup:"
     if profile is not None:
         heading = _profile_header(heading, profile)
     print(f"\n{heading}")
-    for position in Shop.OPENING_ORDER:
-        unit = getattr(roster, Shop.ROSTER_SLOTS[position])
+    players = (
+        roster.players
+        if isinstance(roster, RosterView)
+        else tuple(
+            getattr(roster, Shop.ROSTER_SLOTS[position])
+            for position in Shop.OPENING_ORDER
+        )
+    )
+    for unit in players:
         print(f"- {_format_card(unit)}")
 
 
 def _run_opening_draft(
-    game: GameRun, profile: TeamProfile | None = None
+    application: ApplicationController, profile: TeamProfile | None = None
 ) -> None:
     heading = "=== National Signing Day | Opening Draft ==="
     if profile is not None:
         heading = _profile_header(heading, profile)
     print(f"\n{heading}")
-    for position in Shop.OPENING_ORDER:
-        offer = game.shop.roll_opening_offer(position)
+    state = application.run_state()
+    while state.step == "opening_draft":
+        position = state.required_position
+        assert position is not None
+        offer = application.roll_opening_offer()
         print(f"\nChoose your {position}:")
         for index, card in enumerate(offer, start=1):
             print(f"{index}. {_format_card(card)}")
@@ -426,27 +429,31 @@ def _run_opening_draft(
             selection = input("Select 1-3: ").strip()
             if selection in {"1", "2", "3"}:
                 selected = offer[int(selection) - 1]
-                game.shop.draft_opening_unit(selected)
+                state = application.select_opening_player(int(selection))
                 break
             print("Please enter 1, 2, or 3.")
         print(f"Selected: {_format_card(selected)}")
-        print(f"Opening AP remaining: {game.shop.days}")
+        opening_days = 0 if state.step != "opening_draft" else state.days_remaining
+        print(f"Opening AP remaining: {opening_days}")
         print(f"Roster {position}: {selected.name}")
+    _print_opening_lineup(state.roster, profile)
 
 
 def _run_shop(
-    game: GameRun, phase_title: str, profile: TeamProfile | None = None
+    application: ApplicationController,
+    phase_title: str,
+    profile: TeamProfile | None = None,
 ) -> None:
     heading = f"=== {phase_title} | Coaching Staff ==="
     if profile is not None:
         heading = _profile_header(heading, profile)
     print(f"\n{heading}")
-    game.shop.roll_action_offer()
-    while game.shop.days > 0:
-        print(f"\nAP remaining: {game.shop.days}")
-        if game.shop.action_offer:
+    state = application.roll_action_offer()
+    while state.days_remaining > 0:
+        print(f"\nAP remaining: {state.days_remaining}")
+        if state.shop_offer:
             print("Available coaching actions:")
-            for index, action in enumerate(game.shop.action_offer, start=1):
+            for index, action in enumerate(state.shop_offer, start=1):
                 print(f"{index}. {_format_action(action)}")
         else:
             print("No affordable actions are currently offered.")
@@ -458,7 +465,7 @@ def _run_shop(
             break
         if selection == "M":
             try:
-                game.shop.move_to_next_day()
+                state = application.move_to_next_day()
             except RuntimeError as error:
                 print(error)
                 continue
@@ -469,112 +476,107 @@ def _run_shop(
             print("Please select an offered action, M, or 0.")
             continue
         index = int(selection) - 1
-        if not 0 <= index < len(game.shop.action_offer):
+        if not 0 <= index < len(state.shop_offer):
             print("That action is not currently offered.")
             continue
-        action = game.shop.action_offer[index]
+        action = state.shop_offer[index]
         target_position = None
         if action.choose_position:
-            available_positions = [
-                position
-                for position in POSITIONS
-                if not (
-                    action.position_ap
-                    and position in game.shop.ap_upgrade_positions
-                )
-            ]
+            available_positions = application.available_action_positions(
+                action.id
+            )
             print("Choose a position: " + ", ".join(available_positions))
             target_position = input("Position: ").strip().upper()
         try:
-            game.shop.take_action(action, target_position=target_position)
+            state = application.buy_action(
+                action.id, target_position=target_position
+            )
         except (RuntimeError, ValueError) as error:
             print(error)
             continue
-        print(f"Selected {action.name}; {game.shop.days} AP remain.")
-    game.shop.finish_shop()
+        print(f"Selected {action.name}; {state.days_remaining} AP remain.")
+    application.finish_shop()
 
 
 def _print_match_result(
-    result: MatchResult, profile: TeamProfile | None = None
+    result: MatchView, profile: TeamProfile | None = None
 ) -> None:
-    team_a = result["team_a"]
-    team_b = result["team_b"]
+    team_a = result.team_a
+    team_b = result.team_b
     print(
         f"\n{_display_team_name(team_a, profile)} vs "
         f"{_display_team_name(team_b, profile)}"
     )
-    for event in result["events"]:
+    for event in result.events:
         print(
-            f"Drive {event['drive_number']:02d} | "
-            f"{_display_team_name(event['team'], profile)}: "
-            f"{event['detail']}"
+            f"Drive {event.drive_number:02d} | "
+            f"{_display_team_name(event.team, profile)}: "
+            f"{event.detail}"
         )
         print(
             f"   Score: {_display_team_name(team_a, profile)} "
-            f"{event['team_a_score']} - "
-            f"{_display_team_name(team_b, profile)} {event['team_b_score']}"
+            f"{event.team_a_score} - "
+            f"{_display_team_name(team_b, profile)} {event.team_b_score}"
         )
 
     print(
         f"Final score: {_display_team_name(team_a, profile)} "
-        f"{result['team_a_score']} - "
-        f"{_display_team_name(team_b, profile)} {result['team_b_score']}"
+        f"{result.team_a_score} - "
+        f"{_display_team_name(team_b, profile)} {result.team_b_score}"
     )
-    print(f"Winner: {_display_team_name(result['winner'], profile)}")
-    if result["final_momentum"] > 0:
+    print(f"Winner: {_display_team_name(result.winner, profile)}")
+    if result.final_momentum > 0:
         momentum_leader = team_a
-    elif result["final_momentum"] < 0:
+    elif result.final_momentum < 0:
         momentum_leader = team_b
     else:
         momentum_leader = "Neither team"
     print(
-        f"Final momentum: {result['final_momentum']:+.1f} "
+        f"Final momentum: {result.final_momentum:+.1f} "
         f"({_display_team_name(momentum_leader, profile)} favored)"
     )
 
 
 def _start_run(
+    application: ApplicationController,
     profile: TeamProfile,
-    db_path: DatabasePath,
     ansi_enabled: bool | None = None,
 ) -> None:
-    init_db(db_path)
-    coach = _choose_coach()
-    roster = create_starter_team(profile.team_name, coach)
-    shop = Shop(roster, days=Shop.OPENING_AP)
-    game = GameRun(roster, shop, db_path=db_path)
+    application.start_run()
+    state = _choose_coach(application)
+    coach = state.roster.coach
 
     print(
         f"\nWelcome, {_display_team_name(profile.team_name, profile, ansi_enabled)}! "
         f"Coach {coach.name} is locked for this run."
-        f"\nNational Signing Day begins with {shop.days} AP."
+        f"\nNational Signing Day begins with {state.days_remaining} AP."
     )
-    _run_opening_draft(game, profile)
-    _print_opening_lineup(roster, profile)
-    game.start_regular_season()
+    _run_opening_draft(application, profile)
+    state = application.run_state()
 
-    while not game.is_game_over():
-        if game.phase == "regular_season":
-            phase_title = f"Week {game.round_number} of {game.REGULAR_SEASON_GAMES}"
+    while state.outcome is None:
+        if state.phase == "regular_season":
+            phase_title = (
+                f"Week {state.round_number} of {GameRun.REGULAR_SEASON_GAMES}"
+            )
         else:
             phase_title = (
-                f"Playoff Round {game.playoff_round} of {game.PLAYOFF_ROUNDS}"
+                f"Playoff Round {state.playoff_round} of {GameRun.PLAYOFF_ROUNDS}"
             )
-        game.prep_phase()
-        _run_shop(game, phase_title, profile)
+        _run_shop(application, phase_title, profile)
 
         print("\n=== Combat ===")
-        result = game.combat_phase()
+        result = application.advance_match()
         _print_match_result(result, profile)
-        print(f"Record: {game.wins} wins - {game.losses} losses")
+        state = application.run_state()
+        print(f"Record: {state.wins} wins - {state.losses} losses")
 
-        if game.phase == "won":
+        if state.outcome == "champion":
             print("Championship! You won the run.")
-        elif game.phase == "lost":
-            if game.losses >= game.LOSSES_TO_BE_FIRED and game.playoff_round == 0:
-                print("Fired! Your run is over.")
-            else:
-                print("Eliminated! Your playoff run is over.")
+        elif state.outcome == "fired":
+            print("Fired! Your run is over.")
+        elif state.outcome == "eliminated":
+            print("Eliminated! Your playoff run is over.")
         else:
             input("Press Enter to continue...")
 
@@ -583,18 +585,28 @@ def main(
     db_path: DatabasePath = DB_PATH,
     profile_path: str | PathLike[str] = PROFILE_PATH,
 ) -> None:
-    profile = _load_or_create_profile(profile_path)
+    application = ApplicationController(profile_path, db_path)
+    profile = _load_or_create_profile(
+        profile_path, application=application
+    )
     ansi_enabled = supports_ansi_color()
     while True:
-        print(_main_menu_text(profile, ansi_enabled))
+        menu_state = application.main_menu_state()
+        print(_main_menu_text(menu_state, ansi_enabled))
         selection = input("Choose an option: ").strip()
-        if selection == "1":
-            _start_run(profile, db_path, ansi_enabled)
-        elif selection == "2":
+        menu_action = dict(
+            zip(("1", "2", "3"), menu_state.available_actions)
+        ).get(selection)
+        if menu_action == "start_run":
+            _start_run(application, profile, ansi_enabled)
+        elif menu_action == "settings":
             profile = _edit_settings(
-                profile, profile_path, ansi_enabled=ansi_enabled
+                profile,
+                profile_path,
+                application=application,
+                ansi_enabled=ansi_enabled,
             )
-        elif selection == "3":
+        elif menu_action == "quit":
             print("Goodbye!")
             return
         else:

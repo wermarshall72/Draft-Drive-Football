@@ -79,6 +79,25 @@ class Roster:
         return self.front7, self.secondary
 
 
+def create_starter_team(name: str, coach: Coach | None = None) -> Roster:
+    return Roster(
+        player_name=name,
+        qb=Unit(name="Walk-on QB", position="QB", power=10.0),
+        rb=Unit(name="Walk-on RB", position="RB", power=10.0),
+        wr=Unit(name="Walk-on WR", position="WR", power=10.0),
+        oline=Unit(name="Walk-on O-Line", position="OLINE", power=10.0),
+        front7=Unit(name="Walk-on Front 7", position="FRONT7", power=20.0),
+        secondary=Unit(name="Walk-on Secondary", position="SECONDARY", power=20.0),
+        coach=coach
+        or Coach(
+            name="Balanced",
+            off_scheme="Balanced",
+            def_scheme="Balanced",
+        ),
+        special_teams=SpecialTeams(),
+    )
+
+
 @dataclass(frozen=True)
 class CoachStyle:
     name: str

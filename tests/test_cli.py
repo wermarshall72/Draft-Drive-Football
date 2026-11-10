@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from src.engine.game_run import GameRun
+from src.application import ApplicationController
 from src.engine.shop import Shop
-from src.main import _run_shop, create_starter_team, main
+from src.main import _run_shop, main
 
 
 def test_cli_completes_setup_regular_season_and_playoffs(
@@ -98,12 +98,20 @@ def test_cli_completes_setup_regular_season_and_playoffs(
 
 
 def test_cli_buys_multiple_actions_and_repeats_move_to_next_day(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    roster = create_starter_team("CLI Team")
-    shop = Shop(roster)
-    game = GameRun(roster, shop)
+    application = ApplicationController(
+        profile_path=tmp_path / "profile.json",
+        db_path=tmp_path / "game.db",
+    )
+    application.create_profile("CLI Team", "crimson", "scarlet")
+    application.start_run()
+    application.select_coach(1)
+    for _ in Shop.OPENING_ORDER:
+        application.roll_opening_offer()
+        application.select_opening_player(1)
     answers = iter(("1", "M", "1", "0"))
 
     def read_answer(prompt: str = "") -> str:
@@ -117,10 +125,12 @@ def test_cli_buys_multiple_actions_and_repeats_move_to_next_day(
     )
     monkeypatch.setattr("src.engine.shop.random.choice", lambda values: values[0])
 
-    _run_shop(game, "Week 1")
+    _run_shop(application, "Week 1")
 
-    assert shop.move_count == 1
-    assert [action.id for action, _ in shop.match_actions] == [1, 2]
+    state = application.run_state()
+    assert state.step == "match"
+    assert state.days_remaining == 0
     output = capsys.readouterr().out
     assert "Move to next day (1 AP)" in output
+    assert "Selected Scripted Opening; 6 AP remain." in output
     assert "Quick-Count Offense" not in output
