@@ -1,3 +1,7 @@
+from dataclasses import replace
+from os import PathLike
+from typing import Callable
+
 from src.db.schema import DB_PATH, DatabasePath, init_db
 from src.engine.coaching_actions import POSITIONS, CoachingAction
 from src.engine.game_run import GameRun
@@ -11,6 +15,252 @@ from src.engine.units import (
     Unit,
     random_coach_options,
 )
+from src.profile import (
+    COLOR_CHOICES,
+    PROFILE_PATH,
+    ProfileError,
+    TeamColor,
+    TeamProfile,
+    format_color_grid,
+    load_profile,
+    new_team_profile,
+    save_profile,
+    style_text,
+    supports_ansi_color,
+    validate_team_name,
+)
+
+InputReader = Callable[[str], str]
+OutputWriter = Callable[[str], None]
+
+
+def _read_input(reader: InputReader | None, prompt: str) -> str:
+    return (input if reader is None else reader)(prompt)
+
+
+def _write_output(writer: OutputWriter | None, text: str) -> None:
+    (print if writer is None else writer)(text)
+
+
+def _profile_header(
+    text: str, profile: TeamProfile, ansi_enabled: bool | None = None
+) -> str:
+    return style_text(
+        f" {text} ",
+        foreground=profile.secondary_color,
+        background=profile.primary_color,
+        enabled=ansi_enabled,
+    )
+
+
+def _display_team_name(
+    name: str, profile: TeamProfile | None, ansi_enabled: bool | None = None
+) -> str:
+    if profile is None:
+        return name
+    color = (
+        profile.primary_color
+        if name == profile.team_name
+        else profile.secondary_color
+    )
+    return style_text(name, foreground=color, enabled=ansi_enabled)
+
+
+def _prompt_team_name(
+    *,
+    prompt: str,
+    reader: InputReader | None = None,
+    writer: OutputWriter | None = None,
+) -> str:
+    while True:
+        try:
+            return validate_team_name(_read_input(reader, prompt))
+        except ProfileError as error:
+            _write_output(writer, str(error))
+
+
+def _choose_color(
+    prompt: str,
+    *,
+    excluded_color_ids: tuple[str, ...] = (),
+    primary_color_id: str | None = None,
+    secondary_color_id: str | None = None,
+    reader: InputReader | None = None,
+    writer: OutputWriter | None = None,
+    ansi_enabled: bool | None = None,
+) -> TeamColor:
+    while True:
+        _write_output(
+            writer,
+            format_color_grid(
+                primary_color_id,
+                secondary_color_id,
+                ansi_enabled=ansi_enabled,
+            ),
+        )
+        selection = _read_input(reader, prompt).strip()
+        if not selection.isascii() or not selection.isdecimal():
+            _write_output(
+                writer,
+                f"Please enter a color number from 1 to {len(COLOR_CHOICES)}.",
+            )
+            continue
+        color_number = int(selection)
+        if not 1 <= color_number <= len(COLOR_CHOICES):
+            _write_output(
+                writer,
+                f"Please enter a color number from 1 to {len(COLOR_CHOICES)}.",
+            )
+            continue
+        color = COLOR_CHOICES[color_number - 1]
+        if color.id in excluded_color_ids:
+            _write_output(writer, "Primary and secondary colors must be different.")
+            continue
+        return color
+
+
+def _load_or_create_profile(
+    profile_path: str | PathLike[str] = PROFILE_PATH,
+    *,
+    reader: InputReader | None = None,
+    writer: OutputWriter | None = None,
+    ansi_enabled: bool | None = None,
+) -> TeamProfile:
+    profile = load_profile(profile_path)
+    if profile is not None:
+        return profile
+
+    _write_output(writer, "\n=== Create your team profile ===")
+    team_name = _prompt_team_name(
+        prompt="Enter your team name: ", reader=reader, writer=writer
+    )
+    primary_color = _choose_color(
+        "Choose primary color (1-30): ",
+        reader=reader,
+        writer=writer,
+        ansi_enabled=ansi_enabled,
+    )
+    secondary_color = _choose_color(
+        "Choose secondary color (1-30): ",
+        excluded_color_ids=(primary_color.id,),
+        primary_color_id=primary_color.id,
+        reader=reader,
+        writer=writer,
+        ansi_enabled=ansi_enabled,
+    )
+    profile = new_team_profile(
+        team_name, primary_color.id, secondary_color.id
+    )
+    save_profile(profile, profile_path)
+    _write_output(writer, f"Saved profile for {profile.team_name}.")
+    return profile
+
+
+def _edit_settings(
+    profile: TeamProfile,
+    profile_path: str | PathLike[str] = PROFILE_PATH,
+    *,
+    reader: InputReader | None = None,
+    writer: OutputWriter | None = None,
+    ansi_enabled: bool | None = None,
+) -> TeamProfile:
+    while True:
+        _write_output(
+            writer,
+            _profile_header(
+                f"Settings | {profile.team_name}", profile, ansi_enabled
+            ),
+        )
+        _write_output(
+            writer,
+            "1. Team name\n"
+            "2. Primary color\n"
+            "3. Secondary color\n"
+            "4. Both colors\n"
+            "0. Back",
+        )
+        selection = _read_input(reader, "Choose a setting: ").strip()
+        if selection == "0":
+            return profile
+        if selection == "1":
+            name = _prompt_team_name(
+                prompt="Enter your team name: ", reader=reader, writer=writer
+            )
+            profile = replace(profile, team_name=name)
+        elif selection == "2":
+            color = _choose_color(
+                "Choose primary color (1-30): ",
+                excluded_color_ids=(profile.secondary_color_id,),
+                primary_color_id=profile.primary_color_id,
+                secondary_color_id=profile.secondary_color_id,
+                reader=reader,
+                writer=writer,
+                ansi_enabled=ansi_enabled,
+            )
+            profile = replace(profile, primary_color_id=color.id)
+        elif selection == "3":
+            color = _choose_color(
+                "Choose secondary color (1-30): ",
+                excluded_color_ids=(profile.primary_color_id,),
+                primary_color_id=profile.primary_color_id,
+                secondary_color_id=profile.secondary_color_id,
+                reader=reader,
+                writer=writer,
+                ansi_enabled=ansi_enabled,
+            )
+            profile = replace(profile, secondary_color_id=color.id)
+        elif selection == "4":
+            primary_color = _choose_color(
+                "Choose primary color (1-30): ",
+                excluded_color_ids=(profile.secondary_color_id,),
+                primary_color_id=profile.primary_color_id,
+                secondary_color_id=profile.secondary_color_id,
+                reader=reader,
+                writer=writer,
+                ansi_enabled=ansi_enabled,
+            )
+            secondary_color = _choose_color(
+                "Choose secondary color (1-30): ",
+                excluded_color_ids=(primary_color.id,),
+                primary_color_id=primary_color.id,
+                reader=reader,
+                writer=writer,
+                ansi_enabled=ansi_enabled,
+            )
+            profile = replace(
+                profile,
+                primary_color_id=primary_color.id,
+                secondary_color_id=secondary_color.id,
+            )
+        else:
+            _write_output(writer, "Please choose 1, 2, 3, 4, or 0.")
+            continue
+        save_profile(profile, profile_path)
+        _write_output(writer, "Settings saved.")
+
+
+def _main_menu_text(
+    profile: TeamProfile, ansi_enabled: bool | None = None
+) -> str:
+    header = _profile_header("CFB AUTO-BATTLER", profile, ansi_enabled)
+    start_run = style_text(
+        "1. Start Run", foreground=profile.primary_color, enabled=ansi_enabled
+    )
+    settings = style_text(
+        "2. Settings",
+        foreground=profile.secondary_color,
+        enabled=ansi_enabled,
+    )
+    quit_option = style_text(
+        "3. Quit", foreground=profile.primary_color, enabled=ansi_enabled
+    )
+    team = style_text(
+        profile.team_name, foreground=profile.primary_color, enabled=ansi_enabled
+    )
+    return (
+        f"\n{header}\nTeam: {team}\n"
+        f"{start_run}\n{settings}\n{quit_option}"
+    )
 
 
 def create_starter_team(name: str, coach: Coach | None = None) -> Roster:
@@ -147,15 +397,25 @@ def _format_action(action: CoachingAction) -> str:
     )
 
 
-def _print_opening_lineup(roster: Roster) -> None:
-    print("\nOpening lineup:")
+def _print_opening_lineup(
+    roster: Roster, profile: TeamProfile | None = None
+) -> None:
+    heading = "Opening lineup:"
+    if profile is not None:
+        heading = _profile_header(heading, profile)
+    print(f"\n{heading}")
     for position in Shop.OPENING_ORDER:
         unit = getattr(roster, Shop.ROSTER_SLOTS[position])
         print(f"- {_format_card(unit)}")
 
 
-def _run_opening_draft(game: GameRun) -> None:
-    print("\n=== National Signing Day | Opening Draft ===")
+def _run_opening_draft(
+    game: GameRun, profile: TeamProfile | None = None
+) -> None:
+    heading = "=== National Signing Day | Opening Draft ==="
+    if profile is not None:
+        heading = _profile_header(heading, profile)
+    print(f"\n{heading}")
     for position in Shop.OPENING_ORDER:
         offer = game.shop.roll_opening_offer(position)
         print(f"\nChoose your {position}:")
@@ -174,8 +434,13 @@ def _run_opening_draft(game: GameRun) -> None:
         print(f"Roster {position}: {selected.name}")
 
 
-def _run_shop(game: GameRun, phase_title: str) -> None:
-    print(f"\n=== {phase_title} | Coaching Staff ===")
+def _run_shop(
+    game: GameRun, phase_title: str, profile: TeamProfile | None = None
+) -> None:
+    heading = f"=== {phase_title} | Coaching Staff ==="
+    if profile is not None:
+        heading = _profile_header(heading, profile)
+    print(f"\n{heading}")
     game.shop.roll_action_offer()
     while game.shop.days > 0:
         print(f"\nAP remaining: {game.shop.days}")
@@ -229,25 +494,33 @@ def _run_shop(game: GameRun, phase_title: str) -> None:
     game.shop.finish_shop()
 
 
-def _print_match_result(result: MatchResult) -> None:
+def _print_match_result(
+    result: MatchResult, profile: TeamProfile | None = None
+) -> None:
     team_a = result["team_a"]
     team_b = result["team_b"]
-    print(f"\n{team_a} vs {team_b}")
+    print(
+        f"\n{_display_team_name(team_a, profile)} vs "
+        f"{_display_team_name(team_b, profile)}"
+    )
     for event in result["events"]:
         print(
-            f"Drive {event['drive_number']:02d} | {event['team']}: "
+            f"Drive {event['drive_number']:02d} | "
+            f"{_display_team_name(event['team'], profile)}: "
             f"{event['detail']}"
         )
         print(
-            f"   Score: {team_a} {event['team_a_score']} - "
-            f"{team_b} {event['team_b_score']}"
+            f"   Score: {_display_team_name(team_a, profile)} "
+            f"{event['team_a_score']} - "
+            f"{_display_team_name(team_b, profile)} {event['team_b_score']}"
         )
 
     print(
-        f"Final score: {team_a} {result['team_a_score']} - "
-        f"{team_b} {result['team_b_score']}"
+        f"Final score: {_display_team_name(team_a, profile)} "
+        f"{result['team_a_score']} - "
+        f"{_display_team_name(team_b, profile)} {result['team_b_score']}"
     )
-    print(f"Winner: {result['winner']}")
+    print(f"Winner: {_display_team_name(result['winner'], profile)}")
     if result["final_momentum"] > 0:
         momentum_leader = team_a
     elif result["final_momentum"] < 0:
@@ -256,42 +529,43 @@ def _print_match_result(result: MatchResult) -> None:
         momentum_leader = "Neither team"
     print(
         f"Final momentum: {result['final_momentum']:+.1f} "
-        f"({momentum_leader} favored)"
+        f"({_display_team_name(momentum_leader, profile)} favored)"
     )
 
 
-def main(db_path: DatabasePath = DB_PATH) -> None:
+def _start_run(
+    profile: TeamProfile,
+    db_path: DatabasePath,
+    ansi_enabled: bool | None = None,
+) -> None:
     init_db(db_path)
-
-    team_name = input("Enter your team name: ").strip()
-    while not team_name:
-        print("Team name cannot be empty.")
-        team_name = input("Enter your team name: ").strip()
-
     coach = _choose_coach()
-    roster = create_starter_team(team_name, coach)
+    roster = create_starter_team(profile.team_name, coach)
     shop = Shop(roster, days=Shop.OPENING_AP)
     game = GameRun(roster, shop, db_path=db_path)
 
     print(
-        f"\nWelcome, {team_name}! Coach {coach.name} is locked for this run."
+        f"\nWelcome, {_display_team_name(profile.team_name, profile, ansi_enabled)}! "
+        f"Coach {coach.name} is locked for this run."
         f"\nNational Signing Day begins with {shop.days} AP."
     )
-    _run_opening_draft(game)
-    _print_opening_lineup(roster)
+    _run_opening_draft(game, profile)
+    _print_opening_lineup(roster, profile)
     game.start_regular_season()
 
     while not game.is_game_over():
         if game.phase == "regular_season":
             phase_title = f"Week {game.round_number} of {game.REGULAR_SEASON_GAMES}"
         else:
-                phase_title = f"Playoff Round {game.playoff_round} of {game.PLAYOFF_ROUNDS}"
+            phase_title = (
+                f"Playoff Round {game.playoff_round} of {game.PLAYOFF_ROUNDS}"
+            )
         game.prep_phase()
-        _run_shop(game, phase_title)
+        _run_shop(game, phase_title, profile)
 
         print("\n=== Combat ===")
         result = game.combat_phase()
-        _print_match_result(result)
+        _print_match_result(result, profile)
         print(f"Record: {game.wins} wins - {game.losses} losses")
 
         if game.phase == "won":
@@ -303,6 +577,28 @@ def main(db_path: DatabasePath = DB_PATH) -> None:
                 print("Eliminated! Your playoff run is over.")
         else:
             input("Press Enter to continue...")
+
+
+def main(
+    db_path: DatabasePath = DB_PATH,
+    profile_path: str | PathLike[str] = PROFILE_PATH,
+) -> None:
+    profile = _load_or_create_profile(profile_path)
+    ansi_enabled = supports_ansi_color()
+    while True:
+        print(_main_menu_text(profile, ansi_enabled))
+        selection = input("Choose an option: ").strip()
+        if selection == "1":
+            _start_run(profile, db_path, ansi_enabled)
+        elif selection == "2":
+            profile = _edit_settings(
+                profile, profile_path, ansi_enabled=ansi_enabled
+            )
+        elif selection == "3":
+            print("Goodbye!")
+            return
+        else:
+            print("Please choose 1, 2, or 3.")
 
 
 if __name__ == "__main__":

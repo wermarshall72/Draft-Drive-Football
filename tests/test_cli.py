@@ -13,11 +13,13 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     database = tmp_path / "cli-game.db"
-    responses = ["CLI Team", "1", *("1" for _ in range(6))]
+    profile_file = tmp_path / "profile" / "team.json"
+    responses = ["CLI Team", "1", "2", "1", "1", *("1" for _ in range(6))]
     for match_number in range(1, 14):
         responses.append("0")
         if match_number < 13:
             responses.append("")
+    responses.append("3")
     answers = iter(responses)
 
     def read_answer(prompt: str = "") -> str:
@@ -62,9 +64,14 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     monkeypatch.setattr("builtins.input", read_answer)
     monkeypatch.setattr("src.engine.game_run.simulate_match", win_match)
 
-    main(db_path=database)
+    main(db_path=database, profile_path=profile_file)
 
     output = capsys.readouterr().out
+    assert "Create your team profile" in output
+    assert "1. Start Run" in output
+    assert "2. Settings" in output
+    assert "3. Quit" in output
+    assert output.count("Enter your team name:") == 1
     assert "Choose your coach" in output
     assert "Offense:" in output
     assert "Defense:" in output
@@ -87,6 +94,7 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     assert "Winner: CLI Team" in output
     assert "Final momentum: +1.0 (CLI Team favored)" in output
     assert database.exists()
+    assert profile_file.exists()
 
 
 def test_cli_buys_multiple_actions_and_repeats_move_to_next_day(
