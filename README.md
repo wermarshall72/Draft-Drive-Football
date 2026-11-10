@@ -16,9 +16,19 @@ snapshot database. Choose **Settings** from the main menu to edit the profile.
 
 ## Tests
 
-Install the test dependency if needed, then run the test suite with:
+Install the project and its test dependency in your active virtual environment
+with:
 
 ```sh
 python -m pip install -e ".[test]"
+```
+
+This installs Pygame Community Edition, the Python library planned for the
+desktop game window, drawing, and input handling. The current game is still
+played in the terminal; the dependency alone does not add a graphical UI.
+
+Run the test suite with:
+
+```sh
 python -m pytest
 ```
