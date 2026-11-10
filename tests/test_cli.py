@@ -27,8 +27,36 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     def win_match(team, opponent):
         assert team is not opponent
         return {
+            "team_a": team.player_name,
+            "team_b": opponent.player_name,
+            "team_a_score": 7,
+            "team_b_score": 0,
             "winner": team.player_name,
             "final_momentum": 1.0,
+            "events": [
+                {
+                    "drive_number": 1,
+                    "cycle_number": 1,
+                    "team": team.player_name,
+                    "opponent": opponent.player_name,
+                    "outcome": "Touchdown",
+                    "detail": "Touchdown and successful conversion (7 points).",
+                    "points": 7,
+                    "team_a_score": 7,
+                    "team_b_score": 0,
+                },
+                {
+                    "drive_number": 2,
+                    "cycle_number": 1,
+                    "team": opponent.player_name,
+                    "opponent": team.player_name,
+                    "outcome": "Punt",
+                    "detail": "The drive stalls; punt with no points.",
+                    "points": 0,
+                    "team_a_score": 7,
+                    "team_b_score": 0,
+                },
+            ],
         }
 
     monkeypatch.setattr("builtins.input", read_answer)
@@ -51,6 +79,13 @@ def test_cli_completes_setup_regular_season_and_playoffs(
     assert "Week 10 of 10" in output
     assert "Playoff Round 3 of 3" in output
     assert "Championship! You won the run." in output
+    assert "CLI Team vs FCS Cupcake" in output
+    assert "Drive 01 | CLI Team: Touchdown and successful conversion (7 points)." in output
+    assert "Drive 02 | FCS Cupcake: The drive stalls; punt with no points." in output
+    assert "Score: CLI Team 7 - FCS Cupcake 0" in output
+    assert "Final score: CLI Team 7 - FCS Cupcake 0" in output
+    assert "Winner: CLI Team" in output
+    assert "Final momentum: +1.0 (CLI Team favored)" in output
     assert database.exists()
 
 

@@ -2,6 +2,7 @@ from src.db.schema import DB_PATH, DatabasePath, init_db
 from src.engine.coaching_actions import POSITIONS, CoachingAction
 from src.engine.game_run import GameRun
 from src.engine.shop import Shop
+from src.engine.simulator import MatchResult
 from src.engine.units import (
     Coach,
     Position,
@@ -228,6 +229,37 @@ def _run_shop(game: GameRun, phase_title: str) -> None:
     game.shop.finish_shop()
 
 
+def _print_match_result(result: MatchResult) -> None:
+    team_a = result["team_a"]
+    team_b = result["team_b"]
+    print(f"\n{team_a} vs {team_b}")
+    for event in result["events"]:
+        print(
+            f"Drive {event['drive_number']:02d} | {event['team']}: "
+            f"{event['detail']}"
+        )
+        print(
+            f"   Score: {team_a} {event['team_a_score']} - "
+            f"{team_b} {event['team_b_score']}"
+        )
+
+    print(
+        f"Final score: {team_a} {result['team_a_score']} - "
+        f"{team_b} {result['team_b_score']}"
+    )
+    print(f"Winner: {result['winner']}")
+    if result["final_momentum"] > 0:
+        momentum_leader = team_a
+    elif result["final_momentum"] < 0:
+        momentum_leader = team_b
+    else:
+        momentum_leader = "Neither team"
+    print(
+        f"Final momentum: {result['final_momentum']:+.1f} "
+        f"({momentum_leader} favored)"
+    )
+
+
 def main(db_path: DatabasePath = DB_PATH) -> None:
     init_db(db_path)
 
@@ -259,10 +291,7 @@ def main(db_path: DatabasePath = DB_PATH) -> None:
 
         print("\n=== Combat ===")
         result = game.combat_phase()
-        print(
-            f"Winner: {result['winner']} | "
-            f"Final momentum: {result['final_momentum']:.1f}"
-        )
+        _print_match_result(result)
         print(f"Record: {game.wins} wins - {game.losses} losses")
 
         if game.phase == "won":

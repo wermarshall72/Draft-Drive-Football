@@ -7,7 +7,27 @@ import pytest
 from src.engine.coaching_actions import ACTION_BY_ID
 from src.engine.game_run import GameRun
 from src.engine.shop import Shop
+from src.engine.simulator import MatchResult
 from src.main import create_starter_team
+
+
+def _match_result(
+    winner: str,
+    momentum: float,
+    team_a: str = "Home Team",
+    team_b: str = "Opponent",
+) -> MatchResult:
+    team_a_score = 7 if winner == team_a else 0
+    team_b_score = 7 if winner == team_b else 0
+    return {
+        "team_a": team_a,
+        "team_b": team_b,
+        "team_a_score": team_a_score,
+        "team_b_score": team_b_score,
+        "winner": winner,
+        "final_momentum": momentum,
+        "events": [],
+    }
 
 
 @pytest.fixture
@@ -22,7 +42,7 @@ def test_run_enters_playoffs_after_ten_regular_season_games(
     game = GameRun(roster, Shop(roster), db_path=db_path)
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Home Team", "final_momentum": 1.0},
+        lambda *_: _match_result("Home Team", 1.0),
     )
     game.start_regular_season()
 
@@ -44,7 +64,7 @@ def test_three_regular_season_losses_end_the_run(
     game = GameRun(roster, Shop(roster), db_path=db_path)
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Opponent", "final_momentum": -1.0},
+        lambda *_: _match_result("Opponent", -1.0),
     )
     game.start_regular_season()
 
@@ -63,7 +83,7 @@ def test_three_playoff_wins_complete_the_run(
     game = GameRun(roster, Shop(roster), db_path=db_path)
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Home Team", "final_momentum": 1.0},
+        lambda *_: _match_result("Home Team", 1.0),
     )
     game.start_regular_season()
 
@@ -85,7 +105,7 @@ def test_playoff_loss_is_elimination(
     game = GameRun(roster, Shop(roster), db_path=db_path)
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Home Team", "final_momentum": 1.0},
+        lambda *_: _match_result("Home Team", 1.0),
     )
     game.start_regular_season()
     for _ in range(10):
@@ -93,7 +113,7 @@ def test_playoff_loss_is_elimination(
 
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Opponent", "final_momentum": -1.0},
+        lambda *_: _match_result("Opponent", -1.0),
     )
     game.combat_phase()
 
@@ -109,8 +129,8 @@ def test_tied_match_replays_until_decisive(
     game = GameRun(roster, Shop(roster), db_path=db_path)
     outcomes = iter(
         (
-            {"winner": "Tie", "final_momentum": 0.0},
-            {"winner": "Home Team", "final_momentum": 1.0},
+            _match_result("Tie", 0.0),
+            _match_result("Home Team", 1.0),
         )
     )
     monkeypatch.setattr(
@@ -131,9 +151,11 @@ def test_dummy_opponent_name_never_matches_player_name(
     roster = create_starter_team("FCS Cupcake")
     game = GameRun(roster, Shop(roster), db_path=db_path)
 
-    def lose_to_opponent(team, opponent):
+    def lose_to_opponent(team, opponent) -> MatchResult:
         assert team.player_name != opponent.player_name
-        return {"winner": opponent.player_name, "final_momentum": -1.0}
+        return _match_result(
+            opponent.player_name, -1.0, team.player_name, opponent.player_name
+        )
 
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
@@ -158,8 +180,8 @@ def test_temporary_action_survives_tie_replay_then_expires(
     shop.take_action(ACTION_BY_ID[25])
     outcomes = iter(
         (
-            {"winner": "Tie", "final_momentum": 0.0},
-            {"winner": "Home Team", "final_momentum": 1.0},
+            _match_result("Tie", 0.0),
+            _match_result("Home Team", 1.0),
         )
     )
     seen_power: list[float] = []
@@ -190,7 +212,7 @@ def test_permanent_action_is_in_snapshot_but_temporary_action_is_not(
     shop.take_action(ACTION_BY_ID[25])
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Home Team", "final_momentum": 1.0},
+        lambda *_: _match_result("Home Team", 1.0),
     )
 
     game.combat_phase()
@@ -218,7 +240,7 @@ def test_permanent_ap_bonus_and_banked_ap_restore_at_prep_phase(
 
     monkeypatch.setattr(
         "src.engine.game_run.simulate_match",
-        lambda *_: {"winner": "Home Team", "final_momentum": 1.0},
+        lambda *_: _match_result("Home Team", 1.0),
     )
     game.combat_phase()
     game.prep_phase()
