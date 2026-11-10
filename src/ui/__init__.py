@@ -1,0 +1,1 @@
+"""Reusable Pygame desktop shell."""
