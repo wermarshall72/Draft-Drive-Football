@@ -1,6 +1,7 @@
 from src.db.schema import DB_PATH, DatabasePath, init_db
+from src.engine.coaching_actions import POSITIONS, CoachingAction
 from src.engine.game_run import GameRun
-from src.engine.shop import PortalCard, Shop
+from src.engine.shop import Shop
 from src.engine.units import (
     Coach,
     Position,
@@ -86,16 +87,62 @@ def _format_coach_effects(
     return ", ".join(effects) if effects else "all groups x1.00"
 
 
-def _format_card(card: PortalCard) -> str:
-    if isinstance(card, Unit):
-        stats = (
-            f"{card.name} ({card.position}) - Power {card.power:.1f}, "
-            f"Volatility {card.volatility:.0%}, Stamina {card.stamina:.0%}"
+def _format_card(card: Unit) -> str:
+    stats = (
+        f"{card.name} ({card.position}) - Power {card.power:.1f}, "
+        f"Volatility {card.volatility:.0%}, Stamina {card.stamina:.0%}"
+    )
+    return f"{stats} | {card.description}" if card.description else stats
+
+
+def _format_action(action: CoachingAction) -> str:
+    effects: list[str] = []
+    for label, modifiers in (
+        ("Power", action.power),
+        ("Volatility", action.volatility),
+        ("Stamina", action.stamina),
+    ):
+        for position, value in modifiers:
+            target = "chosen group" if position == "*" else position
+            if label == "Power":
+                effect = f"{label} x{value:.2f}"
+            else:
+                effect = f"{label} {value:+.0%}"
+            effects.append(f"{target} {effect}")
+    if action.swing_chance:
+        effects.append(f"ST swing chance {action.swing_chance:+.0%}")
+    if action.field_goal_reliability:
+        effects.append(f"FG reliability {action.field_goal_reliability:+.0%}")
+    if action.swing_magnitude:
+        effects.append(f"ST swing magnitude +{action.swing_magnitude:.0f}")
+    if action.opponent_swing_reduction:
+        effects.append(
+            f"Opponent ST swing reduction "
+            f"{action.opponent_swing_reduction:.0f}"
         )
-        return f"{stats} | {card.description}" if card.description else stats
+    if action.bank_ap:
+        effects.append(f"Next shop +{action.bank_ap} AP")
+    if action.bank_ap_on_win:
+        effects.append(f"Next shop +{action.bank_ap_on_win} AP on a win")
+    if action.permanent_ap:
+        effects.append(f"+{action.permanent_ap} AP per future shop")
+    if action.carry_unused:
+        effects.append("Carry up to 2 unused AP")
+    if action.drive_count is not None:
+        effects.append(f"{action.drive_count} drives")
+    if action.fatigue_limit is not None:
+        effects.append(f"Maximum fatigue penalty {action.fatigue_limit:.0%}")
+    duration = {
+        "match": "next match",
+        "run": "permanent for the run",
+        "next_shop": "next shop",
+        "carry": "through next shop",
+    }[action.duration]
+    effect_text = "; ".join(effects) if effects else "No direct stat effect"
     return (
-        f"{card.name} (Special Teams) - "
-        f"Momentum-swing chance {card.momentum_swing_chance:.0%}"
+        f"{action.name} [{action.rarity}] - {action.ap_cost} AP | "
+        f"Target: {action.target} | {effect_text} | {duration}\n"
+        f"   {action.description}"
     )
 
 
@@ -127,39 +174,58 @@ def _run_opening_draft(game: GameRun) -> None:
 
 
 def _run_shop(game: GameRun, phase_title: str) -> None:
-    print(f"\n=== {phase_title} | Transfer Portal ===")
+    print(f"\n=== {phase_title} | Coaching Staff ===")
+    game.shop.roll_action_offer()
     while game.shop.days > 0:
-        print(f"\nDays remaining: {game.shop.days}")
-        action = input("Enter 1 to Roll Portal or 2 to Finish Shop: ").strip()
-        if action == "2":
-            return
-        if action != "1":
-            print("Please enter 1 or 2.")
+        print(f"\nAP remaining: {game.shop.days}")
+        if game.shop.action_offer:
+            print("Available coaching actions:")
+            for index, action in enumerate(game.shop.action_offer, start=1):
+                print(f"{index}. {_format_action(action)}")
+        else:
+            print("No affordable actions are currently offered.")
+        selection = input(
+            "Choose an offered action, M to Move to next day (1 AP), "
+            "or 0 to finish the shop: "
+        ).strip().upper()
+        if selection == "0":
+            break
+        if selection == "M":
+            try:
+                game.shop.move_to_next_day()
+            except RuntimeError as error:
+                print(error)
+                continue
+            print("Moved to the next day. A new coaching offer is available.")
             continue
 
-        portal = game.shop.roll_portal()
-        print("\nTransfer portal:")
-        for index, card in enumerate(portal, start=1):
-            print(f"{index}. {_format_card(card)}")
-
-        while game.shop.portal:
-            selection = input(
-                "Enter 1-3 to draft a card, or 4 to keep browsing: "
-            ).strip()
-            if selection in {"1", "2", "3"}:
-                index = int(selection) - 1
-                if index >= len(game.shop.portal):
-                    print("That card is no longer available.")
-                    continue
-                card = game.shop.portal[index]
-                game.shop.draft_unit(card)
-                print(f"Drafted {card.name}!")
-                for index, remaining in enumerate(game.shop.portal, start=1):
-                    print(f"{index}. {_format_card(remaining)}")
-            elif selection == "4":
-                break
-            else:
-                print("Please enter 1, 2, 3, or 4.")
+        if not selection.isdigit():
+            print("Please select an offered action, M, or 0.")
+            continue
+        index = int(selection) - 1
+        if not 0 <= index < len(game.shop.action_offer):
+            print("That action is not currently offered.")
+            continue
+        action = game.shop.action_offer[index]
+        target_position = None
+        if action.choose_position:
+            available_positions = [
+                position
+                for position in POSITIONS
+                if not (
+                    action.position_ap
+                    and position in game.shop.ap_upgrade_positions
+                )
+            ]
+            print("Choose a position: " + ", ".join(available_positions))
+            target_position = input("Position: ").strip().upper()
+        try:
+            game.shop.take_action(action, target_position=target_position)
+        except (RuntimeError, ValueError) as error:
+            print(error)
+            continue
+        print(f"Selected {action.name}; {game.shop.days} AP remain.")
+    game.shop.finish_shop()
 
 
 def main(db_path: DatabasePath = DB_PATH) -> None:

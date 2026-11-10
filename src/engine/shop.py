@@ -1,17 +1,33 @@
 import random
-from dataclasses import replace
+from copy import deepcopy
 
-from src.engine.units import Position, Roster, SpecialTeams, Unit
+from src.engine.coaching_actions import (
+    ACTION_BY_ID,
+    COACHING_ACTIONS,
+    POSITIONS,
+    CoachingAction,
+    Rarity,
+)
+from src.engine.units import Position, Roster, Unit
 
-PortalCard = Unit | SpecialTeams
+AppliedAction = tuple[CoachingAction, Position | None]
 
 
 class Shop:
-    """Transfer portal shop with a six-Day action-point budget."""
+    """Coaching-action shop with a twelve-AP budget."""
 
-    DAYS_PER_SHOP = 6
-    OPENING_AP = DAYS_PER_SHOP
+    DAYS_PER_SHOP = 12
+    OPENING_AP = 6
     PORTAL_SIZE = 3
+    RARITY_WEIGHTS: tuple[tuple[Rarity, int], ...] = (
+        ("Common", 40),
+        ("Uncommon", 30),
+        ("Rare", 20),
+        ("Very Rare", 10),
+    )
+    MAX_BANKED_AP = 6
+    MAX_CARRYOVER_AP = 2
+    MAX_PERMANENT_AP = 2
     OPENING_ORDER: tuple[Position, ...] = (
         "QB",
         "RB",
@@ -60,22 +76,6 @@ class Shop:
         ("Run-Support Safety", "SECONDARY", 22.9, 0.20, 0.80, "Lower power with moderate variance and stamina."),
         ("Nickel Defender", "SECONDARY", 23.3, 0.17, 0.84, "Above-average power with low variance and strong stamina."),
     )
-    SPECIAL_TEAMS_POOL = (
-        SpecialTeams(
-            name="Return Specialists",
-            momentum_swing_chance=0.10,
-            field_goal_reliability=0.80,
-        ),
-        SpecialTeams(
-            name="Coverage Unit",
-            momentum_swing_chance=0.03,
-        ),
-        SpecialTeams(
-            name="Field Position Unit",
-            momentum_swing_chance=0.07,
-            field_goal_reliability=0.88,
-        ),
-    )
     ROSTER_SLOTS = {
         "QB": "qb",
         "RB": "rb",
@@ -90,8 +90,23 @@ class Shop:
             raise ValueError("Days cannot be negative.")
         self.roster = roster
         self.days = days
-        self.portal: list[PortalCard] = []
+        self.opening_offer: list[Unit] = []
         self.opening_picks = 0
+        self.action_offer: list[CoachingAction] = []
+        self.action_offer_created = False
+        self.permanent_actions: list[AppliedAction] = []
+        self.match_actions: list[AppliedAction] = []
+        self.selected_this_shop: set[int] = set()
+        self.used_run_actions: set[int] = set()
+        self.pending_ap = 0
+        self.pending_win_ap = 0
+        self.permanent_ap = 0
+        self.ap_upgrade_positions: set[Position] = set()
+        self.carry_unused_ap = False
+        self.has_future_shop = True
+        self.shop_closed = False
+        self.prepared = False
+        self.move_count = 0
 
     def roll_opening_offer(self, position: Position) -> list[Unit]:
         """Offer three random players for the next opening-draft position."""
@@ -102,11 +117,11 @@ class Shop:
             raise ValueError(f"The next opening pick must be for {expected_position}.")
         if self.days < 1:
             raise RuntimeError("Not enough Days to make an opening pick.")
-        if self.portal:
+        if self.opening_offer:
             raise RuntimeError("Choose a card from the current opening offer first.")
 
         pool = [choice for choice in self.UNIT_POOL if choice[1] == position]
-        self.portal = [
+        self.opening_offer = [
             Unit(
                 name=name,
                 position=card_position,
@@ -119,13 +134,13 @@ class Shop:
                 pool, self.PORTAL_SIZE
             )
         ]
-        return [card for card in self.portal if isinstance(card, Unit)]
+        return list(self.opening_offer)
 
     def draft_opening_unit(self, unit: Unit) -> None:
         """Select one offered player and spend one opening Action Point."""
         if self.opening_picks >= len(self.OPENING_ORDER):
             raise RuntimeError("The opening draft is complete.")
-        if not any(offered is unit for offered in self.portal):
+        if not any(offered is unit for offered in self.opening_offer):
             raise ValueError("Unit must be selected from the current opening offer.")
         if unit.position != self.OPENING_ORDER[self.opening_picks]:
             raise ValueError("Unit does not match the current opening position.")
@@ -133,52 +148,321 @@ class Shop:
             raise RuntimeError("Not enough Days to make an opening pick.")
 
         self._place_unit(unit)
-        self.portal.clear()
+        self.opening_offer.clear()
         self.opening_picks += 1
         self.days -= 1
 
-    def roll_portal(self) -> list[PortalCard]:
-        """Spend one Day and offer three randomly selected cards."""
+    def roll_action_offer(self) -> list[CoachingAction]:
+        """Create a three-action offer using the catalog's rarity weights."""
+        if self.shop_closed:
+            raise RuntimeError("The shop is already closed.")
+        if self.action_offer_created:
+            raise RuntimeError("Use Move to next day to get another offer.")
+        self.action_offer_created = True
+        return self._create_action_offer()
+
+    def _create_action_offer(self) -> list[CoachingAction]:
+        self.action_offer = []
+        self.action_offer_created = True
+        offered_ids: set[int] = set()
+        for _ in range(self.PORTAL_SIZE):
+            eligible = self._eligible_actions()
+            eligible = [
+                action for action in eligible if action.id not in offered_ids
+            ]
+            if not eligible:
+                break
+            available_rarities = {
+                action.rarity for action in eligible
+            }
+            rarities = [
+                (rarity, weight)
+                for rarity, weight in self.RARITY_WEIGHTS
+                if rarity in available_rarities
+            ]
+            rarity = random.choices(
+                [item[0] for item in rarities],
+                weights=[item[1] for item in rarities],
+                k=1,
+            )[0]
+            pool = [action for action in eligible if action.rarity == rarity]
+            selected = random.choice(pool)
+            self.action_offer.append(selected)
+            offered_ids.add(selected.id)
+        return list(self.action_offer)
+
+    def move_to_next_day(self) -> list[CoachingAction]:
+        """Spend one AP to discard the current offer and reveal three actions."""
         if self.days < 1:
-            raise RuntimeError("Not enough Days to roll the portal.")
-
+            raise RuntimeError("Not enough AP to move to the next day.")
+        if self.shop_closed:
+            raise RuntimeError("The shop is already closed.")
         self.days -= 1
-        pool: list[
-            tuple[str, Position, float, float, float, str] | SpecialTeams
-        ] = [
-            *self.UNIT_POOL,
-            *self.SPECIAL_TEAMS_POOL,
-        ]
-        self.portal = []
-        for choice in random.sample(pool, self.PORTAL_SIZE):
-            if isinstance(choice, SpecialTeams):
-                self.portal.append(replace(choice))
-            else:
-                name, position, power, volatility, stamina, description = choice
-                self.portal.append(
-                    Unit(
-                        name=name,
-                        position=position,
-                        power=power,
-                        volatility=volatility,
-                        stamina=stamina,
-                        description=description,
-                    )
-                )
-        return self.portal
+        self.move_count += 1
+        return self._create_action_offer()
 
-    def draft_unit(self, unit: PortalCard) -> None:
-        """Draft an offered card into its matching roster slot."""
-        if not any(offered is unit for offered in self.portal):
-            raise ValueError("Unit must be selected from the current portal.")
+    def take_action(
+        self,
+        action: CoachingAction | int,
+        target_position: Position | None = None,
+    ) -> None:
+        """Purchase an offered action and apply it to this run or match."""
+        action_id = action.id if isinstance(action, CoachingAction) else action
+        offered = next(
+            (item for item in self.action_offer if item.id == action_id), None
+        )
+        if offered is None:
+            raise ValueError("Action must be selected from the current offer.")
+        action = ACTION_BY_ID[action_id]
+        if action.ap_cost > self.days:
+            raise RuntimeError("Not enough AP to take this coaching action.")
+        if action.choose_position:
+            if target_position not in POSITIONS:
+                raise ValueError("This action requires a valid position target.")
+        elif target_position is not None:
+            raise ValueError("This action does not accept a position target.")
+        if action.once_per_run and action_id in self.used_run_actions:
+            raise ValueError("This action can only be taken once per run.")
+        if action.last_shop_excluded and not self.has_future_shop:
+            raise ValueError("This action has no future shop to benefit.")
+        if action.position_ap:
+            if target_position in self.ap_upgrade_positions:
+                raise ValueError("That position already has a permanent AP upgrade.")
+            if self.permanent_ap >= self.MAX_PERMANENT_AP:
+                raise ValueError("The permanent AP bonus is already at its cap.")
+        elif action.permanent_ap and (
+            self.permanent_ap + action.permanent_ap > self.MAX_PERMANENT_AP
+        ):
+            raise ValueError("The permanent AP bonus is already at its cap.")
 
-        if isinstance(unit, SpecialTeams):
-            self.roster.special_teams = unit
-            self.portal.remove(unit)
+        self.days -= action.ap_cost
+        self.action_offer.remove(offered)
+        self.selected_this_shop.add(action_id)
+        if action.once_per_run:
+            self.used_run_actions.add(action_id)
+        if action.duration == "match":
+            if action.replaces:
+                self.match_actions = [
+                    applied
+                    for applied in self.match_actions
+                    if applied[0].replaces != action.replaces
+                ]
+            self.match_actions.append((action, target_position))
+        elif action.duration == "run":
+            self.permanent_actions.append((action, target_position))
+        elif action.duration == "next_shop":
+            self.pending_ap = min(
+                self.MAX_BANKED_AP - self.pending_win_ap,
+                self.pending_ap + action.bank_ap,
+            )
+            self.pending_win_ap = min(
+                self.MAX_BANKED_AP - self.pending_ap,
+                self.pending_win_ap + action.bank_ap_on_win,
+            )
+        elif action.duration == "carry":
+            self.carry_unused_ap = True
+
+        if action.permanent_ap:
+            self.permanent_ap += action.permanent_ap
+            if target_position is not None and action.position_ap:
+                self.ap_upgrade_positions.add(target_position)
+
+    def finish_shop(self) -> None:
+        """Close the shop and bank up to two unused AP if enabled."""
+        if self.shop_closed:
             return
+        if self.carry_unused_ap:
+            self.pending_ap = min(
+                self.MAX_BANKED_AP,
+                self.pending_ap + min(self.days, self.MAX_CARRYOVER_AP),
+            )
+        self.days = 0
+        self.action_offer.clear()
+        self.shop_closed = True
+        self.prepared = False
 
-        self._place_unit(unit)
-        self.portal.remove(unit)
+    def prepare_next_shop(self) -> None:
+        """Restore the base budget and apply one-time and permanent AP gains."""
+        if self.prepared and not self.shop_closed:
+            return
+        self.days = self.DAYS_PER_SHOP + self.permanent_ap + self.pending_ap
+        self.pending_ap = 0
+        self.carry_unused_ap = False
+        self.selected_this_shop.clear()
+        self.action_offer.clear()
+        self.match_actions.clear()
+        self.move_count = 0
+        self.action_offer_created = False
+        self.shop_closed = False
+        self.prepared = True
+
+    def complete_match(self, won: bool) -> None:
+        """Expire match-only effects and bank conditional post-win AP."""
+        if won:
+            self.pending_ap = min(
+                self.MAX_BANKED_AP, self.pending_ap + self.pending_win_ap
+            )
+        self.pending_win_ap = 0
+        self.match_actions.clear()
+        self.finish_shop()
+
+    def effective_roster(
+        self, include_match_effects: bool = True
+    ) -> Roster:
+        """Return a roster copy with currently applicable action effects."""
+        roster = deepcopy(self.roster)
+        selected = self.permanent_actions + (
+            self.match_actions if include_match_effects else []
+        )
+        for position in POSITIONS:
+            unit = getattr(roster, self.ROSTER_SLOTS[position])
+            run_power = min(
+                1.15,
+                max(0.85, self._power_modifier(position, self.permanent_actions)),
+            )
+            match_power = (
+                min(
+                    1.10,
+                    max(0.85, self._power_modifier(position, self.match_actions)),
+                )
+                if include_match_effects
+                else 1.0
+            )
+            unit.power *= min(1.25, max(0.85, run_power * match_power))
+            unit.volatility = min(
+                0.45,
+                max(
+                    0.05,
+                    unit.volatility
+                    + self._stat_delta(position, "volatility", selected),
+                ),
+            )
+            unit.stamina = min(
+                1.0,
+                max(
+                    0.0,
+                    unit.stamina + self._stat_delta(position, "stamina", selected),
+                ),
+            )
+
+        special_teams = roster.special_teams
+        run_swing = self._special_delta("swing_chance", self.permanent_actions)
+        match_swing = (
+            self._special_delta("swing_chance", self.match_actions)
+            if include_match_effects
+            else 0.0
+        )
+        run_swing = min(0.04, max(-0.05, run_swing))
+        match_swing = min(0.04, max(-0.05, match_swing))
+        special_teams.momentum_swing_chance = min(
+            0.20,
+            max(
+                0.0,
+                special_teams.momentum_swing_chance + run_swing + match_swing,
+            ),
+        )
+        special_teams.field_goal_reliability = min(
+            1.0,
+            max(
+                0.0,
+                special_teams.field_goal_reliability
+                + self._special_delta(
+                    "field_goal_reliability", self.permanent_actions
+                )
+                + (
+                    self._special_delta(
+                        "field_goal_reliability", self.match_actions
+                    )
+                    if include_match_effects
+                    else 0.0
+                ),
+            ),
+        )
+        special_teams.momentum_swing_magnitude = max(
+            0.0,
+            special_teams.momentum_swing_magnitude
+            + self._special_delta("swing_magnitude", self.match_actions)
+            if include_match_effects
+            else special_teams.momentum_swing_magnitude,
+        )
+        special_teams.opponent_swing_reduction = max(
+            0.0,
+            self._special_delta("opponent_swing_reduction", self.match_actions)
+            if include_match_effects
+            else 0.0,
+        )
+        drive_count, fatigue_limit = self.match_parameters()
+        if not include_match_effects:
+            drive_count, fatigue_limit = 10, 0.10
+        roster.match_drive_count = drive_count
+        roster.match_fatigue_limit = fatigue_limit
+        return roster
+
+    def match_parameters(self) -> tuple[int, float]:
+        """Return the selected drive count and fatigue limit for this match."""
+        drive_count = 10
+        fatigue_limit = 0.10
+        for action, _ in self.match_actions:
+            if action.drive_count is not None:
+                drive_count = action.drive_count
+            if action.fatigue_limit is not None:
+                fatigue_limit = action.fatigue_limit
+        return drive_count, fatigue_limit
+
+    def _eligible_actions(self) -> list[CoachingAction]:
+        eligible = [
+            action
+            for action in COACHING_ACTIONS
+            if action.ap_cost <= self.days
+            and action.id not in self.selected_this_shop
+            and not (action.once_per_run and action.id in self.used_run_actions)
+            and not (action.last_shop_excluded and not self.has_future_shop)
+        ]
+        eligible = [
+            action
+            for action in eligible
+            if self.permanent_ap + action.permanent_ap
+            <= self.MAX_PERMANENT_AP
+        ]
+        if len(self.ap_upgrade_positions) >= self.MAX_PERMANENT_AP:
+            eligible = [
+                action
+                for action in eligible
+                if not action.position_ap
+            ]
+        return eligible
+
+    def _power_modifier(
+        self, position: Position, actions: list[AppliedAction]
+    ) -> float:
+        result = 1.0
+        for action, target in actions:
+            for affected, modifier in action.power:
+                if affected == position or (
+                    affected == "*" and target == position
+                ):
+                    result *= modifier
+        return result
+
+    @staticmethod
+    def _stat_delta(
+        position: Position,
+        stat: str,
+        actions: list[AppliedAction],
+    ) -> float:
+        result = 0.0
+        for action, target in actions:
+            effects = getattr(action, stat)
+            result += sum(
+                value
+                for affected, value in effects
+                if affected == position or (affected == "*" and target == position)
+            )
+        return result
+
+    @staticmethod
+    def _special_delta(stat: str, actions: list[AppliedAction]) -> float:
+        return sum(getattr(action, stat) for action, _ in actions)
 
     def _place_unit(self, unit: Unit) -> None:
         slot = self.ROSTER_SLOTS.get(unit.position)

@@ -40,7 +40,9 @@ class SpecialTeams:
     name: str = "Special Teams"
     tier: int = 1
     momentum_swing_chance: float = 0.05 # 5% chance to randomly flip drive momentum
-    field_goal_reliability: float = 0.80 # 80% chance to secure points on stalled drives
+    field_goal_reliability: float = 0.80
+    momentum_swing_magnitude: float = 15.0
+    opponent_swing_reduction: float = 0.0
 
 @dataclass
 class Roster:
@@ -53,6 +55,8 @@ class Roster:
     secondary: Unit
     coach: Coach
     special_teams: SpecialTeams
+    match_drive_count: int = 10
+    match_fatigue_limit: float = 0.10
 
     def get_offensive_power(self) -> float:
         """Calculates raw offensive baseline before RNG."""

@@ -22,19 +22,23 @@ A single run lasts ~15 minutes and follows three strict phases:
 *   The Coach occupies a modifier slot automatically and cannot be sold or swapped.
 *   Coach effects change the listed players' contributions to team power and are shown during coach selection.
 
-## 5. The 6-Day AP Economy
-*   At run start, the 6 opening Action Points each pay for one position pick. Between matches, currency is represented by Time: 6 "Days" (Action Points) per shop phase.
-*   Days are spent making strategic decisions: rolling the transfer portal, practicing for stat bumps, or healing injuries.
+## 5. Action-Point Economy and Coaching Shop
+*   At run start, the 6 opening Action Points each pay for one position pick.
+*   Between matches, each coaching shop starts with 12 AP, plus banked AP and permanent weekly AP bonuses.
+*   The in-season transfer portal is replaced by a 150-action coaching catalog with Common, Uncommon, Rare, and Very Rare actions. Rarity is rolled independently per offered action with chances of 40%, 30%, 20%, and 10%.
+*   The shop offers up to three distinct actions at a time. Players may buy multiple actions from one offer. "Move to next day" costs 1 AP and replaces the offer; it can be repeated until AP runs out or the shop is finished.
+*   Match actions expire after the next completed game, including tie replays. Run actions remain active for the whole run. Unspent AP expires unless the player buys an action that banks it.
+*   AP banking actions can grant next-shop AP, carry up to 2 unused AP, or permanently add up to 2 AP to future shops.
 
 ## 6. Simulation & Match Resolution
 *   Matches are entirely hands-off (true auto-battler).
-*   Games simulate rapidly across 8-10 abstract "drives".
+*   Games default to 10 abstract drives; coaching actions can adjust the next match's drive count and fatigue limit.
 *   UI displays a visual Tug-of-War / Momentum bar.
 *   Drives resolve mathematically by pitting the attacking team's Offense snapshot against the defending team's Defense snapshot, modified by Coach synergies and Special Teams rolls. Player power contributes to team strength, volatility controls drive-to-drive variance, and stamina reduces late-game fatigue.
 *   Player stamina is a 0-to-1 value. Fatigue ramps linearly through a match, with a maximum 10% power reduction for zero-stamina players by the final drive; volatility is applied using the average of the players contributing to that side.
 
 ## Player Archetypes
-*   The opening pool has six described archetypes for each of the six player position groups. Each player has `power`, `volatility`, and `stamina`; descriptions refer only to these simulated stats. The in-season portal may also offer Special Teams, but Special Teams is excluded from opening draft offers.
+*   The opening pool has six described archetypes for each of the six player position groups. Each player has `power`, `volatility`, and `stamina`; descriptions refer only to these simulated stats. Special Teams is excluded from opening draft offers; in-season coaching actions can modify its momentum-swing and field-goal-reliability stats.
 *   A tied match is replayed until a decisive result.
 
 ## 7. SQLite Database Schema (Async Snapshots)

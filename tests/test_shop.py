@@ -1,12 +1,12 @@
 import pytest
 
 from src.engine.shop import Shop
+from src.engine.coaching_actions import ACTION_BY_ID
 from src.engine.units import (
     COACH_PAIRINGS,
     DEFENSIVE_STYLES,
     OFFENSIVE_STYLES,
     Coach,
-    SpecialTeams,
     Unit,
     random_coach_options,
 )
@@ -75,34 +75,24 @@ def test_position_specific_coach_modifiers_change_only_listed_positions() -> Non
     assert roster.get_defensive_power() == pytest.approx(40.0)
 
 
-def test_shop_spends_ap_on_roll_not_draft(
+def test_shop_offers_three_unique_actions_without_spending_ap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     roster = create_starter_team("Home Team")
-    coach = roster.coach
-    shop = Shop(roster, days=Shop.OPENING_AP)
-    monkeypatch.setattr(
-        "src.engine.shop.random.sample",
-        lambda population, count: list(population[:count]),
-    )
+    shop = Shop(roster)
+    monkeypatch.setattr("src.engine.shop.random.choices", lambda values, **_: [values[0]])
+    monkeypatch.setattr("src.engine.shop.random.choice", lambda values: values[0])
 
-    portal = shop.roll_portal()
-    assert len(portal) == Shop.PORTAL_SIZE
-    assert shop.days == 5
+    offer = shop.roll_action_offer()
 
-    shop.draft_unit(portal[0])
-    assert shop.days == 5
-    assert roster.coach is coach
-    assert roster.qb.name == "Pocket Passer"
+    assert len(offer) == Shop.PORTAL_SIZE
+    assert len({action.id for action in offer}) == Shop.PORTAL_SIZE
+    assert all(action.rarity == "Common" for action in offer)
+    assert shop.days == Shop.DAYS_PER_SHOP
 
-    shop.roll_portal()
-    replacement = next(
-        card
-        for card in shop.portal
-        if isinstance(card, Unit) and card.name == "Dual-Threat QB"
-    )
-    shop.draft_unit(replacement)
-    assert roster.qb is replacement
+    shop.take_action(offer[0])
+    assert shop.days == Shop.DAYS_PER_SHOP - offer[0].ap_cost
+    assert offer[0] not in shop.action_offer
 
 
 def test_opening_draft_offers_each_position_and_spends_one_ap_per_pick(
@@ -126,7 +116,7 @@ def test_opening_draft_offers_each_position_and_spends_one_ap_per_pick(
 
     assert shop.days == 0
     assert shop.opening_picks == len(Shop.OPENING_ORDER)
-    assert not shop.portal
+    assert not shop.opening_offer
 
 
 def test_opening_draft_enforces_position_order_and_excludes_special_teams() -> None:
@@ -140,63 +130,47 @@ def test_opening_draft_enforces_position_order_and_excludes_special_teams() -> N
     assert all(isinstance(card, Unit) for card in offer)
 
 
-def test_special_teams_card_fills_its_roster_slot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_move_to_next_day_costs_one_ap_and_preserves_purchased_effects() -> None:
     roster = create_starter_team("Home Team")
     shop = Shop(roster)
-    special_teams = Shop.SPECIAL_TEAMS_POOL[0]
-    monkeypatch.setattr(
-        "src.engine.shop.random.sample",
-        lambda population, count: [
-            special_teams,
-            *list(population)[: count - 1],
-        ],
-    )
+    shop.action_offer = [ACTION_BY_ID[25], ACTION_BY_ID[26]]
+    shop.take_action(ACTION_BY_ID[25])
+    remaining = shop.days
 
-    card = shop.roll_portal()[0]
-    assert isinstance(card, SpecialTeams)
-    shop.draft_unit(card)
+    offer = shop.move_to_next_day()
 
-    assert roster.special_teams is card
-    assert card not in shop.portal
+    assert shop.days == remaining - 1
+    assert len(offer) == Shop.PORTAL_SIZE
+    assert all(action.id != 25 for action in offer)
+    assert len(shop.match_actions) == 1
 
 
-def test_shop_rejects_exhausted_ap_and_unoffered_cards(
+def test_shop_rejects_exhausted_ap_and_unoffered_actions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     roster = create_starter_team("Home Team")
     shop = Shop(roster, days=0)
 
-    with pytest.raises(RuntimeError, match="Not enough Days"):
-        shop.roll_portal()
+    with pytest.raises(RuntimeError, match="Not enough AP"):
+        shop.move_to_next_day()
 
     shop = Shop(roster)
-    monkeypatch.setattr(
-        "src.engine.shop.random.sample",
-        lambda population, count: list(population[:count]),
-    )
-    shop.roll_portal()
-    with pytest.raises(ValueError, match="current portal"):
-        shop.draft_unit(Unit(name="Not offered", position="QB"))
+    monkeypatch.setattr("src.engine.shop.random.choices", lambda values, **_: [values[0]])
+    monkeypatch.setattr("src.engine.shop.random.choice", lambda values: values[0])
+    shop.roll_action_offer()
+    with pytest.raises(ValueError, match="current offer"):
+        shop.take_action(ACTION_BY_ID[150])
 
 
-def test_coach_cannot_be_replaced_through_the_shop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_coach_cannot_be_replaced_through_coaching_actions() -> None:
     roster = create_starter_team(
         "Home Team",
         Coach(name="Locked", off_scheme="Air Raid", def_scheme="Zone"),
     )
     shop = Shop(roster)
     coach = roster.coach
-    monkeypatch.setattr(
-        "src.engine.shop.random.sample",
-        lambda population, count: list(population[:count]),
-    )
-    shop.roll_portal()
-    for card in tuple(shop.portal):
-        shop.draft_unit(card)
+    shop.action_offer = [ACTION_BY_ID[25]]
+    shop.take_action(ACTION_BY_ID[25])
 
     assert roster.coach is coach
     assert roster.coach.name == "Locked"

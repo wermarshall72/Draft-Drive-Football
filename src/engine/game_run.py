@@ -41,7 +41,11 @@ class GameRun:
         """Restore the shop's action-point budget for the current match."""
         if self.phase not in ("regular_season", "playoffs"):
             raise RuntimeError("The shop is not available during this phase.")
-        self.shop.days = self.shop.DAYS_PER_SHOP
+        self.shop.has_future_shop = not (
+            self.phase == "playoffs"
+            and self.playoff_round >= self.PLAYOFF_ROUNDS
+        )
+        self.shop.prepare_next_shop()
 
     def combat_phase(self) -> MatchResult:
         """Play one regular-season or playoff match and advance the run."""
@@ -55,7 +59,7 @@ class GameRun:
             else self.round_number
         )
         snapshot_id = save_snapshot(
-            self.roster,
+            self.shop.effective_roster(include_match_effects=False),
             round_number=match_round,
             wins=self.wins,
             losses=self.losses,
@@ -70,11 +74,13 @@ class GameRun:
         if opponent is None:
             opponent = self._build_dummy_opponent(self.roster.player_name)
 
-        result = simulate_match(self.roster, opponent)
+        match_roster = self.shop.effective_roster()
+        result = simulate_match(match_roster, opponent)
         while result["winner"] == "Tie":
-            result = simulate_match(self.roster, opponent)
+            result = simulate_match(match_roster, opponent)
 
         won_match = result["winner"] == self.roster.player_name
+        self.shop.complete_match(won_match)
         if won_match:
             self.wins += 1
         else:
