@@ -37,22 +37,31 @@ class FootballMatchStatus(str, Enum):
 class FootballAwaitedAction(str, Enum):
     OFFENSIVE_PLAY = "offensive_play"
     DEFENSIVE_SCHEME = "defensive_scheme"
+    FOURTH_DOWN_DECISION = "fourth_down_decision"
 
 
 class OffensivePlayAction(str, Enum):
-    RUN = "run"
+    RB_RUN = "rb_run"
+    SCREEN_PASS = "screen_pass"
+    PA_PASS = "pa_pass"
     SHORT_PASS = "short_pass"
+    MEDIUM_PASS = "medium_pass"
     DEEP_PASS = "deep_pass"
-    PLAY_ACTION = "play_action"
-    QB_KEEPER = "qb_keeper"
 
 
 class DefensiveSchemeAction(str, Enum):
-    BASE = "base"
-    BLITZ = "blitz"
-    MAN_COVERAGE = "man_coverage"
-    ZONE_COVERAGE = "zone_coverage"
-    PREVENT = "prevent"
+    RB_RUN = "rb_run"
+    SCREEN_PASS = "screen_pass"
+    PA_PASS = "pa_pass"
+    SHORT_PASS = "short_pass"
+    MEDIUM_PASS = "medium_pass"
+    DEEP_PASS = "deep_pass"
+
+
+class FootballFourthDownAction(str, Enum):
+    GO_FOR_IT = "go_for_it"
+    PUNT = "punt"
+    FIELD_GOAL = "field_goal"
 
 
 def _validate_name(value: str, field_name: str) -> None:

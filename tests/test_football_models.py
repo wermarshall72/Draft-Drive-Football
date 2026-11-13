@@ -138,12 +138,12 @@ def test_match_state_rejects_invalid_field_position(position: float) -> None:
 def test_match_state_describes_field_position_and_keeps_match_seed() -> None:
     state = _match_state(
         awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
-        current_drive_defensive_scheme=DefensiveSchemeAction.ZONE_COVERAGE,
+        current_drive_defensive_scheme=DefensiveSchemeAction.MEDIUM_PASS,
     )
 
     assert state.random_seed == 1234
     assert state.offense_field_position == 25.0
-    assert state.current_drive_defensive_scheme is DefensiveSchemeAction.ZONE_COVERAGE
+    assert state.current_drive_defensive_scheme is DefensiveSchemeAction.MEDIUM_PASS
 
 
 def test_action_and_result_models_accept_future_resolver_data() -> None:
@@ -154,7 +154,7 @@ def test_action_and_result_models_accept_future_resolver_data() -> None:
         points_scored=0,
         turnover=True,
         possession_changed=True,
-        defensive_scheme=DefensiveSchemeAction.BLITZ,
+        defensive_scheme=DefensiveSchemeAction.PA_PASS,
     )
     final_result = FootballMatchResult(
         team_a_score=7,
@@ -173,7 +173,7 @@ def test_action_and_result_models_accept_future_resolver_data() -> None:
     assert play_result.yards_gained == -2.0
     assert play_result.clock_seconds_used == 8
     assert play_result.turnover and play_result.possession_changed
-    assert play_result.defensive_scheme is DefensiveSchemeAction.BLITZ
+    assert play_result.defensive_scheme is DefensiveSchemeAction.PA_PASS
     assert completed_state.final_result is final_result
 
 
