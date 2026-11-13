@@ -172,6 +172,9 @@ class FootballPlayResult:
     turnover: bool = False
     possession_changed: bool = False
     defensive_scheme: DefensiveSchemeAction | None = None
+    incomplete: bool = False
+    offense_power: float = 0.0
+    defense_power: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.offensive_play, OffensivePlayAction):
@@ -183,11 +186,102 @@ class FootballPlayResult:
             raise ValueError("Turnover must be a boolean.")
         if not isinstance(self.possession_changed, bool):
             raise ValueError("Possession changed must be a boolean.")
+        if not isinstance(self.incomplete, bool):
+            raise ValueError("Incomplete must be a boolean.")
         if (
             self.defensive_scheme is not None
             and not isinstance(self.defensive_scheme, DefensiveSchemeAction)
         ):
             raise ValueError("Defensive scheme must be a DefensiveSchemeAction or None.")
+        _validate_finite_number(self.offense_power, "Offense power")
+        _validate_finite_number(self.defense_power, "Defense power")
+        if self.offense_power < 0 or self.defense_power < 0:
+            raise ValueError("Play powers must be non-negative.")
+
+
+@dataclass(frozen=True)
+class FootballMatchEvent:
+    """Immutable record of one caller action and the resulting match snapshot."""
+
+    sequence: int
+    action: OffensivePlayAction | DefensiveSchemeAction | FootballFourthDownAction
+    team_a_score: int
+    team_b_score: int
+    possession: FootballTeamSide
+    offense_field_position: float
+    down: int
+    yards_to_go: float
+    game_clock_seconds: int
+    period: int
+    status: FootballMatchStatus
+    clock_seconds_used: int = 0
+    play_result: FootballPlayResult | None = None
+    points_scored: int = 0
+    scoring_team: FootballTeamSide | None = None
+    field_goal_distance: float | None = None
+
+    def __post_init__(self) -> None:
+        _validate_nonnegative_int(self.sequence, "Event sequence")
+        if self.sequence == 0:
+            raise ValueError("Event sequence must be positive.")
+        if not isinstance(
+            self.action,
+            (OffensivePlayAction, DefensiveSchemeAction, FootballFourthDownAction),
+        ):
+            raise ValueError("Event action must be a supported football action.")
+        if self.play_result is not None and not isinstance(
+            self.play_result, FootballPlayResult
+        ):
+            raise ValueError("Play result must be a FootballPlayResult or None.")
+        if isinstance(self.action, OffensivePlayAction):
+            if self.play_result is None or self.play_result.offensive_play is not self.action:
+                raise ValueError("Offensive-play events must include their matching result.")
+        elif self.play_result is not None:
+            raise ValueError("Only offensive-play events can include a play result.")
+        _validate_nonnegative_int(self.points_scored, "Event points scored")
+        if self.points_scored and not isinstance(self.scoring_team, FootballTeamSide):
+            raise ValueError("Scoring events must identify the scoring team.")
+        if not self.points_scored and self.scoring_team is not None:
+            raise ValueError("Non-scoring events cannot identify a scoring team.")
+        if not isinstance(self.possession, FootballTeamSide):
+            raise ValueError("Event possession must be a FootballTeamSide.")
+        _validate_finite_number(self.offense_field_position, "Event field position")
+        if not 0 <= self.offense_field_position <= 100:
+            raise ValueError("Event field position must be between 0 and 100.")
+        if isinstance(self.down, bool) or not isinstance(self.down, int) or not 1 <= self.down <= 4:
+            raise ValueError("Event down must be an integer from 1 through 4.")
+        _validate_finite_number(self.yards_to_go, "Event yards to go")
+        if self.yards_to_go <= 0:
+            raise ValueError("Event yards to go must be positive.")
+        _validate_nonnegative_int(self.game_clock_seconds, "Event game clock seconds")
+        _validate_nonnegative_int(self.clock_seconds_used, "Event clock seconds used")
+        _validate_nonnegative_int(self.period, "Event period")
+        if self.period == 0:
+            raise ValueError("Event period must be positive.")
+        if not isinstance(self.status, FootballMatchStatus):
+            raise ValueError("Event status must be a FootballMatchStatus.")
+        _validate_nonnegative_int(self.team_a_score, "Event team A score")
+        _validate_nonnegative_int(self.team_b_score, "Event team B score")
+        if self.field_goal_distance is not None:
+            _validate_finite_number(self.field_goal_distance, "Field-goal distance")
+            if self.field_goal_distance < 0:
+                raise ValueError("Field-goal distance must be non-negative.")
+        if isinstance(self.action, FootballFourthDownAction):
+            if (
+                self.action is FootballFourthDownAction.FIELD_GOAL
+            ) != (self.field_goal_distance is not None):
+                raise ValueError("Only field-goal events must record field-goal distance.")
+            if self.action is FootballFourthDownAction.FIELD_GOAL and self.points_scored not in (0, 3):
+                raise ValueError("Field-goal events can score zero or three points.")
+        elif self.field_goal_distance is not None:
+            raise ValueError("Only field-goal events can record field-goal distance.")
+        if (
+            self.play_result is not None
+            and self.clock_seconds_used != self.play_result.clock_seconds_used
+        ):
+            raise ValueError("Event clock use must match its play result.")
+        if self.play_result is not None and self.points_scored != self.play_result.points_scored:
+            raise ValueError("Event scoring must match its play result.")
 
 
 @dataclass(frozen=True)
@@ -230,6 +324,7 @@ class FootballMatchState:
     awaited_action: FootballAwaitedAction | None = None
     current_drive_defensive_scheme: DefensiveSchemeAction | None = None
     final_result: FootballMatchResult | None = None
+    match_events: tuple[FootballMatchEvent, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.team_a, FootballRoster) or not isinstance(
@@ -264,6 +359,11 @@ class FootballMatchState:
             or self.period < 1
         ):
             raise ValueError("Period must be a positive integer.")
+        maximum_clock = 900 if self.period <= 2 else 300
+        if self.game_clock_seconds > maximum_clock:
+            raise ValueError(
+                f"Game clock seconds cannot exceed {maximum_clock} in period {self.period}."
+            )
         if not isinstance(self.status, FootballMatchStatus):
             raise ValueError("Status must be a FootballMatchStatus.")
         if self.awaited_action is not None and not isinstance(
@@ -280,13 +380,47 @@ class FootballMatchState:
             self.final_result, FootballMatchResult
         ):
             raise ValueError("Final result must be a FootballMatchResult or None.")
+        if not isinstance(self.match_events, tuple) or any(
+            not isinstance(event, FootballMatchEvent) for event in self.match_events
+        ):
+            raise ValueError("Match events must be an immutable tuple of football events.")
+        if any(event.sequence != index for index, event in enumerate(self.match_events, 1)):
+            raise ValueError("Match event sequence numbers must be contiguous.")
         if self.status is FootballMatchStatus.COMPLETED:
             if self.final_result is None or not self.final_result.completed:
                 raise ValueError("A completed match must have a completed final result.")
+            if self.team_a_score == self.team_b_score:
+                raise ValueError("A completed match cannot end in a tie.")
             if (
                 self.final_result.team_a_score != self.team_a_score
                 or self.final_result.team_b_score != self.team_b_score
             ):
                 raise ValueError("Final result scores must match the match state.")
+            if self.final_result.winner is not (
+                FootballTeamSide.TEAM_A
+                if self.team_a_score > self.team_b_score
+                else FootballTeamSide.TEAM_B
+            ):
+                raise ValueError("Final result winner must match the match scores.")
+            if self.awaited_action is not None or self.current_drive_defensive_scheme is not None:
+                raise ValueError("A completed match cannot await an action or retain a scheme.")
         elif self.final_result is not None:
             raise ValueError("An in-progress match cannot have a final result.")
+        if self.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME:
+            if self.down != 1:
+                raise ValueError("A new defensive drive must start on first down.")
+            if self.current_drive_defensive_scheme is not None:
+                raise ValueError("A new defensive drive cannot already have a scheme.")
+        elif self.awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY:
+            if self.current_drive_defensive_scheme is None:
+                raise ValueError("An active drive must have a defensive scheme.")
+            if self.down == 4:
+                raise ValueError("A fourth-down state must await a fourth-down decision.")
+        elif self.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
+            if self.current_drive_defensive_scheme is None:
+                raise ValueError("An active drive must have a defensive scheme.")
+        if (
+            self.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION
+            and self.down != 4
+        ):
+            raise ValueError("A fourth-down decision must be awaited on fourth down.")
