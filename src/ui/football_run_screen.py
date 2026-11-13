@@ -7,7 +7,6 @@ from src.engine.football import (
     FootballMatchEvent,
     FootballFourthDownAction,
     FootballPosition,
-    FootballRoster,
     FootballTeamSide,
     OffensivePlayAction,
 )
@@ -45,6 +44,17 @@ _SCHEME_LABELS = {
     DefensiveSchemeAction.DEEP_PASS: "DEEP PASS SCHEME",
 }
 
+_POSITION_LABELS = {
+    FootballPosition.QB: "QB",
+    FootballPosition.RB: "RB",
+    FootballPosition.WR: "WR",
+    FootballPosition.O_LINE: "O-LINE",
+    FootballPosition.D_LINE: "D-LINE",
+    FootballPosition.LINEBACKERS: "LINEBACKERS",
+    FootballPosition.CORNERBACKS: "CORNERBACKS",
+    FootballPosition.SAFETIES: "SAFETIES",
+}
+
 
 class FootballRunScreen(Screen):
     """Render the current immutable controller state and submit human choices."""
@@ -79,22 +89,29 @@ class FootballRunScreen(Screen):
         state = self._current_state()
         titles = {
             FootballRunPhase.COACH_DRAFT: ("Choose your coach", "RUN SETUP / IDENTITY"),
-            FootballRunPhase.PLAYER_DRAFT: ("Build your roster", "DRAFT / POSITION ORDER"),
-            FootballRunPhase.PRE_MATCH_SHOP: ("Training room", "PRE-MATCH / SIX TRAINING POINTS"),
+            FootballRunPhase.PLAYER_DRAFT: (
+                "Build your roster",
+                "DRAFT / POSITION ORDER",
+            ),
+            FootballRunPhase.PRE_MATCH_SHOP: (
+                "Training room",
+                "PRE-MATCH / SIX TRAINING POINTS",
+            ),
             FootballRunPhase.MATCH: ("Game day", "LOCAL AI / INTERACTIVE MATCH"),
-            FootballRunPhase.READY_FOR_NEXT_GAME: ("Final whistle", "REGULAR SEASON / NEXT GAME READY"),
+            FootballRunPhase.READY_FOR_NEXT_GAME: (
+                "Final whistle",
+                "REGULAR SEASON / NEXT GAME READY",
+            ),
             FootballRunPhase.FIRED: ("Run ended", "THREE LOSSES / FIRED"),
             FootballRunPhase.PLAYOFFS: ("Season milestone", "GAME 10 / PLAYOFFS"),
         }
         title, eyebrow = titles[state.phase]
         layout = self._header(surface, title, eyebrow, self.team_name)
-        content = layout.content
-
         content = pygame.Rect(
-            content.left,
-            content.top + 42,
-            content.width,
-            content.height - 42,
+            layout.content.left,
+            layout.content.top + 34,
+            layout.content.width,
+            layout.content.height - 34,
         )
         if state.phase is FootballRunPhase.COACH_DRAFT:
             self._draw_coach_selection(surface, content, state)
@@ -107,7 +124,12 @@ class FootballRunScreen(Screen):
         else:
             self._draw_result(surface, content, state)
 
-        exit_rect = pygame.Rect(layout.content.right - 128, layout.content.top, 128, 32)
+        exit_rect = pygame.Rect(
+            layout.content.right - 118,
+            layout.content.top,
+            118,
+            30,
+        )
         self.buttons.append(
             Button("END RUN", self._request_exit, exit_rect, variant="quiet")
         )
@@ -115,10 +137,16 @@ class FootballRunScreen(Screen):
         self._draw_buttons(surface)
 
         if self.last_error is not None:
+            error_rect = pygame.Rect(
+                layout.margin,
+                layout.height - 49,
+                layout.width - layout.margin * 2,
+                18,
+            )
             draw_text(
                 surface,
-                f"ERROR: {self.last_error}",
-                (layout.margin, layout.height - 49),
+                f"CHECK: {self.last_error}",
+                error_rect.topleft,
                 self._small_font,
                 self.theme.danger,
             )
@@ -134,14 +162,21 @@ class FootballRunScreen(Screen):
         coaches = state.team_builder.coach_offer
         draw_text(
             surface,
-            "Choose one coach identity. Coaches have no gameplay effects in this model.",
-            (content.left + 2, content.top + 1),
-            self._body_font,
+            "SELECT YOUR HEAD COACH",
+            (content.left + 2, content.top),
+            self._small_font,
+            self.theme.secondary_accent,
+        )
+        draw_text(
+            surface,
+            "Identity only",
+            (content.right - 110, content.top),
+            self._small_font,
             self.theme.muted,
         )
-        gap = 16
-        card_top = content.top + 36
-        card_height = content.height - 42
+        gap = 12
+        card_top = content.top + 23
+        card_height = content.bottom - card_top
         card_width = (content.width - gap * 2) // 3
         buttons: list[Button] = []
         for index, coach in enumerate(coaches):
@@ -151,33 +186,40 @@ class FootballRunScreen(Screen):
                 card_width,
                 card_height,
             )
-            draw_panel(surface, rect, self.theme)
+            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
             draw_text(
                 surface,
-                f"COACH 0{index + 1}",
-                (rect.left + 22, rect.top + 24),
+                f"OPTION 0{index + 1}",
+                (rect.left + 20, rect.top + 20),
                 self._small_font,
                 self.theme.secondary_accent,
             )
             draw_text(
                 surface,
                 coach.name,
-                (rect.left + 22, rect.top + 72),
+                (rect.left + 20, rect.top + 73),
                 self._title_font,
                 self.theme.text,
             )
-            draw_wrapped_text(
+            pygame.draw.line(
                 surface,
-                "Identity choice only",
-                pygame.Rect(rect.left + 22, rect.top + 120, rect.width - 44, 58),
-                self._body_font,
+                self.theme.border_soft,
+                (rect.left + 20, rect.top + 119),
+                (rect.right - 20, rect.top + 119),
+                1,
+            )
+            draw_text(
+                surface,
+                "HEAD COACH",
+                (rect.left + 20, rect.top + 141),
+                self._small_font,
                 self.theme.muted,
             )
             button_rect = pygame.Rect(
-                rect.left + 20,
-                rect.bottom - 58,
-                rect.width - 40,
-                40,
+                rect.left + 18,
+                rect.bottom - 61,
+                rect.width - 36,
+                44,
             )
             buttons.append(
                 Button(
@@ -186,7 +228,7 @@ class FootballRunScreen(Screen):
                         lambda: self._require_controller().choose_coach(choice)
                     ),
                     button_rect,
-                    variant="primary" if index == 0 else "quiet",
+                    variant="primary",
                 )
             )
         self._set_buttons(buttons)
@@ -202,31 +244,30 @@ class FootballRunScreen(Screen):
         required = builder.required_position
         completed = len(builder.selected_players)
         remaining = len(PLAYER_DRAFT_ORDER) - completed
-        required_label = required.value if required is not None else "COMPLETE"
+        required_label = _POSITION_LABELS[required] if required is not None else "COMPLETE"
         draw_text(
             surface,
-            f"NEXT POSITION: {required_label}    |    {remaining} POSITION(S) REMAINING",
+            f"NEXT PICK  /  {required_label}",
             (content.left + 2, content.top),
             self._label_font,
             self.theme.secondary_accent,
         )
-        if builder.selected_coach is not None:
-            draw_text(
-                surface,
-                f"COACH: {builder.selected_coach.name}  (IDENTITY ONLY)",
-                (content.left + 2, content.top + 21),
-                self._small_font,
-                self.theme.muted,
-            )
-        progress_top = content.top + 42
-        gap = 8
+        draw_text(
+            surface,
+            f"{remaining} PICKS LEFT",
+            (content.right - 110, content.top + 2),
+            self._small_font,
+            self.theme.muted,
+        )
+        progress_top = content.top + 26
+        gap = 6
         cell_width = (content.width - gap * 7) // 8
         for index, position in enumerate(PLAYER_DRAFT_ORDER):
             rect = pygame.Rect(
                 content.left + index * (cell_width + gap),
                 progress_top,
                 cell_width,
-                30,
+                28,
             )
             is_done = position in builder.selected_players
             is_current = position is required
@@ -239,19 +280,26 @@ class FootballRunScreen(Screen):
             )
             draw_text(
                 surface,
-                position.value,
-                (rect.left + 5, rect.top + 8),
-                _ui_font(11, bold=True),
+                _POSITION_LABELS[position],
+                (rect.left + 4, rect.top + 7),
+                _ui_font(10, bold=True),
                 self.theme.primary_accent if is_done else self.theme.text,
             )
+            if is_done:
+                pygame.draw.circle(
+                    surface,
+                    self.theme.primary_accent,
+                    (rect.right - 9, rect.centery),
+                    3,
+                )
 
         offers = tuple(
             candidate
             for candidate in builder.current_offer
             if isinstance(candidate, FootballPlayerCandidate)
         )
-        gap = 14
-        cards_top = progress_top + 44
+        gap = 12
+        cards_top = progress_top + 38
         card_width = (content.width - gap * 2) // 3
         card_height = content.bottom - cards_top
         buttons: list[Button] = []
@@ -265,43 +313,69 @@ class FootballRunScreen(Screen):
             draw_panel(surface, rect, self.theme, fill=self.theme.panel)
             draw_text(
                 surface,
-                f"PLAYER 0{index + 1}  /  {candidate.position.value}",
-                (rect.left + 18, rect.top + 18),
+                f"PROSPECT  0{index + 1}",
+                (rect.left + 18, rect.top + 17),
                 self._small_font,
                 self.theme.secondary_accent,
             )
             draw_text(
                 surface,
-                candidate.name,
-                (rect.left + 18, rect.top + 53),
-                self._label_font,
+                _fit_text(candidate.name, self._title_font, rect.width - 36),
+                (rect.left + 18, rect.top + 47),
+                self._title_font,
                 self.theme.text,
             )
             player = candidate.player
-            stat_lines = (
-                f"Power       {player.power:.1f}",
-                f"Volatility  {player.volatility:.2f}",
-                f"Stamina     {player.stamina:.2f}",
+            pygame.draw.line(
+                surface,
+                self.theme.border_soft,
+                (rect.left + 18, rect.top + 91),
+                (rect.right - 18, rect.top + 91),
+                1,
             )
-            for stat_index, line in enumerate(stat_lines):
+            metrics = (
+                ("POWER", f"{player.power:.1f}", None),
+                ("VOLATILITY", f"{player.volatility:.2f}", player.volatility),
+                ("STAMINA", f"{player.stamina:.2f}", player.stamina),
+            )
+            metric_top = rect.top + 108
+            for stat_index, (label, value, ratio) in enumerate(metrics):
+                y = metric_top + stat_index * 49
                 draw_text(
                     surface,
-                    line,
-                    (rect.left + 18, rect.top + 92 + stat_index * 24),
-                    self._body_font,
+                    label,
+                    (rect.left + 18, y),
+                    self._small_font,
+                    self.theme.muted,
+                )
+                draw_text(
+                    surface,
+                    value,
+                    (rect.right - 68, y - 3),
+                    self._label_font,
                     self.theme.text,
                 )
+                if ratio is not None:
+                    bar = pygame.Rect(rect.left + 18, y + 22, rect.width - 36, 3)
+                    pygame.draw.rect(surface, self.theme.border_soft, bar, border_radius=2)
+                    pygame.draw.rect(
+                        surface,
+                        self.theme.secondary_accent,
+                        pygame.Rect(bar.left, bar.top, round(bar.width * ratio), bar.height),
+                        border_radius=2,
+                    )
             draw_wrapped_text(
                 surface,
                 candidate.description,
                 pygame.Rect(
                     rect.left + 18,
-                    rect.top + 176,
+                    rect.top + 264,
                     rect.width - 36,
-                    max(42, card_height - 244),
+                    max(24, card_height - 328),
                 ),
-                self._body_font,
+                self._small_font,
                 self.theme.muted,
+                line_gap=2,
             )
             button_rect = pygame.Rect(
                 rect.left + 16,
@@ -332,28 +406,31 @@ class FootballRunScreen(Screen):
             raise RuntimeError("The controller did not provide the active shop state.")
         draw_text(
             surface,
-            f"REMAINING: {shop.remaining_budget} TRAINING POINT(S)",
-            (content.left + 2, content.top),
+            "UPGRADE YOUR LINEUP",
+            (content.left + 2, content.top + 2),
             self._label_font,
-            self.theme.secondary_accent,
+            self.theme.text,
         )
-        purchased_text = (
-            "Purchased: "
-            + ", ".join(upgrade.name for upgrade in shop.purchased_upgrades)
-            if shop.purchased_upgrades
-            else "Purchased: none"
+        points_label = f"{shop.remaining_budget} TRAINING POINTS"
+        points_width = self._label_font.size(points_label)[0] + 24
+        points_rect = pygame.Rect(
+            content.right - points_width,
+            content.top - 2,
+            points_width,
+            28,
         )
+        pygame.draw.rect(surface, self.theme.panel_alt, points_rect, border_radius=7)
         draw_text(
             surface,
-            purchased_text[:130],
-            (content.left + 2, content.top + 25),
+            points_label,
+            (points_rect.left + 12, points_rect.top + 7),
             self._small_font,
-            self.theme.muted,
+            self.theme.secondary_accent,
         )
-        gap = 14
-        cards_top = content.top + 50
+        gap = 12
+        cards_top = content.top + 37
         card_width = (content.width - gap * 2) // 3
-        card_height = content.bottom - cards_top - 48
+        card_height = content.bottom - cards_top - 47
         buttons: list[Button] = []
         for index, upgrade in enumerate(shop.offer):
             rect = pygame.Rect(
@@ -373,52 +450,59 @@ class FootballRunScreen(Screen):
             )
             draw_text(
                 surface,
-                upgrade.name,
-                (rect.left + 18, rect.top + 19),
+                f"{upgrade.stat.value.upper()} TRAINING",
+                (rect.left + 18, rect.top + 18),
+                self._title_font,
+                self.theme.text,
+            )
+            draw_text(
+                surface,
+                "TARGET",
+                (rect.left + 18, rect.top + 64),
+                self._small_font,
+                self.theme.muted,
+            )
+            draw_text(
+                surface,
+                _POSITION_LABELS[upgrade.position],
+                (rect.left + 18, rect.top + 83),
                 self._label_font,
                 self.theme.text,
             )
             draw_text(
                 surface,
-                f"Target: {upgrade.position.value}",
-                (rect.left + 18, rect.top + 58),
-                self._body_font,
-                self.theme.muted,
-            )
-            draw_text(
-                surface,
-                f"Stat: {upgrade.stat.value.upper()}  +{upgrade.amount:g}",
-                (rect.left + 18, rect.top + 87),
-                self._body_font,
-                self.theme.primary_accent,
-            )
-            draw_text(
-                surface,
-                f"Cost: {upgrade.cost} Training Point(s)",
-                (rect.left + 18, rect.top + 118),
-                self._body_font,
-                self.theme.text,
-            )
-            draw_wrapped_text(
-                surface,
-                upgrade.description,
-                pygame.Rect(rect.left + 18, rect.top + 157, rect.width - 36, 54),
+                upgrade.stat.value.upper(),
+                (rect.left + 18, rect.top + 127),
                 self._small_font,
                 self.theme.muted,
             )
+            draw_text(
+                surface,
+                f"+{upgrade.amount:g}",
+                (rect.left + 18, rect.top + 148),
+                self._display_font,
+                self.theme.secondary_accent,
+            )
             reason = (
-                "Already purchased"
+                "PURCHASED"
                 if purchased
-                else "Not enough Training Points"
-                if not affordable
-                else "Available"
+                else "AVAILABLE"
+                if affordable
+                else "NEED MORE POINTS"
+            )
+            draw_text(
+                surface,
+                f"COST  {upgrade.cost} TP",
+                (rect.left + 18, rect.bottom - 90),
+                self._label_font,
+                self.theme.text,
             )
             draw_text(
                 surface,
                 reason,
                 (rect.left + 18, rect.bottom - 68),
                 self._small_font,
-                self.theme.muted if affordable and not purchased else self.theme.danger,
+                self.theme.secondary_accent if affordable else self.theme.muted,
             )
             button_rect = pygame.Rect(
                 rect.left + 14,
@@ -465,85 +549,207 @@ class FootballRunScreen(Screen):
         if match is None:
             raise RuntimeError("The controller did not provide an active match state.")
 
-        gap = 12
-        team_width = (content.width - gap) // 2
-        team_height = 136
-        self._draw_team_panel(
+        scoreboard = pygame.Rect(content.left, content.top, content.width, 84)
+        draw_panel(surface, scoreboard, self.theme, fill=self.theme.panel)
+        score_font = _ui_font(38, bold=True)
+        team_width = (scoreboard.width - 180) // 2
+        draw_text(
             surface,
-            pygame.Rect(content.left, content.top, team_width, team_height),
-            match.team_a,
-            match.team_a_score,
-            FootballTeamSide.TEAM_A,
+            _fit_text(
+                match.team_a.team_name.upper(),
+                self._label_font,
+                team_width - 12,
+            ),
+            (scoreboard.left + 20, scoreboard.top + 13),
+            self._label_font,
+            self.theme.text,
         )
-        self._draw_team_panel(
+        draw_text(
             surface,
-            pygame.Rect(content.left + team_width + gap, content.top, team_width, team_height),
-            match.team_b,
-            match.team_b_score,
-            FootballTeamSide.TEAM_B,
+            _fit_text(
+                match.team_b.team_name.upper(),
+                self._label_font,
+                team_width - 12,
+            ),
+            (scoreboard.right - team_width + 4, scoreboard.top + 13),
+            self._label_font,
+            self.theme.text,
+        )
+        score_a = score_font.render(str(match.team_a_score), True, self.theme.text)
+        score_b = score_font.render(str(match.team_b_score), True, self.theme.text)
+        surface.blit(
+            score_a,
+            score_a.get_rect(midleft=(scoreboard.left + 20, scoreboard.centery + 12)),
+        )
+        surface.blit(
+            score_b,
+            score_b.get_rect(midright=(scoreboard.right - 20, scoreboard.centery + 12)),
+        )
+        center = scoreboard.centerx
+        draw_text(
+            surface,
+            f"GAME {state.game_number:02d}",
+            (center - 31, scoreboard.top + 17),
+            self._small_font,
+            self.theme.muted,
+        )
+        draw_text(
+            surface,
+            f"{state.wins}-{state.losses}",
+            (center - 15, scoreboard.top + 48),
+            self._label_font,
+            self.theme.text,
+        )
+        pygame.draw.line(
+            surface,
+            self.theme.primary_accent,
+            (scoreboard.left + 2, scoreboard.bottom - 3),
+            (scoreboard.left + scoreboard.width // 2 - 30, scoreboard.bottom - 3),
+            3,
+        )
+        pygame.draw.line(
+            surface,
+            self.theme.secondary_accent,
+            (scoreboard.centerx + 30, scoreboard.bottom - 3),
+            (scoreboard.right - 2, scoreboard.bottom - 3),
+            3,
         )
 
-        details = pygame.Rect(
-            content.left,
-            content.top + team_height + 8,
-            content.width,
-            65,
-        )
-        draw_panel(surface, details, self.theme, fill=self.theme.panel_alt)
+        situation = pygame.Rect(content.left, scoreboard.bottom + 8, content.width, 116)
+        draw_panel(surface, situation, self.theme, fill=self.theme.panel_alt)
+        clock = f"{match.game_clock_seconds // 60:02d}:{match.game_clock_seconds % 60:02d}"
         possession_name = (
             match.team_a.team_name
             if match.possession is FootballTeamSide.TEAM_A
             else match.team_b.team_name
         )
-        clock = f"{match.game_clock_seconds // 60:02d}:{match.game_clock_seconds % 60:02d}"
         draw_text(
             surface,
-            f"PERIOD {match.period}  {clock}    |    POSSESSION: {possession_name}",
-            (details.left + 16, details.top + 11),
-            self._small_font,
+            f"Q{match.period}",
+            (situation.left + 16, situation.top + 12),
+            self._label_font,
             self.theme.secondary_accent,
         )
         draw_text(
             surface,
-            f"DOWN {match.down} & {match.yards_to_go:.1f}    |    "
-            f"OWN {match.offense_field_position:.1f}-YARD LINE    |    "
-            f"DRIVE SCHEME: {match.current_drive_defensive_scheme.value if match.current_drive_defensive_scheme else 'NOT SET'}",
-            (details.left + 16, details.top + 35),
-            self._small_font,
+            clock,
+            (situation.left + 53, situation.top + 7),
+            _ui_font(22, bold=True),
             self.theme.text,
         )
+        draw_text(
+            surface,
+            _fit_text(
+                f"BALL  /  {possession_name.upper()}",
+                self._small_font,
+                205,
+            ),
+            (situation.right - 221, situation.top + 15),
+            self._small_font,
+            (
+                self.theme.primary_accent
+                if match.possession is FootballTeamSide.TEAM_A
+                else self.theme.text
+            ),
+        )
+
+        field_position = match.offense_field_position
+        field_label = (
+            f"OWN {field_position:.0f}"
+            if field_position <= 50
+            else f"OPP {100 - field_position:.0f}"
+        )
+        down_suffix = {1: "ST", 2: "ND", 3: "RD", 4: "TH"}[match.down]
+        draw_text(
+            surface,
+            f"{match.down}{down_suffix} & {match.yards_to_go:.1f}",
+            (situation.left + 16, situation.top + 47),
+            _ui_font(23, bold=True),
+            self.theme.text,
+        )
+        draw_text(
+            surface,
+            field_label,
+            (situation.left + 165, situation.top + 54),
+            self._small_font,
+            self.theme.secondary_accent,
+        )
+        scheme_name = (
+            _SCHEME_LABELS[match.current_drive_defensive_scheme]
+            if match.current_drive_defensive_scheme is not None
+            else "NOT SET"
+        )
+        draw_text(
+            surface,
+            f"DRIVE SCHEME  /  {scheme_name}",
+            (situation.right - 264, situation.top + 52),
+            self._small_font,
+            self.theme.muted,
+        )
+
+        field = pygame.Rect(
+            situation.left + 16,
+            situation.top + 88,
+            situation.width - 32,
+            12,
+        )
+        pygame.draw.rect(surface, self.theme.canvas, field, border_radius=5)
+        for fraction in (0.1, 0.3, 0.5, 0.7, 0.9):
+            x = field.left + round(field.width * fraction)
+            pygame.draw.line(
+                surface,
+                self.theme.border,
+                (x, field.top + 2),
+                (x, field.bottom - 2),
+                1,
+            )
+        line_to_gain = min(100.0, field_position + match.yards_to_go)
+        gain_x = field.left + round(field.width * line_to_gain / 100)
+        pygame.draw.line(
+            surface,
+            self.theme.secondary_accent,
+            (gain_x, field.top - 2),
+            (gain_x, field.bottom + 2),
+            2,
+        )
+        ball_x = field.left + round(field.width * field_position / 100)
+        pygame.draw.circle(surface, self.theme.text, (ball_x, field.centery), 5)
 
         history = pygame.Rect(
             content.left,
-            details.bottom + 8,
+            situation.bottom + 8,
             content.width,
-            62,
+            61,
         )
-        draw_panel(surface, history, self.theme)
+        draw_panel(surface, history, self.theme, fill=self.theme.panel)
         draw_text(
             surface,
-            "RECENT MATCH EVENTS",
+            "PLAY BY PLAY",
             (history.left + 14, history.top + 8),
             self._small_font,
-            self.theme.muted,
+            self.theme.secondary_accent,
         )
         recent_events = match.match_events[-2:]
         if recent_events:
             for index, event in enumerate(recent_events):
                 draw_text(
                     surface,
-                    self._format_event(event, match.team_a.team_name, match.team_b.team_name),
-                    (history.left + 14, history.top + 27 + index * 17),
+                    self._format_event(
+                        event,
+                        match.team_a.team_name,
+                        match.team_b.team_name,
+                    ),
+                    (history.left + 134, history.top + 8 + index * 22),
                     self._small_font,
                     self.theme.text,
                 )
         else:
             draw_text(
                 surface,
-                "The opening drive is ready.",
-                (history.left + 14, history.top + 31),
+                "Opening drive",
+                (history.left + 134, history.top + 9),
                 self._small_font,
-                self.theme.text,
+                self.theme.muted,
             )
 
         action_top = history.bottom + 8
@@ -555,58 +761,6 @@ class FootballRunScreen(Screen):
         )
         self._draw_match_decision(surface, actions_rect, state)
 
-    def _draw_team_panel(
-        self,
-        surface: pygame.Surface,
-        rect: pygame.Rect,
-        roster: FootballRoster,
-        score: int,
-        side: FootballTeamSide,
-    ) -> None:
-        draw_panel(
-            surface,
-            rect,
-            self.theme,
-            fill=self.theme.panel_alt if side is FootballTeamSide.TEAM_A else self.theme.panel,
-        )
-        draw_text(
-            surface,
-            _fit_text(
-                f"{'TEAM A / YOU' if side is FootballTeamSide.TEAM_A else 'TEAM B / LOCAL AI'}  -  {roster.team_name}",
-                self._label_font,
-                rect.width - 92,
-            ),
-            (rect.left + 14, rect.top + 10),
-            self._label_font,
-            self.theme.text,
-        )
-        score_surface = _ui_font(30, bold=True).render(str(score), True, self.theme.primary_accent)
-        surface.blit(score_surface, score_surface.get_rect(topright=(rect.right - 14, rect.top + 7)))
-        staff_line = _fit_text(
-            f"COACH: {roster.coach.name}  |  SPECIAL TEAMS: {roster.special_teams.name}",
-            self._small_font,
-            rect.width - 28,
-        )
-        draw_text(
-            surface,
-            staff_line,
-            (rect.left + 14, rect.top + 31),
-            self._small_font,
-            self.theme.muted,
-        )
-        positions = tuple(FootballPosition)
-        column_width = (rect.width - 28) // 2
-        for index, position in enumerate(positions):
-            column, row = divmod(index, 4)
-            x = rect.left + 14 + column * column_width
-            y = rect.top + 51 + row * 18
-            position_label = _fit_text(position.value, self._small_font, 106)
-            draw_text(surface, position_label, (x, y), self._small_font, self.theme.muted)
-            name_x = x + 110
-            name_width = column_width - 114
-            player_name = _fit_text(roster.players[position].name, self._small_font, name_width)
-            draw_text(surface, player_name, (name_x, y), self._small_font, self.theme.text)
-
     def _draw_match_decision(
         self,
         surface: pygame.Surface,
@@ -616,7 +770,7 @@ class FootballRunScreen(Screen):
         decision = state.human_decision
         if decision is FootballHumanDecision.OFFENSIVE_PLAY:
             labels = tuple(_PLAY_LABELS.items())
-            heading = "YOUR OFFENSE  /  CHOOSE A PLAY"
+            heading = "OFFENSE  /  CALL THE PLAY"
             actions = [
                 (label, lambda action=action: self._submit(
                     lambda: self._require_controller().choose_offensive_play(action)
@@ -625,7 +779,7 @@ class FootballRunScreen(Screen):
             ]
         elif decision is FootballHumanDecision.DEFENSIVE_SCHEME:
             labels = tuple(_SCHEME_LABELS.items())
-            heading = "TEAM B DRIVE  /  CHOOSE ONE SCHEME FOR THE DRIVE"
+            heading = "DEFENSE  /  SET THE DRIVE SCHEME"
             actions = [
                 (label, lambda action=action: self._submit(
                     lambda: self._require_controller().choose_defensive_scheme(action)
@@ -633,7 +787,7 @@ class FootballRunScreen(Screen):
                 for action, label in labels
             ]
         elif decision is FootballHumanDecision.FOURTH_DOWN:
-            heading = "FOURTH DOWN  /  CHOOSE AN ACTION"
+            heading = "FOURTH DOWN  /  MAKE THE CALL"
             actions = [
                 (action.value.replace("_", " ").upper(), lambda action=action: self._submit(
                     lambda: self._require_controller().choose_fourth_down(action)
@@ -653,14 +807,14 @@ class FootballRunScreen(Screen):
         )
         buttons: list[Button] = []
         if actions:
-            gap = 8
+            gap = 10
             button_width = (rect.width - gap * 2) // 3
-            button_height = min(43, max(32, (rect.height - 26) // 2))
+            button_height = min(44, max(34, (rect.height - 28) // 2))
             for index, (label, callback) in enumerate(actions):
                 row, column = divmod(index, 3)
                 button_rect = pygame.Rect(
                     rect.left + column * (button_width + gap),
-                    rect.top + 23 + row * (button_height + 6),
+                    rect.top + 22 + row * (button_height + 7),
                     button_width,
                     button_height,
                 )
@@ -695,66 +849,98 @@ class FootballRunScreen(Screen):
         result = match.final_result
         won = result.winner is FootballTeamSide.TEAM_A
         result_panel = pygame.Rect(
-            content.left + 40,
-            content.top + 15,
-            content.width - 80,
-            content.height - 58,
+            content.left + 42,
+            content.top + 8,
+            content.width - 84,
+            content.height - 16,
         )
         draw_panel(surface, result_panel, self.theme, fill=self.theme.panel)
-        draw_text(
-            surface,
-            "VICTORY" if won else "DEFEAT",
-            (result_panel.left + 30, result_panel.top + 25),
-            self._display_font,
+        outcome = self._display_font.render(
+            "FINAL  /  WIN" if won else "FINAL  /  LOSS",
+            True,
             self.theme.primary_accent if won else self.theme.danger,
         )
-        draw_text(
-            surface,
-            f"{match.team_a.team_name}  {result.team_a_score}  -  "
-            f"{result.team_b_score}  {match.team_b.team_name}",
-            (result_panel.left + 34, result_panel.top + 96),
-            self._title_font,
+        surface.blit(
+            outcome,
+            outcome.get_rect(midtop=(result_panel.centerx, result_panel.top + 22)),
+        )
+        scoreline = (
+            f"{match.team_a.team_name}  {result.team_a_score}"
+            f"     -     {result.team_b_score}  {match.team_b.team_name}"
+        )
+        scoreline_surface = self._title_font.render(
+            _fit_text(scoreline, self._title_font, result_panel.width - 56),
+            True,
             self.theme.text,
+        )
+        surface.blit(
+            scoreline_surface,
+            scoreline_surface.get_rect(
+                midtop=(result_panel.centerx, result_panel.top + 87)
+            ),
+        )
+        pygame.draw.line(
+            surface,
+            self.theme.border_soft,
+            (result_panel.left + 28, result_panel.top + 132),
+            (result_panel.right - 28, result_panel.top + 132),
+            1,
         )
         draw_text(
             surface,
             f"GAME {state.game_number}  |  RECORD {state.wins}-{state.losses}",
-            (result_panel.left + 34, result_panel.top + 145),
+            (
+                result_panel.centerx
+                - self._label_font.size(
+                    f"GAME {state.game_number}  |  RECORD {state.wins}-{state.losses}"
+                )[0]
+                // 2,
+                result_panel.top + 154,
+            ),
             self._label_font,
             self.theme.secondary_accent,
         )
 
         if state.phase is FootballRunPhase.READY_FOR_NEXT_GAME:
-            explanation = "You are still in the regular season. Start the next game when ready."
+            stage = "REGULAR SEASON"
+            explanation = "Next up: regular-season game."
             primary_label = "NEXT REGULAR-SEASON GAME"
             primary_action = self._start_next_game
         elif state.phase is FootballRunPhase.FIRED:
-            explanation = "Three losses ended this run. Start a new run from the main menu."
+            stage = "RUN OVER  /  THREE LOSSES"
+            explanation = "Your season is over."
             primary_label = "RETURN TO MAIN MENU"
             primary_action = self._return_to_menu
         else:
-            explanation = (
-                "You survived game 10 and reached the playoffs marker. "
-                "This prototype does not include a playoff bracket."
-            )
+            stage = "GAME 10 COMPLETE"
+            explanation = "Playoffs reached. No playoff games are available yet."
             primary_label = "RETURN TO MAIN MENU"
             primary_action = self._return_to_menu
-        draw_wrapped_text(
+        draw_text(
             surface,
-            explanation,
-            pygame.Rect(
-                result_panel.left + 34,
-                result_panel.top + 190,
-                result_panel.width - 68,
-                72,
+            stage,
+            (
+                result_panel.centerx - self._label_font.size(stage)[0] // 2,
+                result_panel.top + 198,
             ),
-            self._body_font,
+            self._label_font,
+            self.theme.text,
+        )
+        explanation_surface = self._small_font.render(
+            _fit_text(explanation, self._small_font, result_panel.width - 60),
+            True,
             self.theme.muted,
         )
+        surface.blit(
+            explanation_surface,
+            explanation_surface.get_rect(
+                midtop=(result_panel.centerx, result_panel.top + 228)
+            ),
+        )
         primary_rect = pygame.Rect(
-            result_panel.left + 34,
-            result_panel.bottom - 58,
-            min(360, result_panel.width - 68),
+            result_panel.centerx - min(370, result_panel.width - 60) // 2,
+            result_panel.bottom - 55,
+            min(370, result_panel.width - 60),
             42,
         )
         buttons = [
@@ -786,7 +972,7 @@ class FootballRunScreen(Screen):
         else:
             offense = team_a_name if event.possession is FootballTeamSide.TEAM_A else team_b_name
             description = f"{offense}: {event.action.value.replace('_', ' ').upper()}"
-        return _fit_text(description, self._small_font, 1080)
+        return _fit_text(description, self._small_font, 950)
 
     def _draw_exit_confirmation(self, surface: pygame.Surface) -> None:
         overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)

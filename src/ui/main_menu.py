@@ -31,146 +31,195 @@ class FootballMainMenuScreen(Screen):
             if self.menu_state is not None
             else "NEW TEAM"
         )
-        layout = self._header(surface, "Saturday starts here", "OFFLINE SEASON", team_name)
+        layout = self._header(surface, "Build your season", "HOME / SEASON", team_name)
         content = layout.content
-        hero_height = min(286, round(content.height * 0.62))
-        hero = pygame.Rect(content.left, content.top, content.width, hero_height)
-        draw_panel(surface, hero, self.theme)
+        hero = pygame.Rect(content.left, content.top, content.width, 286)
+        draw_panel(surface, hero, self.theme, fill=self.theme.panel)
 
+        copy_width = hero.width - 390
         draw_text(
             surface,
-            "YOUR TEAM. YOUR CALLS.",
-            (hero.left + 34, hero.top + 27),
+            "COLLEGE FOOTBALL  /  ROGUELIKE SEASON",
+            (hero.left + 32, hero.top + 28),
             self._small_font,
             self.theme.secondary_accent,
         )
-        title = team_name.upper()[:22]
-        title_font = _ui_font(56, bold=True)
-        while title_font.size(title)[0] > round(hero.width * 0.45):
-            title_font = _ui_font(max(34, title_font.get_height() - 3), bold=True)
-        draw_text(surface, title, (hero.left + 34, hero.top + 68), title_font, self.theme.text)
+        name = team_name.upper()
+        if len(name) > 24:
+            name = f"{name[:21]}..."
+        name_font = _ui_font(54, bold=True)
+        while name_font.size(name)[0] > copy_width - 64 and name_font.get_height() > 32:
+            name_font = _ui_font(name_font.get_height() - 2, bold=True)
+        draw_text(
+            surface,
+            name,
+            (hero.left + 30, hero.top + 66),
+            name_font,
+            self.theme.text,
+        )
+        draw_text(
+            surface,
+            "BUILD A ROSTER. CALL THE GAME.",
+            (hero.left + 34, hero.top + 131),
+            self._label_font,
+            self.theme.text,
+        )
         draw_wrapped_text(
             surface,
-            "Draft eight positions, tune your roster with Training Points, then call every play against local AI.",
-            pygame.Rect(hero.left + 36, hero.top + 137, 430, 58),
+            "Eight picks. One training stop. Every snap is yours.",
+            pygame.Rect(hero.left + 34, hero.top + 165, copy_width - 54, 46),
             self._body_font,
             self.theme.muted,
         )
 
-        action = pygame.Rect(hero.right - 324, hero.top + 15, 304, hero.height - 30)
+        if self.menu_state is not None:
+            profile = self.menu_state.profile
+            for index, (label, color) in enumerate(
+                (
+                    (profile.primary_color.display_name.upper(), self.theme.primary),
+                    (profile.secondary_color.display_name.upper(), self.theme.secondary),
+                )
+            ):
+                x = hero.left + 34 + index * 154
+                pygame.draw.rect(
+                    surface,
+                    color,
+                    pygame.Rect(x, hero.bottom - 42, 24, 18),
+                    border_radius=4,
+                )
+                draw_text(
+                    surface,
+                    label,
+                    (x + 32, hero.bottom - 42),
+                    self._small_font,
+                    self.theme.muted,
+                )
+        elif self.profile_error is not None:
+            draw_wrapped_text(
+                surface,
+                "Team profile could not load. Repair it from the terminal client.",
+                pygame.Rect(hero.left + 34, hero.bottom - 58, copy_width - 54, 42),
+                self._small_font,
+                self.theme.danger,
+            )
+        else:
+            draw_text(
+                surface,
+                "Create a team profile to start a season.",
+                (hero.left + 34, hero.bottom - 48),
+                self._small_font,
+                self.theme.muted,
+            )
+
+        action = pygame.Rect(hero.right - 344, hero.top + 14, 328, hero.height - 28)
         draw_panel(surface, action, self.theme, fill=self.theme.panel_alt)
         draw_text(
             surface,
-            "LOCAL AI DIFFICULTY",
+            "OPPONENT DIFFICULTY",
             (action.left + 18, action.top + 16),
             self._small_font,
-            self.theme.secondary_accent,
+            self.theme.muted,
         )
-        difficulty_y = action.top + 42
-        difficulty_gap = 7
-        difficulty_width = (action.width - 36 - difficulty_gap * 2) // 3
+        gap = 6
+        option_width = (action.width - 36 - gap * 2) // 3
         buttons: list[Button] = []
         for index, difficulty in enumerate(FootballAIDifficulty):
             rect = pygame.Rect(
-                action.left + 18 + index * (difficulty_width + difficulty_gap),
-                difficulty_y,
-                difficulty_width,
+                action.left + 18 + index * (option_width + gap),
+                action.top + 38,
+                option_width,
                 36,
             )
-            button = Button(
-                difficulty.value.upper(),
-                lambda choice=difficulty: self._select_difficulty(choice),
-                rect,
-                variant="primary" if difficulty is self.difficulty else "quiet",
+            buttons.append(
+                Button(
+                    difficulty.value.upper(),
+                    lambda choice=difficulty: self._select_difficulty(choice),
+                    rect,
+                    variant="primary" if difficulty is self.difficulty else "quiet",
+                )
             )
-            buttons.append(button)
 
-        draw_text(
-            surface,
-            "8 positions  /  6 Training Points  /  up to 10 games",
-            (action.left + 18, action.top + 87),
-            self._small_font,
-            self.theme.text,
-        )
-        start_rect = pygame.Rect(action.left + 16, action.top + 118, action.width - 32, 54)
+        start_rect = pygame.Rect(action.left + 18, action.top + 87, action.width - 36, 50)
         buttons.insert(
             0,
             Button(
-                "PLAY / START RUN",
+                "START RUN",
                 lambda: self.on_start_run(self.difficulty),
                 start_rect,
                 enabled=self.menu_state is not None,
                 variant="primary",
             ),
         )
-        settings_rect = pygame.Rect(action.left + 16, action.bottom - 49, 126, 36)
-        quit_rect = pygame.Rect(action.right - 142, action.bottom - 49, 126, 36)
+        utility_y = action.bottom - 47
+        utility_gap = 10
+        utility_width = (action.width - 36 - utility_gap) // 2
         buttons.extend(
             (
-                Button("SETTINGS", lambda: self.navigate("settings"), settings_rect),
-                Button("QUIT", self.quit_application, quit_rect),
+                Button(
+                    "SETTINGS",
+                    lambda: self.navigate("settings"),
+                    pygame.Rect(action.left + 18, utility_y, utility_width, 34),
+                ),
+                Button(
+                    "QUIT",
+                    self.quit_application,
+                    pygame.Rect(
+                        action.left + 18 + utility_width + utility_gap,
+                        utility_y,
+                        utility_width,
+                        34,
+                    ),
+                ),
             )
         )
 
-        if self.menu_state is None:
-            message = (
-                "Profile could not load; use the terminal client to repair it."
-                if self.profile_error is not None
-                else "Create a saved team profile before starting a run."
-            )
-            draw_wrapped_text(
+        if self.theme.warning is not None and self.menu_state is not None:
+            draw_text(
                 surface,
-                message,
-                pygame.Rect(hero.left + 36, hero.bottom - 60, 440, 42),
-                self._small_font,
-                self.theme.danger if self.profile_error is not None else self.theme.muted,
-            )
-        elif self.theme.warning is not None:
-            draw_wrapped_text(
-                surface,
-                self.theme.warning,
-                pygame.Rect(hero.left + 36, hero.bottom - 54, 440, 36),
+                "COLOR FALLBACK",
+                (hero.left + 34, hero.bottom - 48),
                 self._small_font,
                 self.theme.danger,
             )
 
-        guide_y = hero.bottom + 18
-        draw_text(
-            surface,
-            "YOUR SEASON",
-            (content.left + 2, guide_y),
-            self._small_font,
-            self.theme.muted,
+        overview_top = hero.bottom + 18
+        overview_height = max(92, content.bottom - overview_top)
+        overview = pygame.Rect(content.left, overview_top, content.width, overview_height)
+        draw_panel(surface, overview, self.theme, fill=self.theme.panel_alt)
+        stages = (
+            ("01", "DRAFT", "8 positions"),
+            ("02", "TRAIN", "Spend 6 points"),
+            ("03", "KICK OFF", "Call every play"),
         )
-        cards_y = guide_y + 24
-        card_gap = 12
-        card_width = (content.width - card_gap * 2) // 3
-        card_height = content.bottom - cards_y
-        for index, (heading, detail) in enumerate(
-            (
-                ("01  BUILD", "Choose a coach and draft all eight positions."),
-                ("02  TRAIN", "Spend from one six-point upgrade shop."),
-                ("03  PLAY", "Call offense and defense against local AI."),
-            )
-        ):
-            rect = pygame.Rect(
-                content.left + index * (card_width + card_gap),
-                cards_y,
-                card_width,
-                card_height,
-            )
-            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
+        column_width = overview.width // len(stages)
+        for index, (number, title, detail) in enumerate(stages):
+            left = overview.left + index * column_width
+            if index:
+                pygame.draw.line(
+                    surface,
+                    self.theme.border_soft,
+                    (left, overview.top + 17),
+                    (left, overview.bottom - 17),
+                    1,
+                )
             draw_text(
                 surface,
-                heading,
-                (rect.left + 18, rect.top + 17),
+                number,
+                (left + 20, overview.top + 20),
+                self._small_font,
+                self.theme.secondary_accent,
+            )
+            draw_text(
+                surface,
+                title,
+                (left + 56, overview.top + 17),
                 self._label_font,
                 self.theme.text,
             )
-            draw_wrapped_text(
+            draw_text(
                 surface,
                 detail,
-                pygame.Rect(rect.left + 18, rect.top + 48, rect.width - 36, rect.height - 58),
+                (left + 56, overview.top + 45),
                 self._small_font,
                 self.theme.muted,
             )

@@ -88,7 +88,7 @@ def _start_run(
     difficulty: FootballAIDifficulty = FootballAIDifficulty.STANDARD,
 ) -> None:
     _activate(desktop, difficulty.value.upper())
-    _activate(desktop, "PLAY / START RUN")
+    _activate(desktop, "START RUN")
 
 
 def _draft_to_shop(desktop: DesktopApplication) -> None:
@@ -145,7 +145,7 @@ def test_menu_uses_selected_difficulty_and_four_independent_seeds(
     desktop = DesktopApplication(application_controller, seed_factory=seed_factory)
 
     _activate(desktop, "HARD")
-    _activate(desktop, "PLAY / START RUN")
+    _activate(desktop, "START RUN")
 
     assert desktop.router.current_id == "football_run"
     assert desktop.football_controller is not None

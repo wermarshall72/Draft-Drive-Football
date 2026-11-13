@@ -56,7 +56,7 @@ def test_missing_profile_has_clear_fallback_and_start_is_disabled(
     menu = desktop.router.current
 
     assert menu.menu_state is None
-    assert any("PLAY / START RUN" == button.label and not button.enabled for button in menu.buttons)
+    assert any(button.label == "START RUN" and not button.enabled for button in menu.buttons)
     assert desktop.theme.primary == Theme.from_profile(None).primary
     assert not (tmp_path / "missing.json").exists()
     assert not database_path.exists()

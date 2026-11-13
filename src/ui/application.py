@@ -11,10 +11,7 @@ from src.ui.football_run_screen import FootballRunScreen
 from src.ui.layout import LOGICAL_SIZE
 from src.ui.main_menu import FootballMainMenuScreen
 from src.ui.navigation import ScreenManager
-from src.ui.screens import (
-    SCREEN_COPY,
-    PlaceholderScreen,
-)
+from src.ui.screens import SettingsScreen
 from src.ui.theme import Theme
 
 EventSource = Callable[[], Iterable[pygame.event.Event]]
@@ -60,17 +57,10 @@ class DesktopApplication:
             self.start_new_run,
         )
         self.router.register("main_menu", self.menu_screen)
-        for screen_id, definition in SCREEN_COPY.items():
-            self.router.register(
-                screen_id,
-                PlaceholderScreen(
-                    self.theme,
-                    definition,
-                    team_name,
-                    navigate,
-                    self.quit,
-                ),
-            )
+        self.router.register(
+            "settings",
+            SettingsScreen(self.theme, team_name, navigate, self.quit),
+        )
         self.run_screen = FootballRunScreen(
             self.theme,
             team_name,
