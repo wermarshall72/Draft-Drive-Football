@@ -7,6 +7,7 @@
 * The roster has exactly eight player positions: QB, RB, WR, O-line, D-line, linebackers, cornerbacks, and safeties. Coach and special teams are separate from those player slots.
 * Three losses end a run immediately. Surviving game 10 advances to the playoffs.
 * The desktop app is the main experience; Steam and a possible Apple app are long-term goals.
+* `src/engine/football_controller.py` exposes `FootballGameController` and immutable state views for the interactive flow; keep UI and framework dependencies out of this module.
 
 The existing auto-battler engine, controller, shop, and snapshot code are legacy reference implementations, not gameplay compatibility requirements. Reuse them only where they fit the current direction. Do not infer redesigned mechanics from their old behavior.
 
