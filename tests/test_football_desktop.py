@@ -255,7 +255,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
                 "MEDIUM PASS",
                 "DEEP PASS",
             }
-            assert set(labels) - {"END RUN"} == allowed
+            assert set(labels) - {"PAUSE"} == allowed
             labels["DEEP PASS"].action()
         elif state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
             seen_defense = True
@@ -268,12 +268,12 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
                 "MEDIUM PASS SCHEME",
                 "DEEP PASS SCHEME",
             }
-            assert set(labels) - {"END RUN"} == allowed
+            assert set(labels) - {"PAUSE"} == allowed
             labels["RB RUN SCHEME"].action()
         elif state.human_decision is FootballHumanDecision.FOURTH_DOWN:
             seen_fourth_down = True
             expected = FootballFourthDownAction.PUNT
-            assert set(labels) - {"END RUN"} == {
+            assert set(labels) - {"PAUSE"} == {
                 "GO FOR IT",
                 "PUNT",
                 "FIELD GOAL",
@@ -310,6 +310,41 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
         button.label in {"NEXT REGULAR-SEASON GAME", "RETURN TO MAIN MENU"}
         for button in screen.buttons
     )
+
+
+def test_match_screen_uses_pause_and_numbered_play_calls(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    screen = desktop.run_screen
+
+    desktop.router.draw(_surface())
+    labels = {button.label: button for button in screen.buttons}
+    assert set(labels) == {
+        "RB RUN",
+        "SCREEN PASS",
+        "PLAY-ACTION PASS",
+        "SHORT PASS",
+        "MEDIUM PASS",
+        "DEEP PASS",
+        "PAUSE",
+    }
+
+    desktop.router.handle_event(
+        pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_2})
+    )
+    match = controller.state.match
+    assert match is not None
+    assert match.match_events[-1].action is OffensivePlayAction.SCREEN_PASS
+
+    desktop.router.draw(_surface())
+    next(button for button in screen.buttons if button.label == "PAUSE").action()
+    desktop.router.draw(_surface())
+    assert {button.label for button in screen.buttons} == {
+        "DISCARD RUN",
+        "KEEP PLAYING",
+    }
 
 
 @pytest.mark.parametrize(

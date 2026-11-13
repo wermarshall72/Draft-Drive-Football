@@ -5,6 +5,7 @@ import pygame
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballMatchEvent,
+    FootballMatchState,
     FootballFourthDownAction,
     FootballPosition,
     FootballTeamSide,
@@ -55,6 +56,19 @@ _POSITION_LABELS = {
     FootballPosition.SAFETIES: "SAFETIES",
 }
 
+_MATCH_CANVAS = pygame.Color("#101712")
+_MATCH_PANEL = pygame.Color("#1a241e")
+_MATCH_PANEL_EDGE = pygame.Color("#36443a")
+_MATCH_TURF = pygame.Color("#244a35")
+_MATCH_TURF_ALT = pygame.Color("#28513a")
+_MATCH_TURF_LINE = pygame.Color("#8da891")
+_MATCH_CHALK = pygame.Color("#f1eddf")
+_MATCH_MUTED = pygame.Color("#a8b2a1")
+_MATCH_BRASS = pygame.Color("#dfbd70")
+_MATCH_OPPONENT = pygame.Color("#d0785c")
+_MATCH_INK = pygame.Color("#15241a")
+_MATCH_FOCUS = pygame.Color("#f4d184")
+
 
 class FootballRunScreen(Screen):
     """Render the current immutable controller state and submit human choices."""
@@ -72,21 +86,48 @@ class FootballRunScreen(Screen):
         self.state: FootballGameControllerState | None = None
         self.last_error: str | None = None
         self.confirm_exit = False
+        self._match_visual_state: FootballMatchState | None = None
+        self._match_animation_started = 0
+        self._match_animation_origin = 0.0
+        self._match_animation_target = 0.0
+        self._match_animation_gain_origin = 0.0
+        self._match_animation_gain_target = 0.0
+        self._match_animation_active = False
 
     def begin(self, controller: FootballGameController) -> None:
         self.controller = controller
         self.state = controller.state
         self.last_error = None
         self.confirm_exit = False
+        self._match_visual_state = None
+        self._match_animation_active = False
 
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             self.confirm_exit = not self.confirm_exit
             return
+        if (
+            event.type == pygame.KEYDOWN
+            and not self.confirm_exit
+            and self._current_state().phase is FootballRunPhase.MATCH
+            and pygame.K_1 <= event.key <= pygame.K_6
+        ):
+            choice_index = event.key - pygame.K_1
+            if choice_index < len(self.buttons) - 1:
+                self.buttons[choice_index].action()
+                return
         super().handle_event(event)
 
     def draw(self, surface: pygame.Surface) -> None:
         state = self._current_state()
+        if state.phase is FootballRunPhase.MATCH:
+            self._draw_match_screen(surface, state)
+            if self.last_error is not None:
+                self._draw_match_error(surface, self.last_error)
+            if self.confirm_exit:
+                self._draw_exit_confirmation(surface)
+            return
+
         titles = {
             FootballRunPhase.COACH_DRAFT: ("Choose your coach", "RUN SETUP / IDENTITY"),
             FootballRunPhase.PLAYER_DRAFT: (
@@ -97,7 +138,6 @@ class FootballRunScreen(Screen):
                 "Training room",
                 "PRE-MATCH / SIX TRAINING POINTS",
             ),
-            FootballRunPhase.MATCH: ("Game day", "LOCAL AI / INTERACTIVE MATCH"),
             FootballRunPhase.READY_FOR_NEXT_GAME: (
                 "Final whistle",
                 "REGULAR SEASON / NEXT GAME READY",
@@ -119,8 +159,6 @@ class FootballRunScreen(Screen):
             self._draw_player_draft(surface, content, state)
         elif state.phase is FootballRunPhase.PRE_MATCH_SHOP:
             self._draw_shop(surface, content, state.shop)
-        elif state.phase is FootballRunPhase.MATCH:
-            self._draw_match(surface, content, state)
         else:
             self._draw_result(surface, content, state)
 
@@ -152,6 +190,652 @@ class FootballRunScreen(Screen):
             )
         if self.confirm_exit:
             self._draw_exit_confirmation(surface)
+
+    def _draw_match_screen(
+        self,
+        surface: pygame.Surface,
+        state: FootballGameControllerState,
+    ) -> None:
+        match = state.match
+        if match is None:
+            raise RuntimeError("The controller did not provide an active match state.")
+
+        surface.fill(_MATCH_CANVAS)
+        width, height = surface.get_size()
+        margin = max(24, min(round(width * 0.035), 48))
+        content_width = width - margin * 2
+        team_accent = self.theme.primary_accent
+        opponent_accent = _MATCH_OPPONENT
+
+        scoreboard = pygame.Rect(margin, 24, content_width, 92)
+        self._draw_match_scoreboard(surface, scoreboard, state, team_accent, opponent_accent)
+
+        field = pygame.Rect(margin, scoreboard.bottom + 14, content_width, 286)
+        self._draw_match_field(surface, field, state, team_accent, opponent_accent)
+
+        history = pygame.Rect(margin, field.bottom + 12, content_width, 50)
+        self._draw_match_history(surface, history, state)
+
+        decision_rect = pygame.Rect(
+            margin,
+            history.bottom + 15,
+            content_width,
+            max(1, height - history.bottom - 42),
+        )
+        self._draw_match_decision(surface, decision_rect, state)
+
+        pause_rect = pygame.Rect(scoreboard.right - 102, scoreboard.top + 13, 82, 32)
+        self.buttons.append(
+            Button("PAUSE", self._request_exit, pause_rect, variant="quiet")
+        )
+        self._set_buttons(self.buttons)
+        for index, button in enumerate(self.buttons[:-1]):
+            self._draw_match_call_button(
+                surface,
+                button,
+                index + 1,
+                focused=button.focused,
+                hovered=self.hover_index == index,
+                pressed=self.pressed_index == index,
+            )
+        self._draw_match_pause_button(
+            surface,
+            self.buttons[-1],
+            focused=self.buttons[-1].focused,
+            hovered=self.hover_index == len(self.buttons) - 1,
+            pressed=self.pressed_index == len(self.buttons) - 1,
+        )
+
+    def _draw_match_scoreboard(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        state: FootballGameControllerState,
+        team_accent: pygame.Color,
+        opponent_accent: pygame.Color,
+    ) -> None:
+        match = state.match
+        if match is None:
+            raise RuntimeError("The controller did not provide an active match state.")
+
+        pygame.draw.rect(surface, _MATCH_PANEL, rect)
+        pygame.draw.line(
+            surface,
+            _MATCH_PANEL_EDGE,
+            rect.topleft,
+            (rect.right, rect.top),
+            1,
+        )
+        pygame.draw.rect(
+            surface,
+            team_accent,
+            pygame.Rect(rect.left, rect.top, rect.width // 2, 4),
+        )
+        pygame.draw.rect(
+            surface,
+            opponent_accent,
+            pygame.Rect(rect.centerx, rect.top, rect.width - rect.width // 2, 4),
+        )
+
+        score_font = _ui_font(48, bold=True)
+        team_font = _ui_font(16, bold=True)
+        left_team = match.team_a.team_name.upper()
+        right_team = match.team_b.team_name.upper()
+        draw_text(
+            surface,
+            _fit_text(left_team, team_font, rect.width // 3),
+            (rect.left + 24, rect.top + 13),
+            team_font,
+            _MATCH_CHALK,
+        )
+        draw_text(
+            surface,
+            str(match.team_a_score),
+            (rect.left + 24, rect.top + 35),
+            score_font,
+            _MATCH_CHALK,
+        )
+        right_score = score_font.render(str(match.team_b_score), True, _MATCH_CHALK)
+        surface.blit(
+            right_score,
+            right_score.get_rect(
+                midright=(rect.right - 24, rect.top + 65),
+            ),
+        )
+        right_name = team_font.render(
+            _fit_text(right_team, team_font, rect.width // 3 - 120),
+            True,
+            _MATCH_CHALK,
+        )
+        surface.blit(
+            right_name,
+            right_name.get_rect(topright=(rect.right - 120, rect.top + 13)),
+        )
+
+        clock = f"{match.game_clock_seconds // 60:02d}:{match.game_clock_seconds % 60:02d}"
+        clock_font = _ui_font(28, bold=True)
+        clock_surface = clock_font.render(clock, True, _MATCH_CHALK)
+        surface.blit(
+            clock_surface,
+            clock_surface.get_rect(midtop=(rect.centerx, rect.top + 25)),
+        )
+        meta = f"Q{match.period}    GAME {state.game_number:02d}    {state.wins}-{state.losses}"
+        meta_surface = self._small_font.render(meta, True, _MATCH_MUTED)
+        surface.blit(
+            meta_surface,
+            meta_surface.get_rect(midtop=(rect.centerx, rect.top + 66)),
+        )
+        pygame.draw.line(
+            surface,
+            team_accent if match.possession is FootballTeamSide.TEAM_A else _MATCH_PANEL_EDGE,
+            (rect.left + 24, rect.bottom - 2),
+            (rect.centerx - 16, rect.bottom - 2),
+            3,
+        )
+        pygame.draw.line(
+            surface,
+            opponent_accent if match.possession is FootballTeamSide.TEAM_B else _MATCH_PANEL_EDGE,
+            (rect.centerx + 16, rect.bottom - 2),
+            (rect.right - 24, rect.bottom - 2),
+            3,
+        )
+
+        possession_color = (
+            team_accent
+            if match.possession is FootballTeamSide.TEAM_A
+            else opponent_accent
+        )
+        possession_center = (
+            rect.left + 180
+            if match.possession is FootballTeamSide.TEAM_A
+            else rect.right - 180
+        )
+        possession_y = rect.bottom - 14
+        pygame.draw.polygon(
+            surface,
+            possession_color,
+            (
+                (possession_center - 5, possession_y - 4),
+                (possession_center + 5, possession_y - 4),
+                (possession_center, possession_y + 3),
+            ),
+        )
+
+    def _draw_match_field(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        state: FootballGameControllerState,
+        team_accent: pygame.Color,
+        opponent_accent: pygame.Color,
+    ) -> None:
+        match = state.match
+        if match is None:
+            raise RuntimeError("The controller did not provide an active match state.")
+
+        pygame.draw.rect(surface, _MATCH_PANEL, rect)
+        field = rect.inflate(-10, -10)
+        pygame.draw.rect(surface, _MATCH_TURF, field)
+        end_zone_width = max(42, round(field.width * 0.075))
+        pygame.draw.rect(
+            surface,
+            team_accent,
+            pygame.Rect(field.left, field.top, end_zone_width, field.height),
+        )
+        pygame.draw.rect(
+            surface,
+            opponent_accent,
+            pygame.Rect(field.right - end_zone_width, field.top, end_zone_width, field.height),
+        )
+
+        left_end = pygame.Rect(field.left, field.top, end_zone_width, field.height)
+        right_end = pygame.Rect(
+            field.right - end_zone_width,
+            field.top,
+            end_zone_width,
+            field.height,
+        )
+        for end_zone, name, color in (
+            (left_end, match.team_a.team_name.upper(), _MATCH_INK),
+            (right_end, match.team_b.team_name.upper(), _MATCH_INK),
+        ):
+            end_text = _fit_text(name, _ui_font(11, bold=True), end_zone.height - 18)
+            label = _ui_font(11, bold=True).render(end_text, True, color)
+            rotated = pygame.transform.rotate(label, 90)
+            surface.blit(rotated, rotated.get_rect(center=end_zone.center))
+
+        playing_left = field.left + end_zone_width
+        playing_right = field.right - end_zone_width
+        playing_width = playing_right - playing_left
+        for stripe_index in range(10):
+            stripe = pygame.Rect(
+                playing_left + round(playing_width * stripe_index / 10),
+                field.top,
+                max(1, round(playing_width / 20)),
+                field.height,
+            )
+            if stripe_index % 2:
+                pygame.draw.rect(surface, _MATCH_TURF_ALT, stripe)
+
+        line_color = (*_MATCH_TURF_LINE[:3], 155)
+        for yard in range(0, 101, 5):
+            x = playing_left + round(playing_width * yard / 100)
+            is_major = yard % 10 == 0
+            pygame.draw.line(
+                surface,
+                _MATCH_TURF_LINE if is_major else line_color,
+                (x, field.top + 5),
+                (x, field.bottom - 5),
+                2 if is_major else 1,
+            )
+            if yard % 10 == 0 and yard not in (0, 100):
+                number = yard if yard <= 50 else 100 - yard
+                label = _ui_font(15, bold=True).render(str(number), True, _MATCH_CHALK)
+                surface.blit(
+                    label,
+                    label.get_rect(center=(x, field.centery - 2)),
+                )
+            for hash_fraction in (0.32, 0.68):
+                hash_y = field.top + round(field.height * hash_fraction)
+                pygame.draw.line(
+                    surface,
+                    line_color,
+                    (x, hash_y - 4),
+                    (x, hash_y + 4),
+                    1,
+                )
+
+        field_label = (
+            f"OWN {match.offense_field_position:.0f}"
+            if match.offense_field_position <= 50
+            else f"OPP {100 - match.offense_field_position:.0f}"
+        )
+        down_suffix = {1: "ST", 2: "ND", 3: "RD", 4: "TH"}[match.down]
+        situation = (
+            f"{match.down}{down_suffix} & {match.yards_to_go:g}"
+        )
+        draw_text(
+            surface,
+            situation,
+            (playing_left + 16, rect.top + 15),
+            _ui_font(22, bold=True),
+            _MATCH_CHALK,
+        )
+        draw_text(
+            surface,
+            f"BALL AT {field_label}",
+            (playing_left + 16, rect.top + 46),
+            self._small_font,
+            _MATCH_MUTED,
+        )
+        scheme = (
+            _SCHEME_LABELS[match.current_drive_defensive_scheme]
+            if match.current_drive_defensive_scheme is not None
+            else "NO DRIVE SCHEME"
+        )
+        possession_name = (
+            match.team_a.team_name
+            if match.possession is FootballTeamSide.TEAM_A
+            else match.team_b.team_name
+        )
+        status_text = f"{possession_name.upper()} BALL   /   {scheme}"
+        status_width = playing_width - 32
+        status = self._small_font.render(
+            _fit_text(status_text, self._small_font, status_width),
+            True,
+            _MATCH_MUTED,
+        )
+        surface.blit(
+            status,
+            status.get_rect(topright=(playing_right - 16, rect.top + 17)),
+        )
+
+        direction = 1 if match.possession is FootballTeamSide.TEAM_A else -1
+        position, line_to_gain = self._animated_field_positions(state)
+        ball_x = playing_left + round(playing_width * position / 100)
+        target_x = playing_left + round(playing_width * line_to_gain / 100)
+        if direction < 0:
+            ball_x = playing_right - round(playing_width * position / 100)
+            target_x = playing_right - round(playing_width * line_to_gain / 100)
+        ball_color = team_accent if match.possession is FootballTeamSide.TEAM_A else opponent_accent
+        pygame.draw.line(
+            surface,
+            _MATCH_BRASS,
+            (target_x, field.top + 8),
+            (target_x, field.bottom - 8),
+            3,
+        )
+        pygame.draw.line(
+            surface,
+            ball_color,
+            (ball_x, field.top + 8),
+            (ball_x, field.bottom - 8),
+            2,
+        )
+        ball_center = (ball_x, field.centery)
+        ball_rect = pygame.Rect(0, 0, 28, 17)
+        ball_rect.center = ball_center
+        pygame.draw.ellipse(surface, _MATCH_CHALK, ball_rect)
+        pygame.draw.line(
+            surface,
+            _MATCH_INK,
+            (ball_x - 2, ball_rect.top + 3),
+            (ball_x - 2, ball_rect.bottom - 3),
+            2,
+        )
+        for seam_offset in (-5, 1):
+            pygame.draw.line(
+                surface,
+                _MATCH_INK,
+                (ball_x + seam_offset, field.centery - 3),
+                (ball_x + seam_offset, field.centery + 3),
+                1,
+            )
+        arrow_direction = direction
+        arrow_y = field.bottom - 18
+        arrow_tip = ball_x + arrow_direction * 24
+        pygame.draw.line(
+            surface,
+            ball_color,
+            (ball_x, arrow_y),
+            (arrow_tip, arrow_y),
+            2,
+        )
+        pygame.draw.polygon(
+            surface,
+            ball_color,
+            (
+                (arrow_tip, arrow_y),
+                (arrow_tip - arrow_direction * 7, arrow_y - 5),
+                (arrow_tip - arrow_direction * 7, arrow_y + 5),
+            ),
+        )
+
+    def _animated_field_positions(
+        self, state: FootballGameControllerState
+    ) -> tuple[float, float]:
+        match = state.match
+        if match is None:
+            raise RuntimeError("The controller did not provide an active match state.")
+        previous = self._match_visual_state
+        event_count = len(match.match_events)
+        if previous is None:
+            self._match_visual_state = match
+            return (
+                match.offense_field_position,
+                min(100.0, match.offense_field_position + match.yards_to_go),
+            )
+
+        if len(previous.match_events) != event_count:
+            self._match_animation_origin = previous.offense_field_position
+            self._match_animation_target = match.offense_field_position
+            self._match_animation_gain_origin = min(
+                100.0,
+                previous.offense_field_position + previous.yards_to_go,
+            )
+            self._match_animation_gain_target = min(
+                100.0,
+                match.offense_field_position + match.yards_to_go,
+            )
+            self._match_animation_started = pygame.time.get_ticks()
+            self._match_animation_active = True
+        self._match_visual_state = match
+
+        if not self._match_animation_active:
+            return (
+                match.offense_field_position,
+                min(100.0, match.offense_field_position + match.yards_to_go),
+            )
+        elapsed = pygame.time.get_ticks() - self._match_animation_started
+        progress = min(1.0, max(0.0, elapsed / 360))
+        eased = progress * progress * (3 - 2 * progress)
+        if progress >= 1:
+            self._match_animation_active = False
+        return (
+            self._match_animation_origin
+            + (self._match_animation_target - self._match_animation_origin) * eased,
+            self._match_animation_gain_origin
+            + (self._match_animation_gain_target - self._match_animation_gain_origin)
+            * eased,
+        )
+
+    def _draw_match_history(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        state: FootballGameControllerState,
+    ) -> None:
+        match = state.match
+        if match is None:
+            raise RuntimeError("The controller did not provide an active match state.")
+        pygame.draw.rect(surface, _MATCH_PANEL, rect)
+        pygame.draw.rect(
+            surface,
+            _MATCH_BRASS,
+            pygame.Rect(rect.left, rect.top, 3, rect.height),
+        )
+        label = "SIDELINE NOTES"
+        draw_text(
+            surface,
+            label,
+            (rect.left + 14, rect.top + 7),
+            self._small_font,
+            _MATCH_BRASS,
+        )
+        if match.match_events:
+            latest = match.match_events[-1]
+            text = self._format_event(latest, match.team_a.team_name, match.team_b.team_name)
+            previous = (
+                self._format_event(
+                    match.match_events[-2],
+                    match.team_a.team_name,
+                    match.team_b.team_name,
+                )
+                if len(match.match_events) > 1
+                else ""
+            )
+        else:
+            text = "Opening drive  /  First possession"
+            previous = ""
+        text_left = rect.left + 142
+        available = rect.right - text_left - 18
+        draw_text(
+            surface,
+            _fit_text(text, self._small_font, available),
+            (text_left, rect.top + 7),
+            self._small_font,
+            _MATCH_CHALK,
+        )
+        if previous:
+            previous_surface = self._small_font.render(
+                _fit_text(previous, self._small_font, available),
+                True,
+                _MATCH_MUTED,
+            )
+            surface.blit(
+                previous_surface,
+                previous_surface.get_rect(
+                    bottomright=(rect.right - 18, rect.bottom - 6),
+                ),
+            )
+
+    def _draw_match_decision(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        state: FootballGameControllerState,
+    ) -> None:
+        decision = state.human_decision
+        if decision is FootballHumanDecision.OFFENSIVE_PLAY:
+            labels = tuple(_PLAY_LABELS.items())
+            heading = "OFFENSE   /   CALL THE PLAY"
+            actions = [
+                (
+                    label,
+                    lambda action=action: self._submit_match_action(
+                        lambda: self._require_controller().choose_offensive_play(action)
+                    ),
+                )
+                for action, label in labels
+            ]
+        elif decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+            labels = tuple(_SCHEME_LABELS.items())
+            heading = "DEFENSE   /   SET THE DRIVE"
+            actions = [
+                (
+                    label,
+                    lambda action=action: self._submit_match_action(
+                        lambda: self._require_controller().choose_defensive_scheme(action)
+                    ),
+                )
+                for action, label in labels
+            ]
+        elif decision is FootballHumanDecision.FOURTH_DOWN:
+            heading = "FOURTH DOWN   /   MAKE THE CALL"
+            actions = [
+                (
+                    action.value.replace("_", " ").upper(),
+                    lambda action=action: self._submit_match_action(
+                        lambda: self._require_controller().choose_fourth_down(action)
+                    ),
+                )
+                for action in FootballFourthDownAction
+            ]
+        else:
+            heading = "LOCAL AI IS RESOLVING ITS DRIVE"
+            actions = []
+
+        draw_text(
+            surface,
+            heading,
+            (rect.left + 2, rect.top),
+            self._small_font,
+            _MATCH_BRASS,
+        )
+        self._match_call_rect = pygame.Rect(
+            rect.left,
+            rect.top + 24,
+            rect.width,
+            max(1, rect.height - 25),
+        )
+        self.buttons = []
+        if not actions:
+            draw_text(
+                surface,
+                "The next snap is being set.",
+                (rect.left + 2, rect.top + 34),
+                self._small_font,
+                _MATCH_MUTED,
+            )
+            return
+
+        gap_x = 10
+        gap_y = 8
+        columns = min(3, len(actions))
+        rows = (len(actions) + columns - 1) // columns
+        button_width = (self._match_call_rect.width - gap_x * (columns - 1)) // columns
+        button_height = (self._match_call_rect.height - gap_y * (rows - 1)) // rows
+        for index, (label, callback) in enumerate(actions):
+            row, column = divmod(index, columns)
+            button_rect = pygame.Rect(
+                self._match_call_rect.left + column * (button_width + gap_x),
+                self._match_call_rect.top + row * (button_height + gap_y),
+                button_width,
+                button_height,
+            )
+            self.buttons.append(Button(label, callback, button_rect))
+
+    def _draw_match_call_button(
+        self,
+        surface: pygame.Surface,
+        button: Button,
+        shortcut: int,
+        *,
+        focused: bool,
+        hovered: bool,
+        pressed: bool,
+    ) -> None:
+        rect = button.rect.move(0, 2) if pressed else button.rect
+        fill = (
+            pygame.Color("#2b382e")
+            if focused
+            else pygame.Color("#202b23")
+            if hovered
+            else _MATCH_PANEL
+        )
+        edge = _MATCH_FOCUS if focused else _MATCH_PANEL_EDGE
+        points = (
+            (rect.left + 7, rect.top),
+            (rect.right, rect.top),
+            (rect.right, rect.bottom - 7),
+            (rect.right - 7, rect.bottom),
+            (rect.left, rect.bottom),
+            (rect.left, rect.top + 7),
+        )
+        pygame.draw.polygon(surface, fill, points)
+        pygame.draw.lines(surface, edge, True, points, 2 if focused else 1)
+        pygame.draw.rect(
+            surface,
+            _MATCH_BRASS if focused else _MATCH_PANEL_EDGE,
+            pygame.Rect(rect.left + 12, rect.top + 11, 28, rect.height - 22),
+        )
+        shortcut_text = self._small_font.render(f"{shortcut:02d}", True, _MATCH_INK)
+        surface.blit(
+            shortcut_text,
+            shortcut_text.get_rect(
+                center=(rect.left + 26, rect.centery),
+            ),
+        )
+        label = _fit_text(button.label, self._label_font, rect.width - 70)
+        label_surface = self._label_font.render(label, True, _MATCH_CHALK)
+        surface.blit(
+            label_surface,
+            label_surface.get_rect(
+                midleft=(rect.left + 52, rect.centery),
+            ),
+        )
+        if focused:
+            pygame.draw.line(
+                surface,
+                _MATCH_BRASS,
+                (rect.left + 52, rect.bottom - 7),
+                (min(rect.right - 12, rect.left + 52 + label_surface.get_width()), rect.bottom - 7),
+                2,
+            )
+
+    def _draw_match_pause_button(
+        self,
+        surface: pygame.Surface,
+        button: Button,
+        *,
+        focused: bool,
+        hovered: bool,
+        pressed: bool,
+    ) -> None:
+        rect = button.rect.move(0, 2) if pressed else button.rect
+        fill = _MATCH_PANEL if not hovered else pygame.Color("#2b382e")
+        pygame.draw.rect(surface, fill, rect)
+        pygame.draw.rect(
+            surface,
+            _MATCH_FOCUS if focused else _MATCH_PANEL_EDGE,
+            rect,
+            width=2 if focused else 1,
+        )
+        label = self._small_font.render("PAUSE  [ESC]", True, _MATCH_CHALK)
+        surface.blit(label, label.get_rect(center=rect.center))
+
+    def _submit_match_action(self, action: Callable[[], object]) -> None:
+        self._submit(action)
+
+    def _draw_match_error(self, surface: pygame.Surface, message: str) -> None:
+        rect = pygame.Rect(24, surface.get_height() - 24, surface.get_width() - 48, 18)
+        draw_text(
+            surface,
+            f"CALL FAILED: {message}",
+            rect.topleft,
+            self._small_font,
+            self.theme.danger,
+        )
 
     def _draw_coach_selection(
         self,
@@ -761,7 +1445,7 @@ class FootballRunScreen(Screen):
         )
         self._draw_match_decision(surface, actions_rect, state)
 
-    def _draw_match_decision(
+    def _draw_legacy_match_decision(
         self,
         surface: pygame.Surface,
         rect: pygame.Rect,
