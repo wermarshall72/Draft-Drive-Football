@@ -10,8 +10,14 @@ python -m src.desktop
 
 The desktop shell reads the same saved team profile and color palette as the
 terminal client. If no profile exists, the menu explains how to create one.
-The current coach, draft, roster, shop, and match pages are visual previews;
-opening the shell and browsing them does not initialize or write to the game
+Start an offline run by choosing a local AI difficulty, selecting a coach, and
+drafting one player at each of the eight positions. Spend the six Training
+Points in the one-time shop, then call offensive plays and defensive schemes
+during matches. Three losses end the run; surviving all ten regular-season
+games reaches a playoffs marker, without a playoff bracket.
+
+Desktop run state is in memory only. The desktop gameplay flow uses
+`FootballGameController` and does not initialize or write to the legacy game
 database.
 
 ## Run the terminal client
@@ -30,12 +36,11 @@ snapshot database. Choose **Settings** from the main menu to edit the profile.
 
 ## Application boundary
 
-The terminal client and desktop shell are separate clients of
-`ApplicationController` in `src/application.py`. It exposes profile and
-main-menu operations, explicit run actions, and immutable state/result views;
-the controller does not depend on a windowing or input framework. Game rules,
-shop behavior, match simulation, and local snapshot storage remain in the
-existing engine and database modules.
+The terminal client uses `ApplicationController` in `src/application.py` for
+its game flow. The desktop shell uses that boundary for saved profile and menu
+data, and uses the framework-independent `FootballGameController` for its
+interactive gameplay. It does not route desktop runs through the legacy game,
+shop, simulator, or database persistence.
 
 ## Tests
 

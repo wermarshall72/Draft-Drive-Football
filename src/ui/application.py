@@ -1,14 +1,18 @@
 from collections.abc import Callable, Iterable
+import secrets
 
 import pygame
 
 from src.application import ApplicationController
+from src.engine.football_ai import FootballAIDifficulty
+from src.engine.football_controller import FootballGameController
 from src.profile import ProfileError, TeamProfile
+from src.ui.football_run_screen import FootballRunScreen
 from src.ui.layout import LOGICAL_SIZE
+from src.ui.main_menu import FootballMainMenuScreen
 from src.ui.navigation import ScreenManager
 from src.ui.screens import (
     SCREEN_COPY,
-    MainMenuScreen,
     PlaceholderScreen,
 )
 from src.ui.theme import Theme
@@ -25,9 +29,12 @@ class DesktopApplication:
         controller: ApplicationController | None = None,
         *,
         window_size: tuple[int, int] = LOGICAL_SIZE,
+        seed_factory: Callable[[], int] | None = None,
     ) -> None:
         self.controller = controller or ApplicationController()
         self.window_size = window_size
+        self.seed_factory = seed_factory or (lambda: secrets.randbits(64))
+        self.football_controller: FootballGameController | None = None
         self.running = False
         self.profile: TeamProfile | None = None
         self.profile_error: str | None = None
@@ -44,16 +51,15 @@ class DesktopApplication:
         self._transition_started: int | None = None
         team_name = self.profile.team_name if self.profile is not None else "NEW TEAM"
         navigate = self.navigate
-        self.router.register(
-            "main_menu",
-            MainMenuScreen(
-                self.theme,
-                self.menu_state,
-                self.profile_error,
-                navigate,
-                self.quit,
-            ),
+        self.menu_screen = FootballMainMenuScreen(
+            self.theme,
+            self.menu_state,
+            self.profile_error,
+            navigate,
+            self.quit,
+            self.start_new_run,
         )
+        self.router.register("main_menu", self.menu_screen)
         for screen_id, definition in SCREEN_COPY.items():
             self.router.register(
                 screen_id,
@@ -65,6 +71,13 @@ class DesktopApplication:
                     self.quit,
                 ),
             )
+        self.run_screen = FootballRunScreen(
+            self.theme,
+            team_name,
+            navigate,
+            self.quit,
+        )
+        self.router.register("football_run", self.run_screen)
         self.router.show("main_menu")
 
     def quit(self) -> None:
@@ -76,6 +89,24 @@ class DesktopApplication:
         self.router.show(screen_id)
         if self.running and pygame.display.get_surface() is not None:
             self._transition_started = pygame.time.get_ticks()
+
+    def start_new_run(self, difficulty: FootballAIDifficulty) -> None:
+        if self.menu_state is None:
+            raise RuntimeError("A saved team profile is required to start a run.")
+        builder_seed, shop_seed, ai_seed, match_seed = (
+            self.seed_factory() for _ in range(4)
+        )
+        football_controller = FootballGameController(
+            self.menu_state.profile.team_name,
+            difficulty=difficulty,
+            builder_seed=builder_seed,
+            shop_seed=shop_seed,
+            ai_seed=ai_seed,
+            match_seed=match_seed,
+        )
+        self.football_controller = football_controller
+        self.run_screen.begin(football_controller)
+        self.navigate("football_run")
 
     def run(self, event_source: EventSource | None = None) -> None:
         pygame.init()

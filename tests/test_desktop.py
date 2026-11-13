@@ -62,7 +62,7 @@ def test_missing_profile_has_clear_fallback_and_start_is_disabled(
     assert not database_path.exists()
 
 
-def test_keyboard_routes_between_preview_screens_without_game_side_effects(
+def test_keyboard_starts_a_controller_run_without_game_side_effects(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "game.db"
@@ -71,7 +71,6 @@ def test_keyboard_routes_between_preview_screens_without_game_side_effects(
     desktop = DesktopApplication(controller)
     batches = iter(
         (
-            [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_DOWN)],
             [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN)],
             [pygame.event.Event(pygame.QUIT)],
         )
@@ -79,7 +78,9 @@ def test_keyboard_routes_between_preview_screens_without_game_side_effects(
 
     desktop.run(event_source=lambda: next(batches, []))
 
-    assert desktop.router.current_id == "roster"
+    assert desktop.router.current_id == "football_run"
+    assert desktop.football_controller is not None
+    assert desktop.football_controller.state.team_builder.selected_coach is None
     assert not database_path.exists()
     assert not pygame.get_init()
 

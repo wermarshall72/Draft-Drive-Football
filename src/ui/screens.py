@@ -36,51 +36,11 @@ class ScreenCopy:
 
 
 SCREEN_COPY = {
-    "coach_selection": ScreenCopy(
-        "Pick your sideline",
-        "RUN SETUP / PREVIEW",
-        "Every run starts with a coach pairing that gives your team its identity.",
-        "Coach cards, scheme effects, and confirmation will be built here.",
-        "opening_draft",
-        "Opening draft preview",
-    ),
-    "opening_draft": ScreenCopy(
-        "National Signing Day",
-        "OPENING DRAFT / PREVIEW",
-        "Build a foundation across the six player groups before the season begins.",
-        "Player offers, position order, and action points will be presented here.",
-        "roster",
-        "Roster preview",
-    ),
-    "roster": ScreenCopy(
-        "The depth chart",
-        "ROSTER / PREVIEW",
-        "A compact eight-slot board will keep your lineup readable at a glance.",
-        "Player cards, the locked coach, and special teams will live here.",
-        "coaching_shop",
-        "Coaching shop preview",
-    ),
-    "coaching_shop": ScreenCopy(
-        "The coaching shop",
-        "BETWEEN GAMES / PREVIEW",
-        "Spend action points on practice, recovery, and sideline adjustments.",
-        "Offers, costs, and day-by-day decisions will be presented here.",
-        "match",
-        "Match presentation preview",
-    ),
-    "match": ScreenCopy(
-        "Saturday lights",
-        "MATCH CENTER / PREVIEW",
-        "A fast, hands-off matchup will turn the roster into a stadium story.",
-        "Scoreboard, drive events, and the momentum tug-of-war will appear here.",
-        None,
-        None,
-    ),
     "settings": ScreenCopy(
         "Team settings",
-        "PROFILE / PREVIEW",
+        "TEAM PROFILE",
         "Your team identity and color palette are read from the saved profile.",
-        "Profile editing remains available from the terminal client in this step.",
+        "Profile editing remains available from the terminal client.",
         None,
         None,
     ),
