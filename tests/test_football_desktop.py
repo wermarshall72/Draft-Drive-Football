@@ -387,7 +387,7 @@ def test_coach_mouse_targets_work_in_resized_windows(tmp_path: Path, window_size
         assert screen._coach_name_font.size(coach.name.upper())[0] <= 275
         for position, modifier in coach.position_modifiers.items():
             label = football_run_screen_module._coach_position_label(position)
-            assert screen._coach_detail_font.size(
+            assert screen._coach_stat_font.size(
                 f"{label} {round(modifier * 100):+d}%"
             )[0] < 124
     scale = min(window_size[0] / 1280, window_size[1] / 720)

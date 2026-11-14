@@ -15,7 +15,7 @@ test = ["pytest>=8.0,<10"]
 include = ["src*"]
 
 [tool.setuptools.package-data]
-"src.ui" = ["assets/*.png"]
+"src.ui" = ["assets/*.png", "assets/fonts/*.ttf", "assets/fonts/*-OFL.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

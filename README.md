@@ -22,6 +22,10 @@ The recruiting-room table is original generated artwork; the anonymous sideline
 figures are original Pygame illustrations, not portraits of real coaches.
 Individualized coach portrait art remains a future production asset. If the
 table artwork is unavailable, the screen logs a warning and draws a fallback.
+Coach-screen typography uses Kalam by Indian Type Foundry and Atkinson
+Hyperlegible by the Braille Institute, bundled under the SIL Open Font License
+1.1. Their full licenses are in `src/ui/assets/fonts/`; missing fonts fall back
+to the desktop's existing UI font and produce a warning.
 
 Desktop run state is in memory only. The desktop gameplay flow uses
 `FootballGameController` and does not initialize or write to the legacy game

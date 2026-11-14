@@ -33,6 +33,7 @@ from src.engine.football_team_builder import (
     FootballPlayerCandidate,
 )
 from src.ui.coach_art import draw_recruiting_table, draw_sideline_coach
+from src.ui.coach_fonts import coach_font
 from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen, _ui_font
 from src.ui.theme import Theme
@@ -118,8 +119,15 @@ class FootballRunScreen(Screen):
         self._match_animation_gain_target = 0.0
         self._match_animation_active = False
         self._coach_keyboard_inspection = False
-        self._coach_name_font = _ui_font(23, bold=True)
-        self._coach_detail_font = _ui_font(14)
+        self._coach_title_font = coach_font(40, handwritten=True)
+        self._coach_name_font = coach_font(23, bold=True)
+        self._coach_detail_font = coach_font(15)
+        self._coach_stat_font = coach_font(15, bold=True)
+        self._coach_small_font = coach_font(14, bold=True)
+        self._coach_main_font = coach_font(17, bold=True)
+        self._coach_body_font = coach_font(16)
+        self._coach_button_font = coach_font(16, bold=True)
+        self._coach_section_font = coach_font(23, bold=True)
         self._coach_focus_changed_at = 0
 
     def begin(self, controller: FootballGameController) -> None:
@@ -892,14 +900,14 @@ class FootballRunScreen(Screen):
 
     def _draw_coach_backdrop(self, surface: pygame.Surface) -> None:
         draw_recruiting_table(surface)
-        draw_text(surface, "RECRUITING  /  STAFF", (40, 25), self._small_font, _COACH_GOLD)
-        draw_text(surface, "Build your staff", (38, 46), self._display_font, _COACH_CHALK)
+        draw_text(surface, "RECRUITING  /  STAFF", (40, 12), self._coach_small_font, _COACH_GOLD)
+        draw_text(surface, "Build your staff", (38, 29), self._coach_title_font, _COACH_CHALK)
         draw_text(
             surface, "Two coaches. One sideline.", (42, 101),
-            self._body_font, _COACH_CHALK,
+            self._coach_body_font, _COACH_CHALK,
         )
-        team = _fit_text(self.team_name.upper(), self._small_font, 250)
-        draw_text(surface, team, (820, 46), self._small_font, _COACH_CHALK)
+        team = _fit_text(self.team_name.upper(), self._coach_small_font, 250)
+        draw_text(surface, team, (820, 46), self._coach_small_font, _COACH_CHALK)
 
     def _draw_coach_selection(
         self,
@@ -942,10 +950,10 @@ class FootballRunScreen(Screen):
             pygame.draw.circle(surface, "#5d5948", (rect.left + 45, rect.top), 3)
             draw_text(
                 surface, f"STAFF 0{index + 1}", (rect.left + 18, rect.top + 12),
-                self._main_font, _COACH_INK,
+                self._coach_main_font, _COACH_INK,
             )
             draw_text(surface, "POSITION POWER", (rect.right - 132, rect.top + 15),
-                      self._small_font, _COACH_MUTED)
+                      self._coach_small_font, _COACH_MUTED)
             button_rect = pygame.Rect(
                 rect.left + 17, rect.bottom - 48, rect.width - 34, 36,
             )
@@ -976,7 +984,7 @@ class FootballRunScreen(Screen):
                 text_x = row.left + 81
                 draw_text(
                     surface, coach.side.value.upper(), (text_x, row.top + 8),
-                    self._small_font, _COACH_GREEN if side_index == 0 else _COACH_RUST,
+                    self._coach_small_font, _COACH_GREEN if side_index == 0 else _COACH_RUST,
                 )
                 draw_text(
                     surface, coach.name.upper(), (text_x, row.top + 25),
@@ -990,7 +998,7 @@ class FootballRunScreen(Screen):
                     draw_text(
                         surface,
                         f"{_coach_position_label(position)} {round(modifier * 100):+d}%",
-                        (x, y), self._coach_detail_font,
+                        (x, y), self._coach_stat_font,
                         _COACH_RUST if modifier < 0 else (
                             _COACH_MUTED if modifier == 0 else _COACH_GREEN
                         ),
@@ -1022,15 +1030,15 @@ class FootballRunScreen(Screen):
         if coach is None:
             draw_text(
                 surface, "SCOUT THE STAFF", (rect.left + 24, rect.top + 21),
-                self._title_font, _COACH_CHALK,
+                self._coach_section_font, _COACH_CHALK,
             )
             draw_text(
                 surface, "Hover a coach or tab to a name for details.",
-                (rect.left + 24, rect.top + 60), self._body_font, _COACH_CHALK,
+                (rect.left + 24, rect.top + 60), self._coach_body_font, _COACH_CHALK,
             )
             draw_text(
                 surface, "Choose a staff to lock both coaches for the run.",
-                (rect.left + 24, rect.top + 84), self._body_font, _COACH_CHALK,
+                (rect.left + 24, rect.top + 84), self._coach_body_font, _COACH_CHALK,
             )
             field_x = rect.right - 270
             for offset in range(4):
@@ -1057,17 +1065,17 @@ class FootballRunScreen(Screen):
 
         draw_text(
             surface, f"{coach.side.value.upper()}  /  {coach.name.upper()}",
-            (rect.left + 24, rect.top + 12), self._main_font, _COACH_CHALK,
+            (rect.left + 24, rect.top + 12), self._coach_main_font, _COACH_CHALK,
         )
         left = rect.left + 24
         right = rect.left + round(rect.width * 0.55)
         y = rect.top + 42
-        draw_text(surface, "PERK", (left, y), self._small_font, _COACH_GOLD)
+        draw_text(surface, "PERK", (left, y), self._coach_small_font, _COACH_GOLD)
         draw_text(
             surface,
             "PLAY MODIFIER SUM" if coach.side is FootballCoachSide.OFFENSE
             else "SCHEME MODIFIER SUM",
-            (right, y), self._small_font, _COACH_GOLD,
+            (right, y), self._coach_small_font, _COACH_GOLD,
         )
         font = self._coach_detail_font
         for offset, (action, percentage) in enumerate(coach.action_percentages.items()):
@@ -1078,7 +1086,7 @@ class FootballRunScreen(Screen):
             )
         draw_text(
             surface, "100% + modifiers; not team power", (right, y + 73),
-            self._small_font, "#b9c3aa",
+            self._coach_small_font, "#b9c3aa",
         )
         draw_wrapped_text(
             surface, _coach_perk_summary(coach),
@@ -1092,7 +1100,11 @@ class FootballRunScreen(Screen):
                 continue
             if button.variant != "coach-select":
                 button.draw(
-                    surface, self._main_font, self.theme,
+                    surface,
+                    self._coach_button_font
+                    if self._current_state().phase is FootballRunPhase.COACH_DRAFT
+                    and not self.confirm_exit else self._main_font,
+                    self.theme,
                     hovered=self.hover_index == index, pressed=self.pressed_index == index,
                 )
                 continue
@@ -1107,7 +1119,7 @@ class FootballRunScreen(Screen):
             pygame.draw.rect(surface, border, rect, 1)
             if button.focused:
                 pygame.draw.rect(surface, _COACH_GOLD, rect.inflate(4, 4), 2)
-            label = self._label_font.render(
+            label = self._coach_button_font.render(
                 button.label, True,
                 _COACH_CHALK if active else (_COACH_GREEN if button.enabled else _COACH_MUTED),
             )
