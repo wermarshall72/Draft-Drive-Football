@@ -141,7 +141,10 @@ def test_catalog_is_complete_side_scoped_and_has_all_six_actions() -> None:
 def test_specialists_distribute_position_modifiers_and_balanced_profiles_are_uniform() -> None:
     for coach in (*OFFENSIVE_COACHES[:4], *DEFENSIVE_COACHES[:4]):
         assert sorted(coach.position_modifiers.values()) == [-0.1, 0.0, 0.1, 0.2]
-        assert coach.perk is not None
+        if coach.coach_id == "option_spread":
+            assert coach.perk is None
+        else:
+            assert coach.perk is not None
     for coach in (OFFENSIVE_COACHES[-1], DEFENSIVE_COACHES[-1]):
         assert set(coach.position_modifiers.values()) == {0.05}
         assert coach.perk is None
@@ -389,7 +392,7 @@ def test_air_raid_first_completed_pass_skips_incomplete_and_applies_once() -> No
     assert not next_completed.match_events[-1].play_result.perk_effects
 
 
-def test_pro_style_first_down_pass_and_option_fourth_down_perks_apply() -> None:
+def test_pro_style_first_down_pass_applies_and_option_fourth_down_perk_is_disabled() -> None:
     pro_style = _simulator(
         offense_assignment=_assignment("pro_style"),
         scheme=DefensiveSchemeAction.RB_RUN,
@@ -402,17 +405,23 @@ def test_pro_style_first_down_pass_and_option_fourth_down_perks_apply() -> None:
     assert first_pass.match_events[-1].play_result.perk_effects
     assert second_pass.match_events[-1].play_result.perk_effects
 
+    assert COACHES_BY_ID["option_spread"].perk is None
     option = _simulator(
         offense_assignment=_assignment("option_spread"),
         down=4,
         yards_to_go=2.0,
-        rolls=(0.75,),
     )
     option_state = option.resolve_fourth_down(
         FootballFourthDownAction.GO_FOR_IT
     )
-    assert option_state.match_events[-1].perk_effects
-    assert option_state.possession is FootballTeamSide.TEAM_A
+    assert option_state.awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY
+    assert option_state.match_events[-1].action is FootballFourthDownAction.GO_FOR_IT
+    assert not option_state.match_events[-1].perk_effects
+    played = option.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert played.match_events[-1].play_result is not None
+    assert "fourth-down" not in " ".join(
+        played.match_events[-1].play_result.perk_effects
+    ).lower()
 
 
 def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers() -> None:
@@ -519,7 +528,10 @@ def test_balanced_pair_combines_all_eight_position_bonuses() -> None:
 
 
 def test_coach_perk_definitions_include_trigger_effect_duration_and_reset() -> None:
-    for coach in (*OFFENSIVE_COACHES[:-1], *DEFENSIVE_COACHES[:-1]):
+    for coach in (
+        *(coach for coach in OFFENSIVE_COACHES[:-1] if coach.coach_id != "option_spread"),
+        *DEFENSIVE_COACHES[:-1],
+    ):
         assert coach.perk is not None
         assert coach.perk.trigger.strip()
         assert coach.perk.effect.strip()

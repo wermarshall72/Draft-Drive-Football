@@ -12,8 +12,10 @@ from src.application import ApplicationController
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballFourthDownAction,
+    FootballMatchEvent,
     FootballMatchResult,
     FootballMatchStatus,
+    FootballPlayResult,
     FootballPosition,
     FootballTeamSide,
     OffensivePlayAction,
@@ -1502,26 +1504,63 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     _draft_to_shop(desktop)
     controller = desktop.football_controller
     assert controller is not None and controller.state.shop is not None
-    shop = controller.state.shop
     _activate(desktop, "BUY")
+    shop = controller.state.shop
+    assert shop is not None and shop.purchased_upgrades
 
     displayed: list[str] = []
     original_draw_text = football_run_screen_module.draw_text
+    wrapped: list[str] = []
+    original_draw_wrapped = football_run_screen_module.draw_wrapped_text
 
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
         original_draw_text(surface, text, position, font, color)
 
+    def capture_wrapped(surface, text, rect, font, color, *, line_gap=6):
+        wrapped.append(text)
+        original_draw_wrapped(
+            surface, text, rect, font, color, line_gap=line_gap
+        )
+
     monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
+    monkeypatch.setattr(
+        football_run_screen_module, "draw_wrapped_text", capture_wrapped
+    )
     _activate(desktop, "DEPTH CHART")
     desktop.router.draw(_surface())
     assert "CURRENT RUN SNAPSHOT" in " ".join(displayed)
     assert "OFFENSE" in " ".join(displayed)
     assert "DEFENSE" in " ".join(displayed)
-    assert "PURCHASED RUN UPGRADES" in " ".join(displayed)
+    assert "PURCHASED UPGRADE HISTORY" in " ".join(displayed)
+    assert any("PLANNED / INACTIVE" in text for text in wrapped)
+    assert any(shop.purchased_upgrades[0].name in text for text in wrapped)
+    assert any(shop.purchased_upgrades[0].description in text for text in wrapped)
+    for coach in football_run_screen_module.coaches_for_assignment(
+        shop.roster.coach_assignment
+    ):
+        if coach is not None:
+            for position, modifier in coach.position_modifiers.items():
+                assert (
+                    f"{football_run_screen_module._POSITION_LABELS[position]} "
+                    f"{modifier:+.0%}"
+                ) in " ".join(wrapped)
+            if coach.perk is not None:
+                for detail in (
+                    coach.perk.trigger,
+                    coach.perk.effect,
+                    coach.perk.duration,
+                    coach.perk.reset,
+                ):
+                    assert detail in " ".join(wrapped)
     for player in shop.roster.players.values():
         assert player.name in " ".join(displayed)
     assert "BACK TO SHOP" in {button.label for button in desktop.run_screen.buttons}
+    assert desktop.run_screen._depth_chart_max_scroll > 0
+    desktop.run_screen.handle_event(
+        pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1})
+    )
+    assert desktop.run_screen._depth_chart_scroll > 0
 
     displayed.clear()
     _activate(desktop, "BACK TO SHOP")
@@ -1535,6 +1574,37 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
         assert OFFENSIVE_PLAY_CATALOG[card.card_id].name in joined
     for card in current_shop.defensive_deck:
         assert DEFENSIVE_SCHEME_CATALOG[card.card_id].name in joined
+
+
+def test_match_history_labels_turnovers_on_downs(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    result = FootballPlayResult(
+        offensive_play=OffensivePlayAction.RB_RUN,
+        yards_gained=3.0,
+        clock_seconds_used=18,
+        possession_changed=True,
+        turnover_on_downs=True,
+    )
+    event = FootballMatchEvent(
+        sequence=1,
+        action=OffensivePlayAction.RB_RUN,
+        team_a_score=0,
+        team_b_score=0,
+        possession=FootballTeamSide.TEAM_B,
+        offense_field_position=78.0,
+        down=1,
+        yards_to_go=10.0,
+        game_clock_seconds=882,
+        period=1,
+        status=FootballMatchStatus.IN_PROGRESS,
+        clock_seconds_used=18,
+        play_result=result,
+    )
+
+    text = desktop.run_screen._format_event(event, "Home", "Away")
+
+    assert "Home" in text
+    assert "turnover on downs" in text
 
 
 def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(

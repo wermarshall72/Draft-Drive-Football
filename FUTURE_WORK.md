@@ -23,6 +23,8 @@ or the design changes.
   status out of the default card comparison.
 - [ ] Implement approved player perk effects later, when their supporting game
   systems and trigger/reset rules are defined.
+- [ ] Define a replacement for the Option / Spread fourth-down perk; it is
+  disabled until a card-resolved effect is designed and approved.
 - [ ] Revisit AI difficulty and shop upgrade balance after the player base
   ratings change. Existing offsets and upgrade values are to remain unchanged
   for the initial player redesign.
@@ -37,6 +39,9 @@ or the design changes.
   owned copy. Each deck must retain at least four cards.
 - [x] Implement match-local hands, draw/discard cycling, empty-hand fallbacks,
   period-boundary resets, and hand-limited AI choices for both sides.
+- [x] Resolve "Go For It" through a normal offensive card play using the active
+  defensive scheme; failed fourth-down plays turn the ball over at the play
+  spot, while punts and field goals remain separate special-teams actions.
 - [x] Add shop Depth Chart and Playbook review screens and a match UI for the
   human hand, card selection, and drag/drop calls.
 - [ ] Expand the initial play/scheme catalog and create the coach-upgrade

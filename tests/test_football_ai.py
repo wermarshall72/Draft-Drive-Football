@@ -329,6 +329,36 @@ def test_easy_fourth_down_choices_exclude_out_of_range_field_goals() -> None:
     } <= {FootballFourthDownAction.GO_FOR_IT, FootballFourthDownAction.PUNT}
 
 
+def test_ai_go_for_it_then_selects_a_legal_card_from_its_own_hand() -> None:
+    ai = _ai(FootballAIDifficulty.STANDARD, side=FootballTeamSide.TEAM_B)
+    ai_card = FootballCardCopy("ai:fourth:jet", OffensivePlayAction.JET_SWEEP.value)
+    hidden_card = FootballCardCopy(
+        "human:hidden:deep", OffensivePlayAction.DEEP_PASS.value
+    )
+    state = _state(
+        possession=FootballTeamSide.TEAM_B,
+        down=4,
+        yards_to_go=1.0,
+        offense_field_position=75.0,
+        awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        team_a_offense_deck=FootballDeckState(
+            (hidden_card,), hand=(hidden_card,)
+        ),
+        team_b_offense_deck=FootballDeckState((ai_card,), hand=(ai_card,)),
+    )
+    simulator = FootballMatchSimulator(state)
+    assert ai.choose_action(state) is FootballFourthDownAction.GO_FOR_IT
+
+    pending = simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+    assert pending.awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY
+    selected = ai.choose_action(pending)
+    assert selected is OffensivePlayAction.JET_SWEEP
+    resolved = simulator.resolve_offensive_play(selected)
+    assert resolved.match_events[-1].action is OffensivePlayAction.JET_SWEEP
+    assert resolved.match_events[-1].possession is FootballTeamSide.TEAM_B
+
+
 def test_ai_rejects_an_expired_period_clock() -> None:
     state = _state(
         awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
@@ -360,6 +390,105 @@ def test_hard_offense_uses_the_simulator_matchup_strengths() -> None:
     )
 
     assert _ai(FootballAIDifficulty.HARD).choose_action(state) is OffensivePlayAction.DEEP_PASS
+
+
+def test_hard_offense_uses_active_scheme_and_selects_only_legal_hand_cards() -> None:
+    ai = _ai(FootballAIDifficulty.HARD)
+    offense = _roster(
+        "Home",
+        powers={
+            FootballPosition.RB: 80.0,
+            FootballPosition.O_LINE: 80.0,
+            FootballPosition.QB: 10.0,
+            FootballPosition.WR: 10.0,
+        },
+    )
+    defense = _roster(
+        "Away",
+        powers={
+            FootballPosition.D_LINE: 1.0,
+            FootballPosition.LINEBACKERS: 1.0,
+            FootballPosition.CORNERBACKS: 50.0,
+            FootballPosition.SAFETIES: 50.0,
+        },
+    )
+    rb_card = FootballCardCopy("ai:legal:run", OffensivePlayAction.RB_RUN.value)
+    pass_card = FootballCardCopy("ai:legal:pass", OffensivePlayAction.DEEP_PASS.value)
+    hidden_card = FootballCardCopy(
+        "human:hidden", OffensivePlayAction.SHORT_PASS.value
+    )
+    run_scheme_state = _state(
+        team_a=offense,
+        team_b=defense,
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        down=3,
+        yards_to_go=8.0,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        team_a_offense_deck=FootballDeckState(
+            (rb_card, pass_card), hand=(rb_card, pass_card)
+        ),
+        team_b_offense_deck=FootballDeckState((hidden_card,), hand=(hidden_card,)),
+    )
+    pass_scheme_state = _state(
+        team_a=offense,
+        team_b=defense,
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        down=3,
+        yards_to_go=8.0,
+        current_drive_defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
+        team_a_offense_deck=FootballDeckState(
+            (rb_card, pass_card), hand=(rb_card, pass_card)
+        ),
+        team_b_offense_deck=FootballDeckState((hidden_card,), hand=(hidden_card,)),
+    )
+
+    run_scheme_score = ai._hard_play_score(run_scheme_state, OffensivePlayAction.RB_RUN)
+    pass_scheme_score = ai._hard_play_score(pass_scheme_state, OffensivePlayAction.RB_RUN)
+    assert pass_scheme_score != run_scheme_score
+    chosen = ai.choose_action(pass_scheme_state)
+    assert chosen in (OffensivePlayAction.RB_RUN, OffensivePlayAction.DEEP_PASS)
+    assert chosen is not OffensivePlayAction.SHORT_PASS
+
+
+def test_hard_defensive_score_prefers_schemes_with_stronger_contributors(
+    monkeypatch,
+) -> None:
+    ai = _ai(FootballAIDifficulty.HARD, side=FootballTeamSide.TEAM_B)
+    state = _state(
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+        down=1,
+        yards_to_go=5.0,
+    )
+    offense = _roster("Offense", default_power=10.0)
+    defense = _roster(
+        "Defense",
+        powers={
+            FootballPosition.D_LINE: 100.0,
+            FootballPosition.LINEBACKERS: 100.0,
+            FootballPosition.CORNERBACKS: 1.0,
+            FootballPosition.SAFETIES: 1.0,
+        },
+    )
+    monkeypatch.setattr(
+        ai, "_likely_offensive_play_score", lambda _state, _scheme: 1.0
+    )
+    strong_defense = ai._hard_defensive_scheme_score(
+        state,
+        DefensiveSchemeAction.RB_RUN,
+        offense,
+        defense,
+    )
+    weak_defense = ai._hard_defensive_scheme_score(
+        state,
+        DefensiveSchemeAction.DEEP_PASS,
+        offense,
+        defense,
+    )
+
+    assert strong_defense > weak_defense
 
 
 def test_ai_rejects_invalid_constructor_values() -> None:

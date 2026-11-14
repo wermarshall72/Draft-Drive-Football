@@ -30,9 +30,9 @@ from src.engine.football_player_catalog import (
     player_type_offer,
 )
 from src.engine.football_simulator import (
+    calculate_matchup_power,
     field_goal_distance_for_position,
     field_goal_success_probability,
-    matchup_for_play,
 )
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
@@ -322,11 +322,21 @@ class FootballAI:
     ) -> float:
         offense = self._roster_for_side(state, self.team_side)
         defense = self._roster_for_side(state, self._opponent(self.team_side))
-        offensive_positions, defensive_positions = matchup_for_play(play)
-        offense_power = sum(offense.players[position].power for position in offensive_positions)
-        defense_power = sum(defense.players[position].power for position in defensive_positions)
-        matchup_edge = (offense_power - defense_power) / max(
-            1.0, offense_power + defense_power
+        scheme = state.current_drive_defensive_scheme
+        if scheme is None:
+            raise ValueError("Hard offensive evaluation requires the active defensive scheme.")
+        prior_plays = sum(
+            event.play_result is not None for event in state.match_events
+        )
+        matchup = calculate_matchup_power(
+            offense,
+            defense,
+            play,
+            scheme,
+            prior_plays=prior_plays,
+        )
+        matchup_edge = (matchup.offense - matchup.defense) / max(
+            1.0, matchup.offense + matchup.defense
         )
         return self._situational_play_score(state, play) + 5.0 * matchup_edge
 
@@ -395,12 +405,18 @@ class FootballAI:
             counters,
             key=lambda action: self._situational_play_score(state, action),
         )
-        offensive_positions = OFFENSIVE_PLAY_CATALOG[play.value].contributors
-        defensive_positions = DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors
-        offense_power = sum(offense.players[position].power for position in offensive_positions)
-        defense_power = sum(defense.players[position].power for position in defensive_positions)
-        matchup_edge = (offense_power - defense_power) / max(
-            1.0, offense_power + defense_power
+        prior_plays = sum(
+            event.play_result is not None for event in state.match_events
+        )
+        matchup = calculate_matchup_power(
+            offense,
+            defense,
+            play,
+            scheme,
+            prior_plays=prior_plays,
+        )
+        matchup_edge = (matchup.defense - matchup.offense) / max(
+            1.0, matchup.offense + matchup.defense
         )
         return self._likely_offensive_play_score(state, scheme) + 5.0 * matchup_edge
 

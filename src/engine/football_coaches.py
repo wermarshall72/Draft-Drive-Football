@@ -29,7 +29,6 @@ class FootballCoachSide(str, Enum):
 
 class FootballCoachPerkKind(str, Enum):
     FIRST_RUN_YARDS = "first_run_yards"
-    FOURTH_DOWN_SUCCESS_BONUS = "fourth_down_success_bonus"
     FIRST_COMPLETED_PASS_YARDS = "first_completed_pass_yards"
     FIRST_DOWN_PASS_YARDS = "first_down_pass_yards"
     MATCHED_RUN_YARDS_REDUCTION = "matched_run_yards_reduction"
@@ -124,7 +123,7 @@ class FootballCoachProfile:
         if self.balanced:
             if self.perk is not None or any(value != 0.05 for value in values):
                 raise ValueError("Balanced coaches require +5% at each position and no perk.")
-        elif self.perk is None or sorted(values) != [-0.1, 0.0, 0.1, 0.2]:
+        elif sorted(values) != [-0.1, 0.0, 0.1, 0.2]:
             raise ValueError("Specialists require one +20%, +10%, -10%, and neutral position.")
         object.__setattr__(
             self, "position_modifiers", MappingProxyType(dict(self.position_modifiers))
@@ -241,14 +240,7 @@ OFFENSIVE_COACHES = (
             FootballPosition.QB: -0.1,
             FootballPosition.O_LINE: 0.0,
         },
-        _perk(
-            FootballCoachPerkKind.FOURTH_DOWN_SUCCESS_BONUS,
-            0.1,
-            "The offense chooses Go For It on fourth down.",
-            "+10 percentage points success chance; capped at 78%.",
-            "That decision.",
-            "Eligible on every Go For It decision.",
-        ),
+        None,
     ),
     _profile(
         "air_raid",

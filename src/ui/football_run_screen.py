@@ -34,7 +34,6 @@ from src.engine.football_shop import (
     FootballShopSection,
     FootballShopSlotState,
     FootballShopState,
-    FootballUpgradeStat,
 )
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
@@ -185,6 +184,8 @@ class FootballRunScreen(Screen):
         self._shop_review_mode: str | None = None
         self._playbook_scroll = 0
         self._playbook_max_scroll = 0
+        self._depth_chart_scroll = 0
+        self._depth_chart_max_scroll = 0
         self._match_hand_scroll = 0
         self._match_hand_max_scroll = 0
         self._match_hand_area_rect: pygame.Rect | None = None
@@ -210,6 +211,8 @@ class FootballRunScreen(Screen):
         self._shop_review_mode = None
         self._playbook_scroll = 0
         self._playbook_max_scroll = 0
+        self._depth_chart_scroll = 0
+        self._depth_chart_max_scroll = 0
         self._match_hand_scroll = 0
         self._match_hand_max_scroll = 0
         self._hand_card_rects = {}
@@ -236,6 +239,18 @@ class FootballRunScreen(Screen):
                     min(
                         self._playbook_max_scroll,
                         self._playbook_scroll - event.y,
+                    ),
+                )
+                return
+            if (
+                event.type == pygame.MOUSEWHEEL
+                and self._shop_review_mode == "depth"
+            ):
+                self._depth_chart_scroll = max(
+                    0,
+                    min(
+                        self._depth_chart_max_scroll,
+                        self._depth_chart_scroll - event.y * 40,
                     ),
                 )
                 return
@@ -2043,7 +2058,7 @@ class FootballRunScreen(Screen):
 
         draw_text(
             surface,
-            "DEPTH CHART  /  CURRENT RUN SNAPSHOT",
+            "DEPTH CHART  /  CURRENT RUN SNAPSHOT  /  SCROLL FOR DETAILS",
             (content.left + 2, content.top + 2),
             self._label_font,
             self.theme.text,
@@ -2051,10 +2066,32 @@ class FootballRunScreen(Screen):
         offense_coach, defense_coach = coaches_for_assignment(
             shop.roster.coach_assignment
         )
-        coach_top = content.top + 28
-        coach_height = 102
         gap = 12
-        coach_width = (content.width - gap) // 2
+        body_rect = pygame.Rect(
+            content.left,
+            content.top + 28,
+            content.width,
+            content.height - 78,
+        )
+        coach_height = 142
+        coach_width = (body_rect.width - gap) // 2
+        player_row_height = 92
+        player_panel_height = 36 + 4 * player_row_height
+        upgrade_row_height = 42
+        upgrade_height = 52 + max(1, len(shop.purchased_upgrades)) * upgrade_row_height
+        coach_top = body_rect.top
+        player_top = coach_top + coach_height + 12
+        upgrade_top = player_top + player_panel_height + 12
+        total_content_height = upgrade_top - body_rect.top + upgrade_height
+        self._depth_chart_max_scroll = max(
+            0, total_content_height - body_rect.height
+        )
+        self._depth_chart_scroll = min(
+            self._depth_chart_scroll, self._depth_chart_max_scroll
+        )
+        offset = body_rect.top - self._depth_chart_scroll
+        previous_clip = surface.get_clip()
+        surface.set_clip(body_rect)
         for index, (profile, side) in enumerate(
             (
                 (offense_coach, FootballCoachSide.OFFENSE),
@@ -2062,8 +2099,8 @@ class FootballRunScreen(Screen):
             )
         ):
             rect = pygame.Rect(
-                content.left + index * (coach_width + gap),
-                coach_top,
+                body_rect.left + index * (coach_width + gap),
+                offset,
                 coach_width,
                 coach_height,
             )
@@ -2071,7 +2108,11 @@ class FootballRunScreen(Screen):
             name = profile.name if profile is not None else f"No {side.value} coach"
             draw_text(
                 surface,
-                _fit_text(f"{side.value.upper()}  /  {name}", self._label_font, rect.width - 24),
+                _fit_text(
+                    f"{side.value.upper()}  /  {name}",
+                    self._label_font,
+                    rect.width - 24,
+                ),
                 (rect.left + 12, rect.top + 9),
                 self._label_font,
                 self.theme.text,
@@ -2084,29 +2125,28 @@ class FootballRunScreen(Screen):
                 if profile is not None
                 else "No position modifiers."
             )
-            draw_text(
+            draw_wrapped_text(
                 surface,
-                _fit_text(modifiers, self._small_font, rect.width - 24),
-                (rect.left + 12, rect.top + 34),
+                f"POSITION MODIFIERS  /  {modifiers}",
+                pygame.Rect(rect.left + 12, rect.top + 34, rect.width - 24, 42),
                 self._small_font,
                 self.theme.secondary_accent,
+                line_gap=2,
             )
             perk_text = (
-                f"ACTIVE PERK  /  {_coach_perk_summary(profile)}"
+                f"COACH PERK  /  {_coach_perk_summary(profile)}"
                 if profile is not None
-                else "ACTIVE PERK  /  None"
+                else "COACH PERK  /  None"
             )
             draw_wrapped_text(
                 surface,
                 perk_text,
-                pygame.Rect(rect.left + 12, rect.top + 54, rect.width - 24, 42),
+                pygame.Rect(rect.left + 12, rect.top + 78, rect.width - 24, 56),
                 self._small_font,
                 self.theme.muted,
                 line_gap=2,
             )
 
-        player_top = coach_top + coach_height + 12
-        player_height = max(1, content.bottom - player_top - 105)
         player_width = (content.width - gap) // 2
         groups = (
             (
@@ -2130,10 +2170,10 @@ class FootballRunScreen(Screen):
         )
         for column, (heading, positions) in enumerate(groups):
             rect = pygame.Rect(
-                content.left + column * (player_width + gap),
-                player_top,
+                body_rect.left + column * (player_width + gap),
+                offset + player_top - coach_top,
                 player_width,
-                player_height,
+                player_panel_height,
             )
             draw_panel(surface, rect, self.theme, fill=self.theme.panel)
             draw_text(
@@ -2144,7 +2184,7 @@ class FootballRunScreen(Screen):
                 self.theme.text,
             )
             row_top = rect.top + 31
-            row_height = max(1, (rect.height - 37) // len(positions))
+            row_height = player_row_height
             for row, position in enumerate(positions):
                 player = shop.roster.players[position]
                 player_type = (
@@ -2160,9 +2200,10 @@ class FootballRunScreen(Screen):
                     else "No partnership"
                 )
                 perk = (
-                    f"{player_type.perk.name}: {player_type.perk.effect}"
+                    f"PLANNED / INACTIVE  /  {player_type.perk.name}: "
+                    f"{player_type.perk.effect}"
                     if player_type is not None and player_type.perk is not None
-                    else "No player perk"
+                    else "PLANNED / INACTIVE  /  No player perk."
                 )
                 row_rect = pygame.Rect(
                     rect.left + 10,
@@ -2194,61 +2235,61 @@ class FootballRunScreen(Screen):
                     self._small_font,
                     self.theme.secondary_accent,
                 )
-                if row_height >= 62:
-                    draw_text(
-                        surface,
-                        _fit_text(perk, self._small_font, row_rect.width - 12),
-                        (row_rect.left + 6, row_rect.top + 35),
-                        self._small_font,
-                        self.theme.muted,
-                    )
+                draw_wrapped_text(
+                    surface,
+                    perk,
+                    pygame.Rect(
+                        row_rect.left + 6,
+                        row_rect.top + 35,
+                        row_rect.width - 12,
+                        row_rect.height - 38,
+                    ),
+                    self._small_font,
+                    self.theme.muted,
+                    line_gap=1,
+                )
 
         upgrade_rect = pygame.Rect(
-            content.left,
-            content.bottom - 96,
-            content.width,
-            86,
+            body_rect.left,
+            offset + upgrade_top - coach_top,
+            body_rect.width,
+            upgrade_height,
         )
         draw_panel(surface, upgrade_rect, self.theme, fill=self.theme.panel)
         draw_text(
             surface,
-            "PURCHASED RUN UPGRADES  /  CURRENT STATS ABOVE INCLUDE THESE",
+            "PURCHASED UPGRADE HISTORY  /  CURRENT STATS ABOVE INCLUDE THESE",
             (upgrade_rect.left + 12, upgrade_rect.top + 8),
             self._small_font,
             self.theme.text,
         )
-        totals: dict[tuple[FootballPosition, FootballUpgradeStat], float] = {}
-        for upgrade in shop.purchased_upgrades:
-            key = (upgrade.position, upgrade.stat)
-            totals[key] = totals.get(key, 0.0) + upgrade.amount
-        upgrade_summary = (
-            "  /  ".join(
-                f"{_POSITION_LABELS[position]} {stat.value.upper()} +{amount:g}"
-                for (position, stat), amount in totals.items()
+        if shop.purchased_upgrades:
+            for index, upgrade in enumerate(shop.purchased_upgrades):
+                row_rect = pygame.Rect(
+                    upgrade_rect.left + 10,
+                    upgrade_rect.top + 30 + index * upgrade_row_height,
+                    upgrade_rect.width - 20,
+                    upgrade_row_height,
+                )
+                draw_wrapped_text(
+                    surface,
+                    f"{upgrade.name}  /  {_POSITION_LABELS[upgrade.position]} "
+                    f"{upgrade.stat.value.upper()} +{upgrade.amount:g}: "
+                    f"{upgrade.description}",
+                    row_rect,
+                    self._small_font,
+                    self.theme.secondary_accent,
+                    line_gap=1,
+                )
+        else:
+            draw_text(
+                surface,
+                "No player upgrades purchased.",
+                (upgrade_rect.left + 12, upgrade_rect.top + 30),
+                self._small_font,
+                self.theme.muted,
             )
-            if totals
-            else "No player upgrades purchased."
-        )
-        draw_wrapped_text(
-            surface,
-            upgrade_summary,
-            pygame.Rect(
-                upgrade_rect.left + 12,
-                upgrade_rect.top + 28,
-                upgrade_rect.width - 24,
-                34,
-            ),
-            self._small_font,
-            self.theme.secondary_accent,
-            line_gap=2,
-        )
-        draw_text(
-            surface,
-            "Coach upgrades: none purchased; that catalog is not implemented.",
-            (upgrade_rect.left + 12, upgrade_rect.top + 62),
-            self._small_font,
-            self.theme.muted,
-        )
+        surface.set_clip(previous_clip)
         self._draw_shop_review_footer(surface, content, pending=False)
 
     def _draw_playbook(
@@ -2421,6 +2462,11 @@ class FootballRunScreen(Screen):
         ):
             self._submit(self._require_controller().cancel_card_removal)
         self._shop_review_mode = None
+        self._depth_chart_scroll = 0
+
+    def _open_depth_chart(self) -> None:
+        self._shop_review_mode = "depth"
+        self._depth_chart_scroll = 0
 
     def _draw_shop(
         self,
@@ -2533,7 +2579,7 @@ class FootballRunScreen(Screen):
         buttons.append(
             Button(
                 "DEPTH CHART",
-                lambda: setattr(self, "_shop_review_mode", "depth"),
+                self._open_depth_chart,
                 pygame.Rect(review_left, footer_top, review_width, 36),
                 variant="quiet",
             )
@@ -3137,12 +3183,33 @@ class FootballRunScreen(Screen):
             defense = team_a_name if event.possession is FootballTeamSide.TEAM_B else team_b_name
             description = f"{defense} sets {_SCHEME_LABELS[event.action]}"
         elif isinstance(event.action, OffensivePlayAction):
-            offense = team_a_name if event.possession is FootballTeamSide.TEAM_A else team_b_name
             result = event.play_result
+            offensive_side = event.possession
+            if result is not None and result.possession_changed:
+                offensive_side = (
+                    FootballTeamSide.TEAM_B
+                    if event.possession is FootballTeamSide.TEAM_A
+                    else FootballTeamSide.TEAM_A
+                )
+            offense = (
+                team_a_name
+                if offensive_side is FootballTeamSide.TEAM_A
+                else team_b_name
+            )
             if result is None:
                 description = f"{offense}: {_PLAY_LABELS[event.action]}"
             elif result.turnover:
                 description = f"{offense}: {_PLAY_LABELS[event.action]} - turnover"
+            elif result.turnover_on_downs:
+                play_outcome = (
+                    "incomplete"
+                    if result.incomplete
+                    else f"{result.yards_gained:+.1f} yd"
+                )
+                description = (
+                    f"{offense}: {_PLAY_LABELS[event.action]} - "
+                    f"{play_outcome}, turnover on downs"
+                )
             elif result.incomplete:
                 description = f"{offense}: {_PLAY_LABELS[event.action]} - incomplete"
             else:

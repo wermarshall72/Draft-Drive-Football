@@ -350,6 +350,7 @@ class FootballPlayResult:
     offense_power: float = 0.0
     defense_power: float = 0.0
     perk_effects: tuple[str, ...] = ()
+    turnover_on_downs: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.offensive_play, OffensivePlayAction):
@@ -361,6 +362,14 @@ class FootballPlayResult:
             raise ValueError("Turnover must be a boolean.")
         if not isinstance(self.possession_changed, bool):
             raise ValueError("Possession changed must be a boolean.")
+        if not isinstance(self.turnover_on_downs, bool):
+            raise ValueError("Turnover on downs must be a boolean.")
+        if self.turnover_on_downs and (
+            self.turnover or not self.possession_changed
+        ):
+            raise ValueError(
+                "A turnover on downs must change possession without a play turnover."
+            )
         if not isinstance(self.incomplete, bool):
             raise ValueError("Incomplete must be a boolean.")
         if (
@@ -616,8 +625,6 @@ class FootballMatchState:
         elif self.awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY:
             if self.current_drive_defensive_scheme is None:
                 raise ValueError("An active drive must have a defensive scheme.")
-            if self.down == 4:
-                raise ValueError("A fourth-down state must await a fourth-down decision.")
         elif self.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
             if self.current_drive_defensive_scheme is None:
                 raise ValueError("An active drive must have a defensive scheme.")

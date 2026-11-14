@@ -8,7 +8,7 @@ values, not real-world statistical data.
 from __future__ import annotations
 
 import random
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from math import isfinite
 from numbers import Real
 
@@ -22,6 +22,7 @@ from src.engine.football import (
     FootballMatchResult,
     FootballMatchState,
     FootballMatchStatus,
+    FootballPlayer,
     FootballPlayResult,
     FootballRoster,
     FootballTeamSide,
@@ -60,14 +61,10 @@ RUN_PLAY_CLOCK_SECONDS = 18
 COMPLETED_PASS_CLOCK_SECONDS = 18
 INCOMPLETE_PASS_CLOCK_SECONDS = 5
 TURNOVER_PLAY_CLOCK_SECONDS = 18
-GO_FOR_IT_CLOCK_SECONDS = 18
 PUNT_CLOCK_SECONDS = 18
 FIELD_GOAL_CLOCK_SECONDS = 5
 PUNT_NET_YARDS = 40.0
 TOUCHBACK_START_YARDS = 25.0
-GO_FOR_IT_GAIN_MIN_YARDS = 1.0
-GO_FOR_IT_GAIN_MAX_YARDS = 4.0
-GO_FOR_IT_MAX_YARDS = 20.0
 MIN_PLAY_YARDAGE_SPREAD = 1.0
 VOLATILITY_SPREAD_MULTIPLIER = 6.0
 TURNOVER_LOSS_YARDS = -3.0
@@ -80,8 +77,6 @@ MATCHED_SCHEME_TURNOVER_BONUS = 0.06
 PASS_INCOMPLETE_BASE_PROBABILITY = 0.22
 MATCHED_SCHEME_INCOMPLETE_BONUS = 0.12
 PASS_INTERCEPTION_PROBABILITY = 0.12
-GO_FOR_IT_BASE_SUCCESS_PROBABILITY = 0.52
-GO_FOR_IT_MAX_SUCCESS_PROBABILITY = 0.78
 
 _PASS_PLAYS = frozenset(
     definition.action
@@ -141,6 +136,77 @@ def _scheme_matches_play(
     scheme: DefensiveSchemeAction | None, play: OffensivePlayAction
 ) -> bool:
     return scheme is not None and play in matchup_for_scheme(scheme)[1]
+
+
+@dataclass(frozen=True)
+class FootballMatchupPower:
+    offense: float
+    defense: float
+    scheme_matches_play: bool
+
+
+def _adjusted_player_power(player: FootballPlayer, prior_plays: int) -> float:
+    ramp = min(prior_plays / FATIGUE_RAMP_PLAYS, 1.0)
+    reduction = ramp * MAX_FATIGUE_POWER_REDUCTION * (1.0 - player.stamina)
+    return player.power * (1.0 - reduction)
+
+
+def calculate_matchup_power(
+    offense_roster: FootballRoster,
+    defense_roster: FootballRoster,
+    play: OffensivePlayAction,
+    scheme: DefensiveSchemeAction,
+    *,
+    prior_plays: int = 0,
+) -> FootballMatchupPower:
+    if not isinstance(offense_roster, FootballRoster) or not isinstance(
+        defense_roster, FootballRoster
+    ):
+        raise ValueError("Matchup power requires two football rosters.")
+    if not isinstance(play, OffensivePlayAction):
+        raise ValueError("Matchup power requires an offensive play.")
+    if not isinstance(scheme, DefensiveSchemeAction):
+        raise ValueError("Matchup power requires a defensive scheme.")
+    if isinstance(prior_plays, bool) or not isinstance(prior_plays, int) or prior_plays < 0:
+        raise ValueError("Prior plays must be a non-negative integer.")
+
+    offense_positions = OFFENSIVE_PLAY_CATALOG[play.value].contributors
+    defense_positions = DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors
+    offense_players = tuple(
+        offense_roster.players[position] for position in offense_positions
+    )
+    defense_players = tuple(
+        defense_roster.players[position] for position in defense_positions
+    )
+    offense_coach, _ = coaches_for_assignment(offense_roster.coach_assignment)
+    _, defense_coach = coaches_for_assignment(defense_roster.coach_assignment)
+    offense_power = sum(
+        _adjusted_player_power(player, prior_plays)
+        * player_contribution_modifier(
+            player,
+            offense_players,
+            offense_coach.position_modifiers[player.position]
+            if offense_coach is not None
+            else 0.0,
+        )
+        for player in offense_players
+    )
+    defense_power = sum(
+        _adjusted_player_power(player, prior_plays)
+        * player_contribution_modifier(
+            player,
+            defense_players,
+            defense_coach.position_modifiers[player.position]
+            if defense_coach is not None
+            else 0.0,
+        )
+        for player in defense_players
+    )
+    matches = _scheme_matches_play(scheme, play)
+    if matches:
+        defense_power *= MATCHED_SCHEME_DEFENSE_MULTIPLIER
+        offense_power *= MATCHED_SCHEME_OFFENSE_MULTIPLIER
+    return FootballMatchupPower(offense_power, defense_power, matches)
 
 
 def _complete_match(state: FootballMatchState) -> FootballMatchState:
@@ -550,12 +616,6 @@ class FootballMatchSimulator:
         )
         return self.state
 
-    def _adjusted_power(self, player_power: float, stamina: float, prior_plays: int) -> float:
-        """Linearly reduce low-stamina power by at most 10% over 30 snaps."""
-        ramp = min(prior_plays / FATIGUE_RAMP_PLAYS, 1.0)
-        reduction = ramp * MAX_FATIGUE_POWER_REDUCTION * (1.0 - stamina)
-        return player_power * (1.0 - reduction)
-
     def _coach_profiles(
         self, roster: FootballRoster
     ) -> tuple[FootballCoachProfile | None, FootballCoachProfile | None]:
@@ -604,42 +664,20 @@ class FootballMatchSimulator:
         prior_plays = sum(
             event.play_result is not None for event in self.state.match_events
         )
-        offense_contributors = tuple(offense_players)
-        defense_contributors = tuple(defense_players)
-        offense_power = sum(
-            self._adjusted_power(player.power, player.stamina, prior_plays)
-            * player_contribution_modifier(
-                player,
-                offense_contributors,
-                (
-                    offense_coach.position_modifiers[player.position]
-                    if offense_coach is not None
-                    else 0.0
-                ),
-            )
-            for player in offense_players
+        matchup_power = calculate_matchup_power(
+            offense_roster,
+            defense_roster,
+            play,
+            scheme,
+            prior_plays=prior_plays,
         )
-        defense_power = sum(
-            self._adjusted_power(player.power, player.stamina, prior_plays)
-            * player_contribution_modifier(
-                player,
-                defense_contributors,
-                (
-                    defense_coach.position_modifiers[player.position]
-                    if defense_coach is not None
-                    else 0.0
-                ),
-            )
-            for player in defense_players
-        )
-        same_scheme = _scheme_matches_play(scheme, play)
+        offense_power = matchup_power.offense
+        defense_power = matchup_power.defense
+        same_scheme = matchup_power.scheme_matches_play
         drive_events = self._current_drive_events(self.state.possession)
         perk_effects: list[str] = []
         offense_perk = offense_coach.perk if offense_coach is not None else None
         defense_perk = defense_coach.perk if defense_coach is not None else None
-        if same_scheme:
-            defense_power *= MATCHED_SCHEME_DEFENSE_MULTIPLIER
-            offense_power *= MATCHED_SCHEME_OFFENSE_MULTIPLIER
 
         spread = max(
             MIN_PLAY_YARDAGE_SPREAD,
@@ -857,6 +895,7 @@ class FootballMatchSimulator:
                 previous_period=previous_period,
             )
 
+        turnover_on_downs = False
         if turnover:
             return_yards = (
                 defense_perk.value
@@ -889,6 +928,22 @@ class FootballMatchSimulator:
                 if next_yards_to_go <= 0:
                     next_yards_to_go = FIRST_DOWN_YARDS
                 awaited = FootballAwaitedAction.OFFENSIVE_PLAY
+                next_state = replace(
+                    self.state,
+                    down=next_down,
+                    yards_to_go=next_yards_to_go,
+                    offense_field_position=new_position,
+                    game_clock_seconds=max(0, self.state.game_clock_seconds - clock_cost),
+                    awaited_action=awaited,
+                )
+            elif self.state.down == 4:
+                turnover_on_downs = True
+                next_state = _after_possession_change(
+                    self.state,
+                    possession=_opponent(self.state.possession),
+                    field_position=100.0 - new_position,
+                    clock_cost=clock_cost,
+                )
             else:
                 next_down = min(self.state.down + 1, 4)
                 next_yards_to_go = max(0.1, line_to_gain - yards)
@@ -897,14 +952,14 @@ class FootballMatchSimulator:
                     if next_down == 4
                     else FootballAwaitedAction.OFFENSIVE_PLAY
                 )
-            next_state = replace(
-                self.state,
-                down=next_down,
-                yards_to_go=next_yards_to_go,
-                offense_field_position=new_position,
-                game_clock_seconds=max(0, self.state.game_clock_seconds - clock_cost),
-                awaited_action=awaited,
-            )
+                next_state = replace(
+                    self.state,
+                    down=next_down,
+                    yards_to_go=next_yards_to_go,
+                    offense_field_position=new_position,
+                    game_clock_seconds=max(0, self.state.game_clock_seconds - clock_cost),
+                    awaited_action=awaited,
+                )
 
         result = FootballPlayResult(
             offensive_play=play,
@@ -912,12 +967,13 @@ class FootballMatchSimulator:
             clock_seconds_used=min(self.state.game_clock_seconds, clock_cost),
             points_scored=0,
             turnover=turnover,
-            possession_changed=turnover,
+            possession_changed=turnover or turnover_on_downs,
             defensive_scheme=scheme,
             incomplete=incomplete,
             offense_power=offense_power,
             defense_power=defense_power,
             perk_effects=tuple(perk_effects),
+            turnover_on_downs=turnover_on_downs,
         )
         next_state = self._finish_action(next_state)
         self.state = _record_event(
@@ -961,76 +1017,11 @@ class FootballMatchSimulator:
         clock_cost = 0
         perk_effects: tuple[str, ...] = ()
         if decision is FootballFourthDownAction.GO_FOR_IT:
-            clock_cost = GO_FOR_IT_CLOCK_SECONDS
-            yards_to_gain = min(
-                state.yards_to_go,
-                FIRST_DOWN_YARDS,
-                _drive_yards_remaining(state.offense_field_position),
+            self.state = _record_event(
+                replace(state, awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY),
+                action=decision,
             )
-            probability = min(
-                GO_FOR_IT_MAX_SUCCESS_PROBABILITY,
-                GO_FOR_IT_BASE_SUCCESS_PROBABILITY + yards_to_gain / 12.0,
-            )
-            offense_roster = (
-                state.team_a
-                if state.possession is FootballTeamSide.TEAM_A
-                else state.team_b
-            )
-            offense_coach, _ = self._coach_profiles(offense_roster)
-            if (
-                offense_coach is not None
-                and offense_coach.perk is not None
-                and offense_coach.perk.kind
-                is FootballCoachPerkKind.FOURTH_DOWN_SUCCESS_BONUS
-            ):
-                probability = min(
-                    GO_FOR_IT_MAX_SUCCESS_PROBABILITY,
-                    probability + offense_coach.perk.value,
-                )
-                perk_effects = (
-                    "Option / Spread: +10 percentage points to go-for-it chance",
-                )
-            if self.rng.random() < probability:
-                gain = min(
-                    yards_to_gain
-                    + self.rng.uniform(
-                        GO_FOR_IT_GAIN_MIN_YARDS, GO_FOR_IT_GAIN_MAX_YARDS
-                    ),
-                    GO_FOR_IT_MAX_YARDS,
-                    _drive_yards_remaining(state.offense_field_position),
-                )
-                new_position = state.offense_field_position + gain
-                if new_position >= GOAL_LINE_YARDS:
-                    scoring_team = state.possession
-                    points = 7
-                    state = _add_score(state, scoring_team, points)
-                    state = _after_possession_change(
-                        state,
-                        possession=_opponent(scoring_team),
-                        field_position=TOUCHBACK_START_YARDS,
-                        clock_cost=GO_FOR_IT_CLOCK_SECONDS,
-                    )
-                else:
-                    state = replace(
-                        state,
-                        down=1,
-                        yards_to_go=min(
-                            FIRST_DOWN_YARDS,
-                            _drive_yards_remaining(new_position),
-                        ),
-                        offense_field_position=new_position,
-                        game_clock_seconds=max(
-                            0, state.game_clock_seconds - GO_FOR_IT_CLOCK_SECONDS
-                        ),
-                        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
-                    )
-            else:
-                state = _after_possession_change(
-                    state,
-                    possession=_opponent(state.possession),
-                    field_position=100.0 - state.offense_field_position,
-                    clock_cost=GO_FOR_IT_CLOCK_SECONDS,
-                )
+            return self.state
         elif decision is FootballFourthDownAction.PUNT:
             clock_cost = PUNT_CLOCK_SECONDS
             punt_end_position = state.offense_field_position + PUNT_NET_YARDS

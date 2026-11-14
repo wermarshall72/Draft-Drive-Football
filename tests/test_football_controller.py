@@ -5,6 +5,7 @@ import pytest
 
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballAwaitedAction,
     FootballFourthDownAction,
     FootballMatchResult,
     FootballMatchStatus,
@@ -12,7 +13,10 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
-from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+)
 from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_controller import (
     FootballGameController,
@@ -239,6 +243,55 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
             else:
                 assert isinstance(transition.action, FootballFourthDownAction)
     assert human_defense_drive_count == human_defensive_drives
+
+
+def test_human_go_for_it_transitions_to_a_legal_offensive_card() -> None:
+    controller = _controller()
+    _start_match(controller)
+    simulator = controller._simulator
+    assert simulator is not None
+    simulator.state = replace(
+        simulator.state,
+        down=4,
+        yards_to_go=1.0,
+        awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+    )
+    assert controller.state.human_decision is FootballHumanDecision.FOURTH_DOWN
+    before_events = len(simulator.state.match_events)
+    controller.choose_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+
+    pending = controller.state
+    assert pending.human_decision is FootballHumanDecision.OFFENSIVE_PLAY
+    assert pending.match is not None
+    assert pending.match.awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY
+    assert pending.match.current_drive_defensive_scheme is DefensiveSchemeAction.RB_RUN
+    assert pending.match.match_events[before_events].action is (
+        FootballFourthDownAction.GO_FOR_IT
+    )
+    hand = pending.match.team_a_offense_deck
+    assert hand is not None and hand.hand
+    card = hand.hand[0]
+    controller.choose_offensive_play(card.copy_id)
+
+    resolved = controller.state.match
+    assert resolved is not None
+    play_event = next(
+        event
+        for event in resolved.match_events[before_events + 1 :]
+        if isinstance(event.action, OffensivePlayAction)
+    )
+    assert play_event.action is OFFENSIVE_PLAY_CATALOG[card.card_id].action
+    assert play_event.play_result is not None
+    assert play_event.play_result.defensive_scheme is DefensiveSchemeAction.RB_RUN
+    event_possession = play_event.possession
+    if play_event.play_result.possession_changed:
+        event_possession = (
+            FootballTeamSide.TEAM_B
+            if event_possession is FootballTeamSide.TEAM_A
+            else FootballTeamSide.TEAM_A
+        )
+    assert event_possession is FootballTeamSide.TEAM_A
 
 
 def test_invalid_and_out_of_turn_actions_preserve_state_and_all_random_streams() -> None:
