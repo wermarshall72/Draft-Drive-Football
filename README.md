@@ -16,6 +16,13 @@ Points in the one-time shop, then call offensive plays and defensive schemes
 during matches. Three losses end the run; surviving all ten regular-season
 games reaches a playoffs marker, without a playoff bracket.
 
+On the coach screen, hover over a coach or tab to their name to inspect that
+side's position modifiers and perk. Choose a staff to lock both coaches.
+The recruiting-room table is original generated artwork; the anonymous sideline
+figures are original Pygame illustrations, not portraits of real coaches.
+Individualized coach portrait art remains a future production asset. If the
+table artwork is unavailable, the screen logs a warning and draws a fallback.
+
 Desktop run state is in memory only. The desktop gameplay flow uses
 `FootballGameController` and does not initialize or write to the legacy game
 database.

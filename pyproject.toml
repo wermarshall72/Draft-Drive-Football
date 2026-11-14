@@ -14,6 +14,9 @@ test = ["pytest>=8.0,<10"]
 [tool.setuptools.packages.find]
 include = ["src*"]
 
+[tool.setuptools.package-data]
+"src.ui" = ["assets/*.png"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
