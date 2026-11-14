@@ -12,7 +12,6 @@ from src.engine.football import (
     FootballFourthDownAction,
     FootballMatchState,
     FootballMatchStatus,
-    FootballPlayer,
     FootballPosition,
     FootballRoster,
     FootballSpecialTeams,
@@ -20,6 +19,13 @@ from src.engine.football import (
     OffensivePlayAction,
 )
 from src.engine.football_coaches import COACH_PAIR_OFFERS
+from src.engine.football_player_catalog import (
+    PLAYER_BASE_POWER,
+    PLAYER_BASE_STAMINA,
+    PLAYER_BASE_VOLATILITY,
+    player_from_type,
+    player_type_offer,
+)
 from src.engine.football_simulator import (
     field_goal_distance_for_position,
     field_goal_success_probability,
@@ -76,7 +82,7 @@ class FootballAI:
         self._rng = random.Random(seed)
 
     def generate_opponent_roster(self) -> FootballRoster:
-        """Create a complete roster with base power 8-12 and a difficulty offset.
+        """Create a catalog-based roster with the existing difficulty offset.
 
         Easy, Standard, and Hard apply named offsets of -0.5, 0, and +0.5.
         """
@@ -86,16 +92,17 @@ class FootballAI:
             FootballAIDifficulty.HARD: HARD_POWER_ADJUSTMENT,
         }[self.difficulty]
         coach_pair = self._rng.choice(COACH_PAIR_OFFERS)
-        players = {
-            position: FootballPlayer(
-                name=f"{self.team_name} {position.value}",
-                position=position,
-                power=self._rng.uniform(8.0, 12.0) + power_adjustment,
-                volatility=self._rng.uniform(0.1, 0.4),
-                stamina=self._rng.uniform(0.65, 1.0),
+        players = {}
+        for position in FootballPosition:
+            offer = player_type_offer(position, self._rng)
+            selected_type = self._rng.choice(offer)
+            players[position] = player_from_type(
+                selected_type,
+                name=f"{self.team_name} {selected_type.name}",
+                power=PLAYER_BASE_POWER + power_adjustment,
+                volatility=PLAYER_BASE_VOLATILITY,
+                stamina=PLAYER_BASE_STAMINA,
             )
-            for position in FootballPosition
-        }
         return FootballRoster(
             team_name=self.team_name,
             players=players,

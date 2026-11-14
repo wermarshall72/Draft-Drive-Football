@@ -15,6 +15,7 @@ from src.engine.football_coaches import (
     FootballCoachProfile,
     FootballCoachSide,
 )
+from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_controller import (
     FootballGameController,
     FootballGameControllerState,
@@ -1061,7 +1062,7 @@ class FootballRunScreen(Screen):
             draw_panel(surface, rect, self.theme, fill=self.theme.panel)
             draw_text(
                 surface,
-                f"PROSPECT  0{index + 1}",
+                f"PROSPECT 0{index + 1} / {_POSITION_LABELS[candidate.position]}",
                 (rect.left + 18, rect.top + 17),
                 self._small_font,
                 self.theme.secondary_accent,
@@ -1083,8 +1084,8 @@ class FootballRunScreen(Screen):
             )
             metrics = (
                 ("POWER", f"{player.power:.1f}", None),
-                ("VOLATILITY", f"{player.volatility:.2f}", player.volatility),
-                ("STAMINA", f"{player.stamina:.2f}", player.stamina),
+                ("VOLATILITY", f"{player.volatility:.0%}", player.volatility),
+                ("STAMINA", f"{player.stamina:.0%}", player.stamina),
             )
             metric_top = rect.top + 108
             for stat_index, (label, value, ratio) in enumerate(metrics):
@@ -1112,14 +1113,53 @@ class FootballRunScreen(Screen):
                         pygame.Rect(bar.left, bar.top, round(bar.width * ratio), bar.height),
                         border_radius=2,
                     )
+            if player.player_type_id is None:
+                raise RuntimeError("Drafted players must have a catalog player type.")
+            player_type = player_type_for_id(player.player_type_id)
+            detail_top = rect.top + 258
+            if player_type.partner_position is None:
+                draw_text(
+                    surface,
+                    "PARTNER: NONE",
+                    (rect.left + 18, detail_top),
+                    self._small_font,
+                    self.theme.muted,
+                )
+                draw_text(
+                    surface,
+                    "NO PARTNERSHIP BONUS / NO PERK",
+                    (rect.left + 18, detail_top + 18),
+                    self._small_font,
+                    self.theme.muted,
+                )
+                perk_text = "Basic player type. No partner or perk."
+            else:
+                draw_text(
+                    surface,
+                    f"PARTNER: {_POSITION_LABELS[player_type.partner_position]}",
+                    (rect.left + 18, detail_top),
+                    self._small_font,
+                    self.theme.secondary_accent,
+                )
+                draw_text(
+                    surface,
+                    "PARTNERSHIP: +10% CONTRIBUTION WHEN PAIRED",
+                    (rect.left + 18, detail_top + 18),
+                    self._small_font,
+                    self.theme.text,
+                )
+                if player_type.perk is None:
+                    raise RuntimeError("Specialist player type must include perk text.")
+                perk_text = f"PLANNED / INACTIVE: {player_type.perk.display_text}"
+            perk_top = detail_top + 39
             draw_wrapped_text(
                 surface,
-                candidate.description,
+                perk_text,
                 pygame.Rect(
                     rect.left + 18,
-                    rect.top + 264,
+                    perk_top,
                     rect.width - 36,
-                    max(24, card_height - 328),
+                    max(24, rect.bottom - 67 - perk_top),
                 ),
                 self._small_font,
                 self.theme.muted,

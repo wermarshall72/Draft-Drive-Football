@@ -128,6 +128,7 @@ class FootballPlayer:
     power: float
     volatility: float
     stamina: float
+    player_type_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_name(self.name, "Player name")
@@ -142,6 +143,13 @@ class FootballPlayer:
         _validate_finite_number(self.stamina, "Stamina")
         if not 0 <= self.stamina <= 1:
             raise ValueError("Stamina must be between 0 and 1.")
+        if self.player_type_id is not None:
+            _validate_name(self.player_type_id, "Player type identifier")
+            from src.engine.football_player_catalog import player_type_for_id
+
+            player_type = player_type_for_id(self.player_type_id)
+            if player_type.position is not self.position:
+                raise ValueError("Player type position must match the player's position.")
 
 
 @dataclass(frozen=True)

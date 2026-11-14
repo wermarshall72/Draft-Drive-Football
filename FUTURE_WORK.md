@@ -6,15 +6,18 @@ or the design changes.
 
 ## Player redesign
 
-- [ ] Propose and approve six specialized player types per position, plus a
+- [x] Propose and approve six specialized player types per position, plus a
   basic type. Each specialist has a same-side partner position and a distinct
   proposed perk; the basic type has neither.
-- [ ] Agree on the partnership bonus and its stacking formula, including the
+- [x] Agree on the partnership bonus and its stacking formula, including the
   130% cap for combined coach and player partnership bonuses.
-- [ ] Implement the approved player catalog, draft offers, partnership effects,
+- [x] Implement the approved player catalog, draft offers, partnership effects,
   AI roster generation, and player-selection UI.
-- [ ] Review and approve the proposed player perks. Initially, show them as
+- [x] Review and approve the proposed player perks. Initially, show them as
   text only; their effects do not execute in matches.
+- [ ] Make future player perks more creative and meaningfully interact with
+  future game actions. The current perk proposals are intentionally basic and
+  remain informational until perk execution is designed.
 - [ ] Implement approved player perk effects later, when their supporting game
   systems and trigger/reset rules are defined.
 - [ ] Revisit AI difficulty and shop upgrade balance after the player base

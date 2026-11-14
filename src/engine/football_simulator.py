@@ -31,6 +31,7 @@ from src.engine.football_coaches import (
     FootballCoachProfile,
     coaches_for_assignment,
 )
+from src.engine.football_player_catalog import player_contribution_modifier
 
 REGULATION_PERIOD_SECONDS = 900
 OVERTIME_PERIOD_SECONDS = 300
@@ -371,21 +372,31 @@ class FootballMatchSimulator:
         prior_plays = sum(
             event.play_result is not None for event in self.state.match_events
         )
+        offense_contributors = tuple(offense_players)
+        defense_contributors = tuple(defense_players)
         offense_power = sum(
             self._adjusted_power(player.power, player.stamina, prior_plays)
-            * (
-                1.0 + offense_coach.position_modifiers[player.position]
-                if offense_coach is not None
-                else 1.0
+            * player_contribution_modifier(
+                player,
+                offense_contributors,
+                (
+                    offense_coach.position_modifiers[player.position]
+                    if offense_coach is not None
+                    else 0.0
+                ),
             )
             for player in offense_players
         )
         defense_power = sum(
             self._adjusted_power(player.power, player.stamina, prior_plays)
-            * (
-                1.0 + defense_coach.position_modifiers[player.position]
-                if defense_coach is not None
-                else 1.0
+            * player_contribution_modifier(
+                player,
+                defense_contributors,
+                (
+                    defense_coach.position_modifiers[player.position]
+                    if defense_coach is not None
+                    else 0.0
+                ),
             )
             for player in defense_players
         )

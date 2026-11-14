@@ -13,6 +13,12 @@ from src.engine.football_team_builder import (
     FootballTeamBuilder,
 )
 from src.engine.football_coaches import COACH_PAIR_OFFERS
+from src.engine.football_player_catalog import (
+    PLAYER_BASE_POWER,
+    PLAYER_BASE_STAMINA,
+    PLAYER_BASE_VOLATILITY,
+    player_type_for_id,
+)
 
 
 def _draft(
@@ -45,9 +51,19 @@ def test_draft_order_offers_three_valid_distinct_players_per_position() -> None:
         assert all(isinstance(candidate, FootballPlayerCandidate) for candidate in offer)
         assert all(candidate.position is position for candidate in offer)
         assert all(candidate.description for candidate in offer)
-        assert all(candidate.player.power >= 0 for candidate in offer)
-        assert all(0 <= candidate.player.volatility <= 1 for candidate in offer)
-        assert all(0 <= candidate.player.stamina <= 1 for candidate in offer)
+        assert all(
+            candidate.player.power == PLAYER_BASE_POWER
+            and candidate.player.volatility == PLAYER_BASE_VOLATILITY
+            and candidate.player.stamina == PLAYER_BASE_STAMINA
+            for candidate in offer
+        )
+        offered_types = tuple(
+            player_type_for_id(candidate.player.player_type_id)
+            for candidate in offer
+        )
+        assert all(item.partner_position is not None for item in offered_types[:2])
+        assert offered_types[2].partner_position is None
+        assert offered_types[2].perk is None
         builder.choose_player(position, offer[0])
 
     roster = builder.build_roster()

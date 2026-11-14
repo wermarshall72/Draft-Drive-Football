@@ -190,6 +190,42 @@ def test_coach_and_eight_position_draft_are_controller_driven(
     assert state.shop is not None and state.shop.remaining_budget == 6
 
 
+def test_player_draft_cards_explain_partnership_and_inactive_perks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    displayed: list[str] = []
+    original_draw_text = football_run_screen_module.draw_text
+    original_draw_wrapped_text = football_run_screen_module.draw_wrapped_text
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    def capture_wrapped_text(surface, text, rect, font, color, **kwargs):
+        displayed.append(text)
+        original_draw_wrapped_text(surface, text, rect, font, color, **kwargs)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
+    monkeypatch.setattr(
+        football_run_screen_module, "draw_wrapped_text", capture_wrapped_text
+    )
+    desktop.router.draw(_surface())
+
+    joined = " ".join(displayed)
+    assert "PROSPECT 01 / QB" in joined
+    assert "PARTNER:" in joined
+    assert "PARTNERSHIP: +10% CONTRIBUTION WHEN PAIRED" in joined
+    assert "PLANNED / INACTIVE:" in joined
+    assert "PARTNER: NONE" in joined
+    assert "NO PARTNERSHIP BONUS / NO PERK" in joined
+    assert "10%" in joined
+    assert "50%" in joined
+
+
 def test_coach_cards_show_both_profiles_perks_and_starter_action_sets(
     tmp_path: Path,
     monkeypatch,

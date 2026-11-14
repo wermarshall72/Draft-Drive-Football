@@ -16,7 +16,9 @@ from src.engine.football import (
     OffensivePlayAction,
 )
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
+from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_shop import (
+    POWER_UPGRADE_AMOUNT,
     STAMINA_UPGRADE_AMOUNT,
     TRAINING_POINT_BUDGET,
     FootballShop,
@@ -59,6 +61,8 @@ def _drafted_roster(seed: int = 17) -> FootballRoster:
 
 
 def test_shop_offer_is_three_distinct_affordable_upgrades_and_seeded() -> None:
+    assert POWER_UPGRADE_AMOUNT == 1.0
+    assert STAMINA_UPGRADE_AMOUNT == 0.1
     first = FootballShop(_roster(), 12)
     replay = FootballShop(_roster(), 12)
 
@@ -203,6 +207,31 @@ def test_roster_updates_are_immutable_valid_and_seeded_outcomes_match() -> None:
     assert all(
         0 <= player.volatility <= 1 and 0 <= player.stamina <= 1
         for player in first.roster.players.values()
+    )
+
+
+def test_shop_upgrade_preserves_specialist_identity_and_inactive_perk_text() -> None:
+    original_roster = _drafted_roster()
+    shop = FootballShop(original_roster, 19)
+    upgrade = shop.offer[0]
+    original_player = original_roster.players[upgrade.position]
+    assert original_player.player_type_id is not None
+    original_type = player_type_for_id(original_player.player_type_id)
+
+    updated_roster = shop.buy(upgrade).roster
+    updated_player = updated_roster.players[upgrade.position]
+
+    assert updated_player is not original_player
+    assert updated_player.player_type_id == original_player.player_type_id
+    updated_type = player_type_for_id(updated_player.player_type_id)
+    assert updated_type is original_type
+    assert updated_type.partner_position is original_type.partner_position
+    assert (
+        updated_type.perk.display_text
+        if updated_type.perk is not None
+        else None
+    ) == (
+        original_type.perk.display_text if original_type.perk is not None else None
     )
 
 

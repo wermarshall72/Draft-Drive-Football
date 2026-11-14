@@ -7,10 +7,13 @@ from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
     FootballCoach,
+    FootballCoachAssignment,
     FootballFourthDownAction,
+    FootballMatchEvent,
     FootballMatchState,
     FootballMatchStatus,
     FootballPlayer,
+    FootballPlayResult,
     FootballPosition,
     FootballRoster,
     FootballSpecialTeams,
@@ -25,6 +28,14 @@ from src.engine.football_simulator import (
     field_goal_success_probability,
     matchup_for_play,
 )
+from src.engine.football_player_catalog import (
+    PLAYER_BASE_POWER,
+    PLAYER_BASE_STAMINA,
+    PLAYER_BASE_VOLATILITY,
+    player_from_type,
+    player_types_for_position,
+)
+from src.engine.football_shop import FootballShop, FootballUpgradeStat
 
 
 class SequenceRNG(random.Random):
@@ -122,6 +133,34 @@ def _sim_with_scheme(
     return sim
 
 
+def _roster_with_mutual_partners(
+    team_name: str,
+    positions: tuple[FootballPosition, FootballPosition],
+    coach_assignment: FootballCoachAssignment,
+) -> FootballRoster:
+    players = dict(_roster(team_name, power=PLAYER_BASE_POWER, stamina=1.0).players)
+    for position, partner in (positions, positions[::-1]):
+        player_type = next(
+            item
+            for item in player_types_for_position(position)
+            if item.partner_position is partner
+        )
+        players[position] = player_from_type(
+            player_type,
+            name=f"{team_name} {player_type.name}",
+            power=PLAYER_BASE_POWER,
+            volatility=PLAYER_BASE_VOLATILITY,
+            stamina=PLAYER_BASE_STAMINA,
+        )
+    return FootballRoster(
+        team_name,
+        players,
+        FootballCoach(f"{team_name} Coach"),
+        FootballSpecialTeams(),
+        coach_assignment,
+    )
+
+
 def test_all_six_play_matchups_use_the_required_positions():
     expected = {
         OffensivePlayAction.RB_RUN: (
@@ -151,6 +190,157 @@ def test_all_six_play_matchups_use_the_required_positions():
     }
     for play, pairing in expected.items():
         assert matchup_for_play(play) == pairing
+
+
+@pytest.mark.parametrize(
+    ("play", "scheme"),
+    [
+        (play, scheme)
+        for play in OffensivePlayAction
+        for scheme in DefensiveSchemeAction
+    ],
+)
+def test_partnerships_use_play_and_selected_scheme_contributors(
+    play: OffensivePlayAction,
+    scheme: DefensiveSchemeAction,
+) -> None:
+    offense_positions, _ = matchup_for_play(play)
+    _, defense_positions = matchup_for_play(OffensivePlayAction(scheme.value))
+    offense = _roster_with_mutual_partners(
+        "Home",
+        offense_positions,
+        FootballCoachAssignment("balanced_offense", "balanced_defense"),
+    )
+    defense = _roster_with_mutual_partners(
+        "Away",
+        defense_positions,
+        FootballCoachAssignment("balanced_offense", "balanced_defense"),
+    )
+    simulator = FootballMatchSimulator(
+        _match_state(team_a=offense, team_b=defense)
+    )
+    simulator.select_defensive_scheme(scheme)
+    result = simulator.resolve_offensive_play(play).match_events[-1].play_result
+
+    assert result is not None
+    assert result.offense_power == pytest.approx(
+        115.0 * (0.96 if scheme.value == play.value else 1.0)
+    )
+    assert result.defense_power == pytest.approx(
+        115.0 * (1.12 if scheme.value == play.value else 1.0)
+    )
+
+
+def test_shop_coach_partnership_and_fatigue_stack_once_before_scheme_modifier() -> None:
+    offense = _roster_with_mutual_partners(
+        "Home",
+        (FootballPosition.QB, FootballPosition.RB),
+        FootballCoachAssignment("pro_style", "balanced_defense"),
+    )
+    shop = next(
+        (
+            candidate
+            for seed in range(100)
+            for candidate in (FootballShop(offense, seed),)
+            if any(
+                item.position is FootballPosition.QB
+                and item.stat is FootballUpgradeStat.POWER
+                for item in candidate.offer
+            )
+        ),
+        None,
+    )
+    assert shop is not None
+    qb_upgrade = next(
+        item
+        for item in shop.offer
+        if item.position is FootballPosition.QB
+        and item.stat is FootballUpgradeStat.POWER
+    )
+    upgraded_roster = shop.buy(qb_upgrade).roster
+
+    history = tuple(
+        FootballMatchEvent(
+            sequence=index,
+            action=OffensivePlayAction.RB_RUN,
+            team_a_score=0,
+            team_b_score=0,
+            possession=FootballTeamSide.TEAM_A,
+            offense_field_position=25.0,
+            down=1,
+            yards_to_go=10.0,
+            game_clock_seconds=900,
+            period=1,
+            status=FootballMatchStatus.IN_PROGRESS,
+            clock_seconds_used=18,
+            play_result=FootballPlayResult(
+                OffensivePlayAction.RB_RUN,
+                1.0,
+                18,
+                defensive_scheme=DefensiveSchemeAction.RB_RUN,
+            ),
+        )
+        for index in range(1, 16)
+    )
+    simulator = FootballMatchSimulator(
+        _match_state(
+            team_a=upgraded_roster,
+            team_b=_roster("Away", power=50.0, stamina=1.0),
+            match_events=history,
+        )
+    )
+    simulator.select_defensive_scheme(DefensiveSchemeAction.SCREEN_PASS)
+    result = simulator.resolve_offensive_play(
+        OffensivePlayAction.PA_PASS
+    ).match_events[-1].play_result
+
+    assert result is not None
+    assert upgraded_roster.players[FootballPosition.QB].power == 51.0
+    assert result.offense_power == pytest.approx(
+        (51.0 * 0.975 * 1.30) + (50.0 * 0.975 * 1.0)
+    )
+
+
+def test_player_perk_text_does_not_affect_match_resolution() -> None:
+    qb_types = tuple(
+        item
+        for item in player_types_for_position(FootballPosition.QB)
+        if item.partner_position is FootballPosition.RB
+    )
+    rosters = []
+    for player_type in qb_types:
+        players = dict(_roster("Home").players)
+        players[FootballPosition.QB] = player_from_type(
+            player_type,
+            name="Home QB",
+            power=10.0,
+            volatility=0.2,
+            stamina=0.75,
+        )
+        rosters.append(
+            FootballRoster(
+                "Home",
+                players,
+                FootballCoach("Home Coach"),
+                FootballSpecialTeams(),
+            )
+        )
+
+    results = []
+    for roster in rosters:
+        simulator = FootballMatchSimulator(_match_state(team_a=roster))
+        simulator.select_defensive_scheme(DefensiveSchemeAction.SCREEN_PASS)
+        results.append(
+            simulator.resolve_offensive_play(
+                OffensivePlayAction.PA_PASS
+            ).match_events[-1].play_result
+        )
+
+    assert results[0] is not None and results[1] is not None
+    assert results[0].offense_power == results[1].offense_power
+    assert results[0].defense_power == results[1].defense_power
+    assert results[0].yards_gained == results[1].yards_gained
+    assert results[0].perk_effects == results[1].perk_effects == ()
 
 
 @pytest.mark.parametrize("play", list(OffensivePlayAction))

@@ -16,9 +16,17 @@ from src.engine.football import (
     OffensivePlayAction,
 )
 from src.engine.football_ai import (
+    EASY_POWER_ADJUSTMENT,
     FootballAI,
     FootballAIDifficulty,
     HARD_POWER_ADJUSTMENT,
+    STANDARD_POWER_ADJUSTMENT,
+)
+from src.engine.football_player_catalog import (
+    PLAYER_BASE_POWER,
+    PLAYER_BASE_STAMINA,
+    PLAYER_BASE_VOLATILITY,
+    player_type_for_id,
 )
 from src.engine.football_simulator import FootballMatchSimulator
 
@@ -93,11 +101,18 @@ def test_generated_roster_is_complete_valid_and_keeps_non_player_slots_separate(
 
     assert set(roster.players) == set(FootballPosition)
     assert len(roster.players) == 8
+    expected_power = PLAYER_BASE_POWER + {
+        FootballAIDifficulty.EASY: -0.5,
+        FootballAIDifficulty.STANDARD: 0.0,
+        FootballAIDifficulty.HARD: 0.5,
+    }[difficulty]
     for position, player in roster.players.items():
         assert player.position is position
-        assert 0.0 <= player.power <= 12.5
-        assert 0.0 <= player.volatility <= 1.0
-        assert 0.0 <= player.stamina <= 1.0
+        assert player.power == expected_power
+        assert player.volatility == PLAYER_BASE_VOLATILITY
+        assert player.stamina == PLAYER_BASE_STAMINA
+        assert player.player_type_id is not None
+        assert player_type_for_id(player.player_type_id).position is position
     assert isinstance(roster.coach, FootballCoach)
     assert isinstance(roster.special_teams, FootballSpecialTeams)
     assert roster.coach not in roster.players.values()
@@ -114,6 +129,9 @@ def test_roster_generation_is_reproducible_and_seeded_differently() -> None:
 
 
 def test_difficulty_applies_only_the_documented_small_power_adjustment() -> None:
+    assert EASY_POWER_ADJUSTMENT == -0.5
+    assert STANDARD_POWER_ADJUSTMENT == 0.0
+    assert HARD_POWER_ADJUSTMENT == 0.5
     rosters = {
         difficulty: _ai(difficulty, seed=7).generate_opponent_roster()
         for difficulty in FootballAIDifficulty

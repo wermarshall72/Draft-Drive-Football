@@ -15,6 +15,7 @@ from src.engine.football import (
     FootballSpecialTeams,
 )
 from src.engine.football_coaches import COACH_PAIR_OFFERS, FootballCoachPair
+from src.engine.football_player_catalog import player_from_type, player_type_offer
 
 PLAYER_DRAFT_ORDER = (
     FootballPosition.QB,
@@ -26,15 +27,6 @@ PLAYER_DRAFT_ORDER = (
     FootballPosition.CORNERBACKS,
     FootballPosition.SAFETIES,
 )
-
-@dataclass(frozen=True)
-class _PlayerTemplate:
-    archetype: str
-    description: str
-    power: float
-    volatility: float
-    stamina: float
-
 
 @dataclass(frozen=True)
 class FootballPlayerCandidate:
@@ -50,14 +42,6 @@ class FootballPlayerCandidate:
     @property
     def position(self) -> FootballPosition:
         return self.player.position
-
-
-_PLAYER_TEMPLATES = (
-    _PlayerTemplate("Reliable", "Lower volatility and higher stamina.", 9.0, 0.1, 0.9),
-    _PlayerTemplate("Balanced", "Even power, volatility, and stamina.", 10.0, 0.2, 0.8),
-    _PlayerTemplate("Powerful", "Higher power with moderate stamina.", 11.5, 0.3, 0.7),
-    _PlayerTemplate("Explosive", "Highest power with higher volatility.", 12.0, 0.5, 0.65),
-)
 
 
 @dataclass(frozen=True)
@@ -199,19 +183,19 @@ class FootballTeamBuilder:
     def _player_offer(
         self, position: FootballPosition
     ) -> tuple[FootballPlayerCandidate, ...]:
-        templates = self._rng.sample(_PLAYER_TEMPLATES, 3)
         return tuple(
             FootballPlayerCandidate(
-                player=FootballPlayer(
-                    name=f"{position.value.replace('_', ' ').title()} {template.archetype}",
-                    position=position,
-                    power=template.power,
-                    volatility=template.volatility,
-                    stamina=template.stamina,
+                player=player_from_type(player_type),
+                description=(
+                    "No partner, partnership bonus, or perk."
+                    if player_type.partner_position is None
+                    else (
+                        f"Partners with {player_type.partner_position.value}; "
+                        f"+10% contribution when paired. Perk is planned and inactive."
+                    )
                 ),
-                description=template.description,
             )
-            for template in templates
+            for player_type in player_type_offer(position, self._rng)
         )
 
     @staticmethod
