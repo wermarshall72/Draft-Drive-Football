@@ -381,7 +381,6 @@ def test_draft_displays_offered_values_and_uses_team_uniform_colors(
     ))
     displayed: list[str] = []
     colors: list[tuple[pygame.Color, pygame.Color]] = []
-    poses: list[int] = []
     original_text = football_run_screen_module.draw_text
     original_art = football_run_screen_module.draw_draft_player
 
@@ -389,39 +388,33 @@ def test_draft_displays_offered_values_and_uses_team_uniform_colors(
         displayed.append(text)
         original_text(surface, text, position, font, color)
 
-    def capture_art(surface, rect, primary, secondary, *, pose=0):
+    def capture_art(surface, rect, primary, secondary):
         colors.append((primary, secondary))
-        poses.append(pose)
-        original_art(surface, rect, primary, secondary, pose=pose)
+        original_art(surface, rect, primary, secondary)
 
     monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
     monkeypatch.setattr(football_run_screen_module, "draw_draft_player", capture_art)
     desktop.router.draw(_surface())
     assert all(value in displayed for value in ("63.25", "12.5%", "73.5%"))
     assert colors == [(desktop.theme.primary, desktop.theme.secondary)] * 3
-    assert poses == [0, 1, 2]
 
 
-def test_generated_player_sprites_have_distinct_poses_and_team_colors() -> None:
+def test_one_generated_player_sprite_is_reused_and_team_recolored() -> None:
     colors = (
         (pygame.Color("#091b78"), pygame.Color("#eac64a")),
         (pygame.Color("#a12542"), pygame.Color("#f1eadb")),
     )
     rendered: list[pygame.Surface] = []
-    for pose in range(3):
+    for _ in range(3):
         surface = pygame.Surface((220, 220))
         surface.fill("#1b2522")
-        player_art.draw_draft_player(
-            surface, pygame.Rect(20, 10, 180, 195), *colors[0], pose=pose
-        )
+        player_art.draw_draft_player(surface, pygame.Rect(20, 10, 180, 195), *colors[0])
         rendered.append(surface)
-    assert len({pygame.image.tobytes(surface, "RGB") for surface in rendered}) == 3
+    assert len({pygame.image.tobytes(surface, "RGB") for surface in rendered}) == 1
 
     recolored = pygame.Surface((220, 220))
     recolored.fill("#1b2522")
-    player_art.draw_draft_player(
-        recolored, pygame.Rect(20, 10, 180, 195), *colors[1], pose=0
-    )
+    player_art.draw_draft_player(recolored, pygame.Rect(20, 10, 180, 195), *colors[1])
     assert pygame.image.tobytes(recolored, "RGB") != pygame.image.tobytes(
         rendered[0], "RGB"
     )

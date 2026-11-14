@@ -1494,9 +1494,7 @@ class FootballRunScreen(Screen):
                     3,
                 )
             portrait = pygame.Rect(rect.centerx - 90, rect.top + 34, 180, 185)
-            draw_draft_player(
-                surface, portrait, self.theme.primary, self.theme.secondary, pose=index
-            )
+            draw_draft_player(surface, portrait, self.theme.primary, self.theme.secondary)
 
             strip = pygame.Rect(rect.left + 4, rect.bottom - 105, rect.width - 8, 62)
             pygame.draw.rect(surface, "#111b20", strip, border_radius=10)

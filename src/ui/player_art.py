@@ -1,4 +1,4 @@
-"""Original generated player illustrations with runtime team-color masks."""
+"""One original generated player illustration with runtime team-color masks."""
 
 from functools import lru_cache
 from pathlib import Path
@@ -12,21 +12,20 @@ _PLATFORM_LIGHT = pygame.Color("#879257")
 _PLATFORM_HIGHLIGHT = pygame.Color("#bac184")
 
 
-@lru_cache(maxsize=3)
-def _player_layers(pose: int) -> tuple[pygame.Surface, pygame.Surface, pygame.Surface]:
+@lru_cache(maxsize=1)
+def _player_layers() -> tuple[pygame.Surface, pygame.Surface, pygame.Surface]:
     return tuple(
-        pygame.image.load(_ASSET_DIR / f"player_{pose}_{layer}.png")
+        pygame.image.load(_ASSET_DIR / f"player_{layer}.png")
         for layer in ("base", "primary_mask", "secondary_mask")
     )
 
 
 @lru_cache(maxsize=32)
 def _tinted_player(
-    pose: int,
     primary: tuple[int, int, int],
     secondary: tuple[int, int, int],
 ) -> pygame.Surface:
-    base, primary_mask, secondary_mask = _player_layers(pose)
+    base, primary_mask, secondary_mask = _player_layers()
     sprite = base.copy()
     for mask, color in zip((primary_mask, secondary_mask), (primary, secondary)):
         tint = pygame.Surface(mask.get_size(), pygame.SRCALPHA)
@@ -41,11 +40,8 @@ def draw_draft_player(
     rect: pygame.Rect,
     primary: pygame.Color,
     secondary: pygame.Color,
-    *,
-    pose: int = 0,
 ) -> None:
-    """Draw a detailed, original prospect sprite in the saved team colors."""
-    pose %= 3
+    """Draw the shared standing-player sprite in the saved team colors."""
     pygame.draw.ellipse(
         surface,
         _PLATFORM_SHADOW,
@@ -63,7 +59,7 @@ def draw_draft_player(
         2,
     )
 
-    sprite = _tinted_player(pose, tuple(primary[:3]), tuple(secondary[:3]))
+    sprite = _tinted_player(tuple(primary[:3]), tuple(secondary[:3]))
     height = max(1, rect.height - 12)
     width = min(rect.width - 4, round(height * 0.64))
     scaled = pygame.transform.smoothscale(sprite, (width, height))

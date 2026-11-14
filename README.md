@@ -28,11 +28,11 @@ their partnership and planned, inactive perk; move to another prospect or
 outside the scouting area to dismiss it. Enter or Space activates the focused
 draft button. The draft uses three open prospect presentations over the
 playbook backdrop, with actual roster progress, compact stat strips, and a
-separate scouting panel. Its three full-body player illustrations are original
-generated artwork, stored as transparent base sprites with separate primary
-and secondary color masks so uniforms use the saved team colors. The purple
-draft controls remain a consistent UI accent. These are reusable generic
-prospect illustrations, not portraits of real players.
+separate scouting panel. Prospect choices share one full-body standing-player
+illustration, generated as original artwork and stored as a transparent base
+sprite with separate primary and secondary color masks so the uniform uses the
+saved team colors. The purple draft controls remain a consistent UI accent.
+The generic illustration is not a portrait of a real player.
 Coach-screen typography uses Kalam by Indian Type Foundry and Atkinson
 Hyperlegible by the Braille Institute, and Barlow by Jeremy Tribby (from
 [Google Fonts](https://github.com/google/fonts/tree/main/ofl/barlow)), bundled
