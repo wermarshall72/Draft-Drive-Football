@@ -138,8 +138,8 @@ class FootballRunScreen(Screen):
         self._coach_popup_pressed = False
         self._draft_keyboard_inspection = False
         self._draft_hover_index: int | None = None
+        self._draft_popup_pressed = False
         self._draft_card_rects: list[pygame.Rect] = []
-        self._draft_inspection_region: pygame.Rect | None = None
         self._draft_detail_rect: pygame.Rect | None = None
         self._coach_title_font = coach_font(40, handwritten=True)
         self._coach_name_font = coach_font(23, bold=True)
@@ -163,7 +163,7 @@ class FootballRunScreen(Screen):
         self._draft_name_font = staff_font(25, semibold=True)
         self._draft_stat_font = staff_font(21, semibold=True)
         self._draft_label_font = staff_font(14, semibold=True)
-        self._draft_detail_font = staff_font(15)
+        self._draft_detail_font = staff_font(14)
         self._draft_small_font = staff_font(13)
         self._draft_button_font = staff_font(17, semibold=True)
         self._coach_focus_changed_at = 0
@@ -180,8 +180,8 @@ class FootballRunScreen(Screen):
         self._coach_popup_pressed = False
         self._draft_keyboard_inspection = False
         self._draft_hover_index = None
+        self._draft_popup_pressed = False
         self._draft_card_rects = []
-        self._draft_inspection_region = None
         self._draft_detail_rect = None
         self._coach_focus_changed_at = pygame.time.get_ticks()
 
@@ -227,8 +227,25 @@ class FootballRunScreen(Screen):
             if event.type == pygame.KEYDOWN:
                 self._draft_keyboard_inspection = True
                 self._draft_hover_index = None
+            elif event.type == pygame.MOUSEBUTTONUP and self._draft_popup_pressed:
+                self._draft_popup_pressed = False
+                return
             elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                if (
+                    self._draft_keyboard_inspection
+                    and 0 <= self.focus_index < len(self._draft_card_rects)
+                    and self._draft_detail_rect is not None
+                    and self._draft_detail_rect.collidepoint(event.pos)
+                ):
+                    self._draft_hover_index = self.focus_index
                 self._draft_keyboard_inspection = False
+                if (
+                    self._draft_detail_rect is not None
+                    and self._draft_detail_rect.collidepoint(event.pos)
+                ):
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self._draft_popup_pressed = True
+                    return
                 hovered_index = next(
                     (index for index, rect in enumerate(self._draft_card_rects)
                      if rect.collidepoint(event.pos)),
@@ -236,15 +253,13 @@ class FootballRunScreen(Screen):
                 )
                 if hovered_index is not None:
                     self._draft_hover_index = hovered_index
-                elif (
-                    self._draft_inspection_region is None
-                    or not self._draft_inspection_region.collidepoint(event.pos)
-                ):
+                else:
                     self._draft_hover_index = None
             elif event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
                 self._draft_hover_index = None
                 self._draft_keyboard_inspection = False
+                self._draft_popup_pressed = False
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             self.confirm_exit = not self.confirm_exit
             self._coach_hover_index = None
@@ -360,6 +375,26 @@ class FootballRunScreen(Screen):
                 self._draw_coach_details(
                     surface, self._coach_popup_rect(inspected_index), coach,
                     staff_index=inspected_index // 3,
+                )
+        elif state.phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
+            inspected_index = (
+                self.focus_index if self._draft_keyboard_inspection
+                else self._draft_hover_index
+            )
+            offers = state.team_builder.current_offer
+            if (
+                inspected_index is not None
+                and 0 <= inspected_index < len(offers)
+                and self._draft_detail_rect is not None
+            ):
+                candidate = offers[inspected_index]
+                if not isinstance(candidate, FootballPlayerCandidate):
+                    raise RuntimeError("The controller returned a non-player draft offer.")
+                self._draw_draft_details(
+                    surface,
+                    self._draft_detail_rect,
+                    candidate,
+                    keyboard_inspected=self._draft_keyboard_inspection,
                 )
 
         if self.last_error is not None:
@@ -1425,9 +1460,7 @@ class FootballRunScreen(Screen):
         gap = 16
         card_top = progress_top + progress_height + 10
         card_width = (content.width - gap * 2) // 3
-        details_height = 174
-        detail_top = content.bottom - details_height
-        choice_bottom = detail_top - 9
+        choice_bottom = content.bottom - 8
         self._draft_card_rects = [
             pygame.Rect(
                 content.left + index * (card_width + gap),
@@ -1437,22 +1470,9 @@ class FootballRunScreen(Screen):
             )
             for index in range(len(offers))
         ]
-        details = pygame.Rect(
-            content.left,
-            detail_top,
-            content.width,
-            details_height,
-        )
-        self._draft_detail_rect = details
-        self._draft_inspection_region = pygame.Rect(
-            content.left,
-            card_top,
-            content.width,
-            content.bottom - card_top,
-        )
         inspected_index = self.focus_index if self._draft_keyboard_inspection else self._draft_hover_index
-        inspected = (
-            offers[inspected_index]
+        self._draft_detail_rect = (
+            self._draft_popup_rect(inspected_index, surface.get_size())
             if inspected_index is not None and 0 <= inspected_index < len(offers)
             else None
         )
@@ -1493,7 +1513,7 @@ class FootballRunScreen(Screen):
                     (rect.left + min(title_width, 174), rect.top + 31),
                     3,
                 )
-            portrait = pygame.Rect(rect.centerx - 90, rect.top + 34, 180, 185)
+            portrait = pygame.Rect(rect.centerx - 130, rect.top + 40, 260, 345)
             draw_draft_player(surface, portrait, self.theme.primary, self.theme.secondary)
 
             strip = pygame.Rect(rect.left + 4, rect.bottom - 105, rect.width - 8, 62)
@@ -1538,12 +1558,23 @@ class FootballRunScreen(Screen):
                 variant="draft-select",
             ))
         self.buttons = buttons
-        self._draw_draft_details(
-            surface,
-            details,
-            inspected,
-            keyboard_inspected=self._draft_keyboard_inspection,
+
+    def _draft_popup_rect(
+        self,
+        index: int,
+        surface_size: tuple[int, int],
+    ) -> pygame.Rect:
+        choice = self._draft_card_rects[index]
+        width = min(460, surface_size[0] - 32)
+        height = min(320, choice.height - 140)
+        left = min(
+            max(choice.centerx - width // 2, 16),
+            surface_size[0] - width - 16,
         )
+        strip_top = choice.bottom - 105
+        top = min(choice.top + 46, strip_top - height - 12)
+        top = max(12, top)
+        return pygame.Rect(left, top, width, height)
 
     def _draw_draft_backdrop(self, surface: pygame.Surface) -> None:
         draw_recruiting_table(surface)
@@ -1557,44 +1588,39 @@ class FootballRunScreen(Screen):
 
     def _draw_draft_details(
         self, surface: pygame.Surface, rect: pygame.Rect,
-        candidate: FootballPlayerCandidate | None,
+        candidate: FootballPlayerCandidate,
         *,
         keyboard_inspected: bool = False,
     ) -> None:
-        pygame.draw.rect(surface, "#111b20", rect, border_radius=9)
-        pygame.draw.rect(surface, "#718087", rect, 1, border_radius=9)
-        draw_text(
-            surface,
-            "Generic player illustration · not a portrait",
-            (rect.left + 18, rect.bottom - 17),
-            self._draft_small_font,
-            pygame.Color("#aeb8b7"),
-        )
-        if candidate is None:
-            draw_text(
-                surface,
-                "Scout a prospect",
-                (rect.left + 18, rect.top + 13),
-                self._draft_label_font,
-                _COACH_CHALK,
-            )
-            draw_text(
-                surface,
-                "Hover or use Tab / arrow keys to inspect. Enter or Space activates the focused pick.",
-                (rect.left + 18, rect.top + 37),
-                self._draft_small_font,
-                _COACH_CHALK,
-            )
-            return
         if candidate.player.player_type_id is None:
             raise RuntimeError("Drafted players must have a catalog player type.")
         player_type = player_type_for_id(candidate.player.player_type_id)
-        inspected_label = "Focused prospect" if keyboard_inspected else "Scouting"
-        heading = f"{inspected_label} / {candidate.name}  ·  {_POSITION_LABELS[candidate.position]}"
+        pygame.draw.rect(surface, "#111b20", rect.move(5, 7), border_radius=10)
+        pygame.draw.rect(surface, "#1c2729", rect, border_radius=10)
+        pygame.draw.rect(surface, "#718087", rect, 1, border_radius=10)
+        pygame.draw.rect(surface, _DRAFT_PURPLE, rect, 2, border_radius=10)
+        if keyboard_inspected:
+            pygame.draw.rect(surface, "#ffffff", rect.inflate(-10, -10), 1, border_radius=7)
         draw_text(
             surface,
-            _fit_text(heading, self._draft_label_font, rect.width - 36),
-            (rect.left + 18, rect.top + 9),
+            "KEYBOARD SCOUTING" if keyboard_inspected else "SCOUTING",
+            (rect.left + 16, rect.top + 9),
+            self._draft_small_font,
+            _COACH_GOLD,
+        )
+        draw_text(
+            surface,
+            _fit_text(candidate.name, self._draft_name_font, rect.width - 145),
+            (rect.left + 16, rect.top + 25),
+            self._draft_name_font,
+            _COACH_CHALK,
+        )
+        position_label = _draft_position_label(candidate.position).upper()
+        draw_text(
+            surface,
+            position_label,
+            (rect.right - self._draft_label_font.size(position_label)[0] - 16,
+             rect.top + 31),
             self._draft_label_font,
             _COACH_CHALK,
         )
@@ -1606,30 +1632,45 @@ class FootballRunScreen(Screen):
         draw_text(
             surface,
             stats,
-            (rect.left + 18, rect.top + 29),
+            (rect.left + 16, rect.top + 57),
             self._draft_small_font,
             pygame.Color("#c1c6c4"),
         )
-        left = rect.left + 18
-        right = rect.left + 365
+        divider_y = rect.top + 79
+        pygame.draw.line(
+            surface, pygame.Color("#566367"),
+            (rect.left + 16, divider_y), (rect.right - 16, divider_y), 1,
+        )
+        column_width = (rect.width - 48) // 2
+        left = rect.left + 16
+        right = left + column_width + 16
+        section_y = rect.top + 88
+        body_top = rect.top + 110
+        body_height = rect.bottom - body_top - 12
         draw_text(
             surface,
             "Partnership",
-            (left, rect.top + 52),
+            (left, section_y),
             self._draft_label_font,
             _COACH_GOLD,
-        )
-        perk_heading = (
-            f"Perk · {player_type.perk.name} · planned and inactive"
-            if player_type.perk else "Perk"
         )
         draw_text(
             surface,
-            perk_heading,
-            (right, rect.top + 52),
+            "Perk",
+            (right, section_y),
             self._draft_label_font,
             _COACH_GOLD,
         )
+        if player_type.perk is not None:
+            status = "PLANNED · INACTIVE"
+            draw_text(
+                surface,
+                status,
+                (rect.right - 16 - self._draft_small_font.size(status)[0],
+                 section_y + 2),
+                self._draft_small_font,
+                pygame.Color("#c1c6c4"),
+            )
         if player_type.partner_position is None:
             partnership = "None. No partnership bonus."
         else:
@@ -1642,7 +1683,7 @@ class FootballRunScreen(Screen):
         draw_wrapped_text(
             surface,
             partnership,
-            pygame.Rect(left, rect.top + 73, 330, rect.bottom - rect.top - 95),
+            pygame.Rect(left, body_top, column_width, body_height),
             self._draft_detail_font,
             _COACH_CHALK,
             line_gap=0,
@@ -1651,26 +1692,38 @@ class FootballRunScreen(Screen):
             draw_text(
                 surface,
                 "None. This player type has no perk.",
-                (right, rect.top + 73),
+                (right, body_top),
                 self._draft_detail_font,
                 _COACH_CHALK,
             )
         else:
             perk = player_type.perk
             perk_lines = (
+                f"Name: {perk.name}",
                 f"Trigger: {perk.trigger}",
                 f"Effect: {perk.effect}",
                 f"Duration: {perk.duration}  ·  Reset: {perk.reset}",
                 f"Dependency: {perk.dependency}",
             )
-            for index, line in enumerate(perk_lines):
-                draw_text(
+            detail_y = body_top
+            for line in perk_lines:
+                wrapped_lines = _wrapped_line_count(
+                    line, self._draft_detail_font, column_width
+                )
+                draw_wrapped_text(
                     surface,
                     line,
-                    (right, rect.top + 73 + index * 20),
+                    pygame.Rect(
+                        right,
+                        detail_y,
+                        column_width,
+                        rect.bottom - 12 - detail_y,
+                    ),
                     self._draft_detail_font,
                     _COACH_CHALK,
+                    line_gap=0,
                 )
+                detail_y += wrapped_lines * self._draft_detail_font.get_height() + 1
 
     def _draw_shop(
         self,
@@ -2443,6 +2496,19 @@ def _fit_text(text: str, font: pygame.font.Font, width: int) -> str:
     while shortened and font.size(f"{shortened}...")[0] > width:
         shortened = shortened[:-1]
     return f"{shortened}..."
+
+
+def _wrapped_line_count(text: str, font: pygame.font.Font, width: int) -> int:
+    lines = 0
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if current and font.size(candidate)[0] > width:
+            lines += 1
+            current = word
+        else:
+            current = candidate
+    return lines + int(bool(current))
 
 
 def _draft_percentage(value: float) -> str:
