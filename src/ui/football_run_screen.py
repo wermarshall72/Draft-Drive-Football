@@ -37,12 +37,12 @@ from src.engine.football_team_builder import (
     PLAYER_DRAFT_ORDER,
     FootballPlayerCandidate,
 )
-from src.ui.coach_art import draw_recruiting_table, draw_sideline_coach
-from src.ui.coach_fonts import coach_font
+from src.ui.coach_art import draw_playbook_mark, draw_recruiting_table
+from src.ui.coach_fonts import coach_font, staff_font
 from src.ui.layout import Layout
 from src.ui.player_art import draw_draft_player
 from src.ui.screens import Navigate, Quit, Screen, _ui_font
-from src.ui.theme import Theme
+from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
 _PLAY_LABELS = {
@@ -91,8 +91,15 @@ _COACH_INK = pygame.Color("#252b25")
 _COACH_MUTED = pygame.Color("#5f6254")
 _COACH_GREEN = pygame.Color("#34574a")
 _COACH_RUST = pygame.Color("#884b39")
+_STAFF_PAPER = pygame.Color("#a1a8a3")
+_STAFF_INK = pygame.Color("#182620")
+_STAFF_MUTED = pygame.Color("#303c35")
 _COACH_GOLD = pygame.Color("#f1ce7b")
 _COACH_CHALK = pygame.Color("#f5ead1")
+_STAFF_CARD = pygame.Color("#242d30")
+_STAFF_PERK = pygame.Color("#354044")
+_STAFF_POSITIVE = pygame.Color("#9fe4ad")
+_STAFF_NEGATIVE = pygame.Color("#ff9d98")
 _RARITY_COLORS = {
     FootballShopRarity.COMMON: pygame.Color("#a8b2a1"),
     FootballShopRarity.UNCOMMON: pygame.Color("#68c58a"),
@@ -125,6 +132,8 @@ class FootballRunScreen(Screen):
         self._match_animation_gain_target = 0.0
         self._match_animation_active = False
         self._coach_keyboard_inspection = False
+        self._coach_hover_index: int | None = None
+        self._coach_popup_pressed = False
         self._draft_keyboard_inspection = False
         self._draft_hover_index: int | None = None
         self._draft_card_rects: list[pygame.Rect] = []
@@ -137,6 +146,15 @@ class FootballRunScreen(Screen):
         self._coach_body_font = coach_font(16)
         self._coach_button_font = coach_font(16, bold=True)
         self._coach_section_font = coach_font(23, bold=True)
+        self._staff_name_font = staff_font(25, semibold=True)
+        self._staff_label_font = staff_font(15)
+        self._staff_body_font = staff_font(16)
+        self._staff_detail_font = staff_font(16)
+        self._staff_stat_font = staff_font(16, semibold=True)
+        self._staff_small_font = staff_font(14, semibold=True)
+        self._staff_main_font = staff_font(18, semibold=True)
+        self._staff_button_font = staff_font(17, semibold=True)
+        self._staff_dialog_title_font = staff_font(27, semibold=True)
         self._coach_focus_changed_at = 0
 
     def begin(self, controller: FootballGameController) -> None:
@@ -147,20 +165,51 @@ class FootballRunScreen(Screen):
         self._match_visual_state = None
         self._match_animation_active = False
         self._coach_keyboard_inspection = False
+        self._coach_hover_index = None
+        self._coach_popup_pressed = False
         self._draft_keyboard_inspection = False
         self._draft_hover_index = None
         self._draft_card_rects = []
         self._coach_focus_changed_at = pygame.time.get_ticks()
 
     def handle_event(self, event: pygame.event.Event) -> None:
-        if self._current_state().phase is FootballRunPhase.COACH_DRAFT:
+        if self._current_state().phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
             if event.type == pygame.KEYDOWN:
                 self._coach_keyboard_inspection = True
+                self._coach_hover_index = None
             elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+                if (
+                    self._coach_keyboard_inspection
+                    and self.focus_index < len(self.buttons)
+                    and self.buttons[self.focus_index].variant == "coach-inspect"
+                    and self._coach_popup_rect(self.focus_index).collidepoint(event.pos)
+                ):
+                    self._coach_hover_index = self.focus_index
                 self._coach_keyboard_inspection = False
+                if (
+                    self._coach_hover_index is not None
+                    and self._coach_popup_rect(self._coach_hover_index).collidepoint(event.pos)
+                ):
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self._coach_popup_pressed = True
+                    return
+                self._coach_hover_index = next(
+                    (index for index, button in enumerate(self.buttons)
+                     if button.variant == "coach-inspect" and button.rect.collidepoint(event.pos)),
+                    None,
+                )
+                if self._coach_hover_index is not None:
+                    self.hover_index = self._coach_hover_index
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self._coach_popup_pressed = True
+                    return
             elif event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
+                self._coach_hover_index = None
                 self._coach_keyboard_inspection = False
+            elif event.type == pygame.MOUSEBUTTONUP and self._coach_popup_pressed:
+                self._coach_popup_pressed = False
+                return
         if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
             if event.type == pygame.KEYDOWN:
                 self._draft_keyboard_inspection = True
@@ -177,6 +226,8 @@ class FootballRunScreen(Screen):
                 self._draft_keyboard_inspection = False
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             self.confirm_exit = not self.confirm_exit
+            self._coach_hover_index = None
+            self._coach_popup_pressed = False
             return
         if (
             event.type == pygame.KEYDOWN
@@ -271,6 +322,22 @@ class FootballRunScreen(Screen):
         )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
+        if state.phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
+            inspected_index = (
+                self.focus_index if self._coach_keyboard_inspection
+                else self._coach_hover_index
+            )
+            if (
+                inspected_index is not None
+                and inspected_index < len(self.buttons)
+                and self.buttons[inspected_index].variant == "coach-inspect"
+            ):
+                pair = state.team_builder.coach_offer[inspected_index // 3]
+                coach = pair.offense if inspected_index % 3 == 1 else pair.defense
+                self._draw_coach_details(
+                    surface, self._coach_popup_rect(inspected_index), coach,
+                    staff_index=inspected_index // 3,
+                )
 
         if self.last_error is not None:
             error_rect = pygame.Rect(
@@ -283,7 +350,8 @@ class FootballRunScreen(Screen):
                 surface,
                 f"CHECK: {self.last_error}",
                 error_rect.topleft,
-                self._small_font,
+                self._staff_small_font if state.phase is FootballRunPhase.COACH_DRAFT
+                else self._small_font,
                 self.theme.danger,
             )
         if self.confirm_exit:
@@ -937,14 +1005,14 @@ class FootballRunScreen(Screen):
 
     def _draw_coach_backdrop(self, surface: pygame.Surface) -> None:
         draw_recruiting_table(surface)
-        draw_text(surface, "RECRUITING  /  STAFF", (40, 12), self._coach_small_font, _COACH_GOLD)
+        draw_text(surface, "Recruiting  /  Staff", (40, 12), self._staff_label_font, _COACH_CHALK)
         draw_text(surface, "Build your staff", (38, 29), self._coach_title_font, _COACH_CHALK)
         draw_text(
-            surface, "Two coaches. One sideline.", (42, 101),
-            self._coach_body_font, _COACH_CHALK,
+            surface, "Hover or tab to scout a coach.", (42, 101),
+            self._staff_body_font, _COACH_CHALK,
         )
-        team = _fit_text(self.team_name.upper(), self._coach_small_font, 250)
-        draw_text(surface, team, (820, 46), self._coach_small_font, _COACH_CHALK)
+        team = _fit_text(self.team_name.upper(), self._staff_small_font, 250)
+        draw_text(surface, team, (820, 46), self._staff_small_font, _COACH_CHALK)
 
     def _draw_coach_selection(
         self,
@@ -955,13 +1023,9 @@ class FootballRunScreen(Screen):
         coach_pairs = state.team_builder.coach_offer
         gap = 16
         card_top = content.top + 12
-        card_height = 344
+        card_height = 546
         card_width = (content.width - gap * 2) // 3
         buttons: list[Button] = []
-        inspected_index = (
-            self.focus_index if self._coach_keyboard_inspection else self.hover_index
-        )
-        inspected: FootballCoachProfile | None = None
         for index, pair in enumerate(coach_pairs):
             rect = pygame.Rect(
                 content.left + index * (card_width + gap),
@@ -970,29 +1034,34 @@ class FootballRunScreen(Screen):
                 card_height - (4 if index != 1 else 0),
             )
             focused = self.focus_index // 3 == index and self.focus_index < 9
-            pygame.draw.rect(surface, "#171b17", rect.move(5, 7))
-            pygame.draw.rect(surface, "#b7a785", rect.move(2, 3))
-            pygame.draw.rect(surface, _COACH_PAPER, rect)
-            pygame.draw.rect(surface, _COACH_GOLD if focused else "#9e8c6b", rect,
-                             3 if focused else 1)
+            pygame.draw.rect(surface, "#171b17", rect.move(5, 7), border_radius=14)
+            pygame.draw.rect(surface, "#7d8580", rect.move(2, 3), border_radius=14)
+            pygame.draw.rect(surface, _STAFF_PAPER, rect, border_radius=14)
+            pygame.draw.rect(surface, "#151a18" if focused else "#68736c", rect,
+                             4 if focused else 1, border_radius=14)
             if focused:
+                pygame.draw.rect(surface, self.theme.primary, rect.inflate(-4, -4), 2,
+                                 border_radius=12)
                 progress = min(1.0, max(0.0, (
                     pygame.time.get_ticks() - self._coach_focus_changed_at
                 ) / 140))
                 pygame.draw.line(
-                    surface, _COACH_GOLD, (rect.left, rect.top),
-                    (rect.left + round(rect.width * progress), rect.top), 4,
+                    surface, self.theme.primary, (rect.left + 18, rect.top + 3),
+                    (rect.left + 18 + round((rect.width - 36) * progress), rect.top + 3), 2,
                 )
-            pygame.draw.rect(surface, "#bcae8c", (rect.left + 18, rect.top - 5, 54, 9))
+            pygame.draw.rect(surface, "#6b746c", (rect.left + 18, rect.top - 5, 54, 10),
+                             border_radius=4)
             pygame.draw.circle(surface, "#5d5948", (rect.left + 45, rect.top), 3)
             draw_text(
-                surface, f"STAFF 0{index + 1}", (rect.left + 18, rect.top + 12),
-                self._coach_main_font, _COACH_INK,
+                surface, f"Staff 0{index + 1}", (rect.left + 18, rect.top + 12),
+                self._staff_main_font, _STAFF_INK,
             )
-            draw_text(surface, "POSITION POWER", (rect.right - 132, rect.top + 15),
-                      self._coach_small_font, _COACH_MUTED)
+            draw_text(surface, "Position modifiers", (rect.right - 132, rect.top + 15),
+                      self._staff_label_font, _STAFF_MUTED)
+            draw_text(surface, "Locked for the run", (rect.left + 18, rect.bottom - 82),
+                      self._staff_label_font, _STAFF_MUTED)
             button_rect = pygame.Rect(
-                rect.left + 17, rect.bottom - 48, rect.width - 34, 36,
+                rect.left + 17, rect.bottom - 55, rect.width - 34, 40,
             )
             buttons.append(
                 Button(
@@ -1006,39 +1075,43 @@ class FootballRunScreen(Screen):
             )
             for side_index, coach in enumerate((pair.offense, pair.defense)):
                 row = pygame.Rect(
-                    rect.left + 12, rect.top + 39 + side_index * 122,
-                    rect.width - 24, 114,
+                    rect.left + 12, rect.top + 47 + side_index * 211,
+                    rect.width - 24, 198,
                 )
                 button_index = index * 3 + side_index + 1
-                active = inspected_index == button_index
-                if active:
-                    inspected = coach
-                    pygame.draw.rect(surface, "#f7eacb", row)
-                    pygame.draw.rect(surface, _COACH_GREEN if side_index == 0 else _COACH_RUST,
-                                     row, 2)
-                portrait = pygame.Rect(row.left + 6, row.top + 8, 64, 98)
-                draw_sideline_coach(surface, portrait, offense=side_index == 0)
-                text_x = row.left + 81
+                if self._coach_hover_index == button_index and not self._coach_keyboard_inspection:
+                    pygame.draw.rect(surface, readable_ink(self.theme.secondary), row, 5,
+                                     border_radius=10)
+                    pygame.draw.rect(surface, self.theme.secondary, row, 2, border_radius=10)
+                mark = pygame.Rect(row.left - 4, row.top + 44, 64, 64)
+                draw_playbook_mark(surface, mark, offense=side_index == 0,
+                                   color=self._coach_mark_color(index, buttons[index * 3]))
+                text_x = row.left + 100
                 draw_text(
-                    surface, coach.side.value.upper(), (text_x, row.top + 8),
-                    self._coach_small_font, _COACH_GREEN if side_index == 0 else _COACH_RUST,
+                    surface, coach.side.value.title(), (text_x, row.top + 24),
+                    self._staff_label_font, _STAFF_INK,
                 )
                 draw_text(
-                    surface, coach.name.upper(), (text_x, row.top + 25),
-                    self._coach_name_font, _COACH_INK,
+                    surface, coach.name, (text_x, row.top + 45),
+                    self._staff_name_font, _STAFF_INK,
                 )
+                if self._coach_keyboard_inspection and self.focus_index == button_index:
+                    pygame.draw.line(
+                        surface, _STAFF_INK, (text_x, row.top + 77),
+                        (text_x + self._staff_name_font.size(coach.name)[0], row.top + 77), 2,
+                    )
+                    draw_text(surface, "SCOUTING", (text_x, row.top + 158),
+                              self._staff_small_font, _STAFF_INK)
                 for position_index, (position, modifier) in enumerate(
                     coach.position_modifiers.items()
                 ):
-                    x = text_x + (position_index % 2) * 124
-                    y = row.top + 58 + (position_index // 2) * 19
+                    x = text_x + (position_index % 2) * 120
+                    y = row.top + 96 + (position_index // 2) * 25
                     draw_text(
                         surface,
                         f"{_coach_position_label(position)} {round(modifier * 100):+d}%",
-                        (x, y), self._coach_stat_font,
-                        _COACH_RUST if modifier < 0 else (
-                            _COACH_MUTED if modifier == 0 else _COACH_GREEN
-                        ),
+                        (x, y), self._staff_stat_font,
+                        _STAFF_MUTED if modifier == 0 else _STAFF_INK,
                     )
                 buttons.append(
                     Button(
@@ -1047,88 +1120,95 @@ class FootballRunScreen(Screen):
                     )
                 )
         self._set_buttons(buttons)
-        details = pygame.Rect(
-            content.left, card_top + card_height + 18, content.width,
-            content.bottom - card_top - card_height - 18,
+
+    def _coach_popup_rect(self, index: int) -> pygame.Rect:
+        row = self.buttons[index].rect
+        return pygame.Rect(row.left + 54, self.buttons[index // 3 * 3 + 1].rect.top,
+                           row.width - 54, 423)
+
+    def _coach_button_active(self, index: int, button: Button) -> bool:
+        return button.enabled and (
+            self.focus_index == index or self.hover_index == index
+            or (self.focus_index < 9 and self.focus_index // 3 == index // 3)
         )
-        self._draw_coach_details(surface, details, inspected)
+
+    def _coach_mark_color(self, staff_index: int, button: Button) -> pygame.Color:
+        return (
+            self.theme.primary if self._coach_button_active(staff_index * 3, button)
+            else self.theme.secondary
+        )
 
     def _draw_coach_details(
         self,
         surface: pygame.Surface,
         rect: pygame.Rect,
-        coach: FootballCoachProfile | None,
+        coach: FootballCoachProfile,
+        *,
+        staff_index: int,
     ) -> None:
-        pygame.draw.rect(surface, "#101c18", rect.move(5, 6))
-        pygame.draw.rect(surface, "#213c32", rect)
-        pygame.draw.rect(surface, "#6b7b68", rect, 1)
-        pygame.draw.line(surface, _COACH_GOLD, (rect.left + 14, rect.top),
-                         (rect.left + 128, rect.top), 3)
-        if coach is None:
-            draw_text(
-                surface, "SCOUT THE STAFF", (rect.left + 24, rect.top + 21),
-                self._coach_section_font, _COACH_CHALK,
-            )
-            draw_text(
-                surface, "Hover a coach or tab to a name for details.",
-                (rect.left + 24, rect.top + 60), self._coach_body_font, _COACH_CHALK,
-            )
-            draw_text(
-                surface, "Choose a staff to lock both coaches for the run.",
-                (rect.left + 24, rect.top + 84), self._coach_body_font, _COACH_CHALK,
-            )
-            field_x = rect.right - 270
-            for offset in range(4):
-                x = field_x + offset * 62
-                pygame.draw.line(
-                    surface, "#415c4e",
-                    (x, rect.top + 28), (x, rect.bottom - 28), 1,
-                )
-                pygame.draw.line(
-                    surface, "#a9ac8a",
-                    (x, rect.centery - 5), (x, rect.centery + 5), 2,
-                )
-            pygame.draw.lines(
-                surface, _COACH_GOLD, False,
-                [(field_x + 12, rect.centery + 20), (field_x + 58, rect.centery + 20),
-                 (field_x + 105, rect.centery - 24)], 2,
-            )
-            pygame.draw.lines(
-                surface, _COACH_GOLD, False,
-                [(field_x + 94, rect.centery - 24), (field_x + 105, rect.centery - 24),
-                 (field_x + 105, rect.centery - 13)], 2,
-            )
-            return
-
-        draw_text(
-            surface, f"{coach.side.value.upper()}  /  {coach.name.upper()}",
-            (rect.left + 24, rect.top + 12), self._coach_main_font, _COACH_CHALK,
+        pygame.draw.rect(surface, "#111b17", rect.move(5, 7), border_radius=14)
+        pygame.draw.rect(surface, _STAFF_CARD, rect, border_radius=14)
+        keyboard_focus = (
+            self._coach_keyboard_inspection
+            and self.focus_index < len(self.buttons)
+            and self.buttons[self.focus_index].variant == "coach-inspect"
         )
-        left = rect.left + 24
-        right = rect.left + round(rect.width * 0.55)
-        y = rect.top + 42
-        draw_text(surface, "PERK", (left, y), self._coach_small_font, _COACH_GOLD)
+        pygame.draw.rect(surface, readable_ink(self.theme.secondary), rect, 5, border_radius=14)
+        pygame.draw.rect(surface, self.theme.secondary, rect, 2, border_radius=14)
+        if keyboard_focus:
+            pygame.draw.rect(surface, "#ffffff", rect.inflate(-12, -12), 1, border_radius=9)
+        mark = pygame.Rect(rect.left + 13, rect.top + 15, 58, 58)
+        pygame.draw.rect(surface, "#a1a8a3", mark, border_radius=10)
+        draw_playbook_mark(surface, mark.inflate(-5, -5),
+                           offense=coach.side is FootballCoachSide.OFFENSE,
+                           color=self._coach_mark_color(staff_index, self.buttons[staff_index * 3]))
         draw_text(
-            surface,
-            "PLAY MODIFIER SUM" if coach.side is FootballCoachSide.OFFENSE
-            else "SCHEME MODIFIER SUM",
-            (right, y), self._coach_small_font, _COACH_GOLD,
+            surface, coach.side.value.title(), (rect.left + 84, rect.top + 17),
+            self._staff_label_font, _COACH_CHALK,
         )
-        font = self._coach_detail_font
-        for offset, (action, percentage) in enumerate(coach.action_percentages.items()):
-            x = right + (offset % 3) * 150
+        draw_text(surface, coach.name, (rect.left + 84, rect.top + 37),
+                  self._staff_main_font, _COACH_CHALK)
+        if keyboard_focus:
+            draw_text(surface, "Keyboard scouting", (rect.left + 84, rect.top + 61),
+                      self._staff_label_font, _COACH_CHALK)
+        left = rect.left + 16
+        y = rect.top + 88
+        draw_text(surface, "Position modifiers", (left, y), self._staff_main_font, _COACH_CHALK)
+        for offset, (position, modifier) in enumerate(coach.position_modifiers.items()):
             draw_text(
-                surface, f"{_coach_action_label(action.value)}  {percentage}%",
-                (x, y + 21 + (offset // 3) * 23), font, _COACH_CHALK,
+                surface, f"{_coach_position_label(position)} {round(modifier * 100):+d}%",
+                (left + (offset % 2) * 140, y + 21 + (offset // 2) * 23),
+                self._staff_stat_font,
+                _STAFF_POSITIVE if modifier > 0 else _STAFF_NEGATIVE if modifier < 0
+                else _COACH_CHALK,
             )
-        draw_text(
-            surface, "100% + modifiers; not team power", (right, y + 73),
-            self._coach_small_font, "#b9c3aa",
-        )
+        perk_rect = pygame.Rect(left, rect.top + 157, rect.width - 32, 135)
+        pygame.draw.rect(surface, _STAFF_PERK, perk_rect, border_radius=8)
+        draw_text(surface, "Perk", (left + 10, perk_rect.top + 6),
+                  self._staff_main_font, _COACH_CHALK)
         draw_wrapped_text(
             surface, _coach_perk_summary(coach),
-            pygame.Rect(left, y + 20, right - left - 35, rect.bottom - y - 25),
-            font, _COACH_CHALK, line_gap=1,
+            pygame.Rect(left + 10, perk_rect.top + 25, perk_rect.width - 20, 105),
+            self._staff_detail_font, _COACH_CHALK, line_gap=1,
+        )
+        action_y = rect.top + 298
+        draw_text(
+            surface,
+            "Play modifier sum" if coach.side is FootballCoachSide.OFFENSE
+            else "Scheme modifier sum",
+            (left, action_y), self._staff_main_font, _COACH_CHALK,
+        )
+        font = self._staff_detail_font
+        for offset, (action, percentage) in enumerate(coach.action_percentages.items()):
+            x = left + (offset % 2) * 140
+            draw_text(
+                surface, f"{_coach_action_label(action.value)}  {percentage}%",
+                (x, action_y + 22 + (offset // 2) * 22), font, _COACH_CHALK,
+            )
+        draw_text(
+            surface, "100% + position modifiers; not team power",
+            (left, rect.bottom - 24),
+            self._staff_small_font, "#c1c6c4",
         )
 
     def _draw_buttons(self, surface: pygame.Surface) -> None:
@@ -1138,28 +1218,53 @@ class FootballRunScreen(Screen):
             if button.variant not in ("coach-select", "draft-select"):
                 button.draw(
                     surface,
-                    self._coach_button_font
+                    self._staff_button_font
                     if self._current_state().phase is FootballRunPhase.COACH_DRAFT
-                    and not self.confirm_exit else self._main_font,
+                    else self._main_font,
                     self.theme,
                     hovered=self.hover_index == index, pressed=self.pressed_index == index,
                 )
                 continue
+            if button.variant == "coach-select":
+                active = self._coach_button_active(index, button)
+                pressed = self.pressed_index == index and button.enabled
+                rect = button.rect.move(0, 2) if pressed else button.rect
+                fill = self.theme.primary if active else (
+                    pygame.Color("#c9ceca") if button.enabled else pygame.Color("#8b928d")
+                )
+                pygame.draw.rect(surface, fill, rect, border_radius=8)
+                pygame.draw.rect(surface, readable_ink(fill), rect, 1, border_radius=8)
+                if button.focused:
+                    pygame.draw.rect(surface, "#111416", rect.inflate(6, 6), 3, border_radius=11)
+                    pygame.draw.rect(surface, "#ffffff", rect.inflate(4, 4), 1, border_radius=10)
+                if pressed:
+                    pygame.draw.line(surface, readable_ink(fill), (rect.left + 12, rect.top + 4),
+                                     (rect.right - 12, rect.top + 4), 2)
+                label = self._staff_button_font.render(
+                    button.label.title(), True, readable_ink(fill),
+                )
+                surface.blit(label, label.get_rect(center=rect.center))
+                continue
             active = button.enabled and (
                 button.focused or self.hover_index == index
-                or (button.variant == "coach-select"
-                    and self.focus_index < 9 and self.focus_index // 3 == index // 3)
             )
             rect = button.rect.move(0, 2) if self.pressed_index == index else button.rect
-            fill = _COACH_GREEN if active else ("#f3e5c7" if button.enabled else "#c5b794")
-            border = _COACH_INK if active else (_COACH_GREEN if button.enabled else "#978b72")
-            pygame.draw.rect(surface, fill, rect)
-            pygame.draw.rect(surface, border, rect, 1)
+            green = _COACH_GREEN
+            ink = _COACH_INK
+            muted = _COACH_MUTED
+            fill = green if active else (
+                "#f3e5c7" if button.enabled else "#c5b794"
+            )
+            border = ink if active else (green if button.enabled else "#777f78")
+            radius = 0
+            pygame.draw.rect(surface, fill, rect, border_radius=radius)
+            pygame.draw.rect(surface, border, rect, 1, border_radius=radius)
             if button.focused:
-                pygame.draw.rect(surface, _COACH_GOLD, rect.inflate(4, 4), 2)
+                pygame.draw.rect(surface, _COACH_GOLD, rect.inflate(4, 4), 2,
+                                 border_radius=radius + 2 if radius else 0)
             label = self._coach_button_font.render(
                 button.label, True,
-                _COACH_CHALK if active else (_COACH_GREEN if button.enabled else _COACH_MUTED),
+                _COACH_CHALK if active else (green if button.enabled else muted),
             )
             surface.blit(label, label.get_rect(center=rect.center))
 
@@ -1990,14 +2095,16 @@ class FootballRunScreen(Screen):
             surface,
             "End this run?",
             (rect.left + 28, rect.top + 24),
-            self._title_font,
+            self._staff_dialog_title_font
+            if self._current_state().phase is FootballRunPhase.COACH_DRAFT else self._title_font,
             self.theme.text,
         )
         draw_wrapped_text(
             surface,
             "Your current draft, upgrades, and season progress will be discarded.",
             pygame.Rect(rect.left + 28, rect.top + 70, rect.width - 56, 48),
-            self._body_font,
+            self._staff_body_font
+            if self._current_state().phase is FootballRunPhase.COACH_DRAFT else self._body_font,
             self.theme.muted,
         )
         button_width = (rect.width - 76) // 2

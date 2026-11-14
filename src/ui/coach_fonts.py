@@ -22,3 +22,12 @@ def coach_font(size: int, *, bold: bool = False, handwritten: bool = False) -> p
     except (OSError, pygame.error) as error:
         _LOG.warning("Could not load coach font %s: %s", filename, error)
         return _ui_font(size, bold=bold or handwritten)
+
+
+def staff_font(size: int, *, semibold: bool = False) -> pygame.font.Font:
+    filename = "Barlow-SemiBold.ttf" if semibold else "Barlow-Regular.ttf"
+    try:
+        return pygame.font.Font(str(_FONT_DIR / filename), size)
+    except (OSError, pygame.error) as error:
+        _LOG.warning("Could not load coach font %s: %s", filename, error)
+        return _ui_font(size, bold=semibold)

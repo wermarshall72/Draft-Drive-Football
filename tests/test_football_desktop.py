@@ -26,8 +26,6 @@ from src.engine.football_controller import (
 from src.engine.football_coaches import (
     DEFENSIVE_COACHES,
     OFFENSIVE_COACHES,
-    FootballCoachPair,
-    FootballCoachSide,
 )
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
@@ -38,10 +36,12 @@ from src.engine.football_player_catalog import (
     player_type_for_id,
 )
 from src.engine.football_shop import FootballShopSection
+from src.profile import COLOR_CHOICES
 from src.ui.application import DesktopApplication
 from src.ui import coach_art
 from src.ui import football_run_screen as football_run_screen_module
 from src.ui.layout import LOGICAL_SIZE
+from src.ui.theme import readable_ink
 
 
 def _new_desktop(
@@ -49,13 +49,15 @@ def _new_desktop(
     *,
     team_name: str = "Test Owls",
     seeds: tuple[int, int, int, int] = (17, 29, 4, 1),
+    primary: str = "navy",
+    secondary: str = "gold",
 ) -> DesktopApplication:
     tmp_path.mkdir(parents=True, exist_ok=True)
     application_controller = ApplicationController(
         tmp_path / "team.json",
         tmp_path / "legacy-game.db",
     )
-    application_controller.create_profile(team_name, "navy", "gold")
+    application_controller.create_profile(team_name, primary, secondary)
     seed_values = iter(seeds)
     return DesktopApplication(
         application_controller,
@@ -440,11 +442,11 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
     desktop.router.draw(_surface())
     pair = controller.state.team_builder.coach_offer[0]
 
-    assert pair.offense.name.upper() in " ".join(displayed)
-    assert pair.defense.name.upper() in " ".join(displayed)
-    assert "SCOUT THE STAFF" in displayed
-    assert "PLAY MODIFIER SUM" not in displayed
-    assert "SCHEME MODIFIER SUM" not in displayed
+    assert pair.offense.name in " ".join(displayed)
+    assert pair.defense.name in " ".join(displayed)
+    assert "Hover or tab to scout a coach." in displayed
+    assert "Play modifier sum" not in displayed
+    assert "Scheme modifier sum" not in displayed
 
     screen = desktop.run_screen
     offense = next(button for button in screen.buttons if button.label == "INSPECT OFFENSE 1")
@@ -457,8 +459,8 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
 
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": offense.rect.center}))
     text = render()
-    assert f"OFFENSE  /  {pair.offense.name.upper()}" in text
-    assert "PLAY MODIFIER SUM" in text and "SCHEME MODIFIER SUM" not in text
+    assert f"Offense {pair.offense.name}" in text
+    assert "Play modifier sum" in text and "Scheme modifier sum" not in text
     assert pair.offense.perk is not None
     assert pair.offense.perk.effect in text
     assert pair.defense.perk is not None
@@ -469,29 +471,393 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
         )
     assert controller.state.phase is FootballRunPhase.COACH_DRAFT
 
-    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": defense.rect.center}))
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (defense.rect.left + 10, defense.rect.centery)}
+    ))
     text = render()
-    assert f"DEFENSE  /  {pair.defense.name.upper()}" in text
-    assert "SCHEME MODIFIER SUM" in text and "PLAY MODIFIER SUM" not in text
+    assert f"Defense {pair.defense.name}" in text
+    assert "Scheme modifier sum" in text and "Play modifier sum" not in text
     assert pair.defense.perk.effect in text
     assert pair.offense.perk.effect not in text
 
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": (1, 1)}))
-    assert "SCOUT THE STAFF" in render()
+    assert "Play modifier sum" not in render()
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": defense.rect.center}))
     desktop.router.handle_event(pygame.event.Event(pygame.WINDOWLEAVE))
-    assert "SCOUT THE STAFF" in render()
+    assert "Scheme modifier sum" not in render()
 
     screen._focus(0)
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
-    assert f"OFFENSE  /  {pair.offense.name.upper()}" in render()
+    assert f"Offense {pair.offense.name}" in render()
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
-    assert f"DEFENSE  /  {pair.defense.name.upper()}" in render()
+    assert f"Defense {pair.defense.name}" in render()
     assert controller.state.phase is FootballRunPhase.COACH_DRAFT
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
-    assert "SCOUT THE STAFF" in render()
+    assert "Play modifier sum" not in render()
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
     assert controller.state.selected_coach_pair is controller.state.team_builder.coach_offer[1]
+
+
+@pytest.mark.parametrize("staff", range(3))
+@pytest.mark.parametrize("side", (1, 2))
+@pytest.mark.parametrize("window_size", [(1280, 720), (960, 540), (1024, 768)])
+def test_coach_popup_pointer_transfer_and_click_safety(
+    tmp_path: Path, staff: int, side: int, window_size: tuple[int, int],
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    desktop.window_size = window_size
+    surface = _surface()
+    desktop.router.draw(surface)
+    screen = desktop.run_screen
+    controller = desktop.football_controller
+    assert controller is not None
+    before = controller.state
+    index = staff * 3 + side
+    row = screen.buttons[index].rect
+    screen._focus(index)
+    desktop.router.draw(surface)
+    outline_point = (row.left, row.top + 20)
+    original = surface.get_at(outline_point)
+
+    popup = screen._coach_popup_rect(index)
+    scale = min(window_size[0] / 1280, window_size[1] / 720)
+    offsets = ((window_size[0] - round(1280 * scale)) // 2,
+               (window_size[1] - round(720 * scale)) // 2)
+
+    def logical_event(event_type, pos, **kwargs):
+        physical = tuple(round(offsets[i] + pos[i] * scale) for i in range(2))
+        return desktop._logical_event(pygame.event.Event(event_type, {"pos": physical, **kwargs}))
+
+    target = (row.left + 10, row.centery)
+    desktop.router.handle_event(logical_event(pygame.MOUSEMOTION, target))
+    desktop.router.draw(surface)
+    assert screen._coach_hover_index == index
+    assert surface.get_at(outline_point) == desktop.theme.secondary
+    assert surface.get_at((row.left + 6, row.top + 20)) == original
+    assert pygame.Rect((0, 0), LOGICAL_SIZE).contains(popup)
+    assert popup.left >= row.left and popup.right <= row.right
+    assert popup.centery >= screen.buttons[staff * 3 + 1].rect.top
+    assert all(not popup.colliderect(button.rect) for button in screen.buttons
+               if button.variant == "coach-select")
+
+    desktop.router.handle_event(logical_event(pygame.MOUSEMOTION, popup.center))
+    desktop.router.draw(surface)
+    assert screen._coach_hover_index == index
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(logical_event(event_type, popup.center, button=1))
+    assert controller.state == before
+    other_index = staff * 3 + (3 - side)
+    other = screen.buttons[other_index].rect
+    desktop.router.handle_event(logical_event(
+        pygame.MOUSEMOTION, (other.left + 10, other.centery)
+    ))
+    assert screen._coach_hover_index == other_index
+    desktop.router.draw(surface)
+    assert screen._coach_popup_rect(other_index).left == popup.left
+    button = screen.buttons[staff * 3]
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(logical_event(event_type, button.rect.center, button=1))
+    assert controller.state.selected_coach_pair is before.team_builder.coach_offer[staff]
+
+
+@pytest.mark.parametrize("staff", range(3))
+def test_coach_hover_outline_clears_on_exit(tmp_path: Path, staff: int) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    surface = _surface()
+    desktop.router.draw(surface)
+    screen = desktop.run_screen
+    row = screen.buttons[staff * 3 + 1].rect
+    outline_point = (row.left, row.top + 20)
+    original = surface.get_at(outline_point)
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (row.left + 10, row.centery)}
+    ))
+    desktop.router.draw(surface)
+    assert surface.get_at(outline_point) == desktop.theme.secondary
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": (1, 1)}))
+    assert screen._coach_hover_index is None
+    desktop.router.draw(surface)
+    assert surface.get_at(outline_point) == original
+
+
+@pytest.mark.parametrize("staff", range(3))
+def test_coach_popup_keyboard_focus_shows_each_side(tmp_path: Path, staff: int, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    surface = _surface()
+    desktop.router.draw(surface)
+    screen = desktop.run_screen
+    controller = desktop.football_controller
+    assert controller is not None
+    before = controller.state
+    displayed: list[str] = []
+    original_draw = football_run_screen_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture)
+    screen._focus(staff * 3)
+    pair = before.team_builder.coach_offer[staff]
+    for coach in (pair.offense, pair.defense):
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+        displayed.clear()
+        desktop.router.draw(surface)
+        assert coach.side.value.title() in displayed and coach.name in displayed
+        assert "SCOUTING" in displayed
+        assert "Keyboard scouting" in displayed
+        popup = screen._coach_popup_rect(screen.focus_index)
+        assert surface.get_at((popup.centerx, popup.top)) == desktop.theme.secondary
+        assert surface.get_at((popup.centerx, popup.top + 6)) == pygame.Color("white")
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+        assert controller.state == before
+    popup = screen._coach_popup_rect(staff * 3 + 2)
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": popup.center}))
+    assert screen._coach_hover_index == staff * 3 + 2
+    assert not screen._coach_keyboard_inspection
+
+
+def test_coach_colors_have_readable_contrast() -> None:
+    def luminance(color) -> float:
+        channels = [component / 255 for component in pygame.Color(color)[:3]]
+        linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+                  for value in channels]
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+    def contrast(first, second) -> float:
+        high, low = sorted((luminance(first), luminance(second)), reverse=True)
+        return (high + 0.05) / (low + 0.05)
+
+    module = football_run_screen_module
+    for ink in (module._STAFF_INK, module._STAFF_MUTED):
+        assert contrast(ink, module._STAFF_PAPER) >= 4.5
+    for background, ink in (
+        (module._STAFF_CARD, module._COACH_CHALK),
+        (module._STAFF_CARD, "#c1c6c4"),
+        (module._STAFF_CARD, module._STAFF_POSITIVE),
+        (module._STAFF_CARD, module._STAFF_NEGATIVE),
+        (module._STAFF_PERK, module._COACH_CHALK),
+    ):
+        assert contrast(background, ink) >= 4.5
+    for color in COLOR_CHOICES:
+        assert contrast(color.hex_value, readable_ink(pygame.Color(color.hex_value))) >= 4.5
+
+
+@pytest.mark.parametrize(("primary", "secondary"), [
+    ("navy", "gold"), ("silver", "slate"), ("crimson", "scarlet"),
+    ("yellow", "lime"), ("blue", "navy"),
+])
+def test_coach_uses_saved_team_colors_for_hover_and_focus(
+    tmp_path: Path, primary: str, secondary: str, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path, primary=primary, secondary=secondary)
+    _start_run(desktop)
+    screen = desktop.run_screen
+    surface = _surface()
+    marks: list[tuple[bool, pygame.Color]] = []
+    original = football_run_screen_module.draw_playbook_mark
+
+    def capture(surface, rect, *, offense, color):
+        marks.append((offense, color))
+        original(surface, rect, offense=offense, color=color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_playbook_mark", capture)
+    desktop.router.draw(surface)
+    assert marks == [
+        (side, desktop.theme.primary if staff == 0 else desktop.theme.secondary)
+        for staff in range(3) for side in (True, False)
+    ]
+    row = screen.buttons[4].rect
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (row.left + 10, row.centery)}
+    ))
+    desktop.router.draw(surface)
+    popup = screen._coach_popup_rect(4)
+    assert surface.get_at((row.left, row.top + 20)) == desktop.theme.secondary
+    assert surface.get_at((popup.centerx, popup.top)) == desktop.theme.secondary
+    button = screen.buttons[3]
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": button.rect.center}))
+    desktop.router.draw(surface)
+    button = screen.buttons[3]
+    sample = (button.rect.left + 15, button.rect.centery)
+    assert surface.get_at(sample) == desktop.theme.primary
+    button.enabled = False
+    screen._draw_buttons(surface)
+    assert surface.get_at(sample) == pygame.Color("#8b928d")
+    button.enabled = True
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, {"pos": button.rect.center, "button": 1}
+    ))
+    desktop.router.draw(surface)
+    assert surface.get_at((button.rect.left + 15, button.rect.top + 6)) == readable_ink(desktop.theme.primary)
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONUP, {"pos": button.rect.center, "button": 1}
+    ))
+    assert desktop.football_controller.state.selected_coach_pair is not None
+
+
+def test_hovering_coach_does_not_change_focused_staff(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    desktop.router.draw(_surface())
+    screen = desktop.run_screen
+    screen._focus(0)
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": screen.buttons[4].rect.center}
+    ))
+    assert screen._coach_hover_index == 4
+    assert screen.focus_index == 0
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(pygame.event.Event(
+            event_type, {"pos": screen.buttons[4].rect.center, "button": 1}
+        ))
+    assert screen.focus_index == 0
+    assert desktop.football_controller.state.phase is FootballRunPhase.COACH_DRAFT
+
+
+@pytest.mark.parametrize(("primary", "secondary"), [
+    ("navy", "gold"), ("silver", "slate"), ("crimson", "scarlet"),
+])
+def test_staff_mark_colors_follow_highlighted_buttons_and_popup(
+    tmp_path: Path, primary: str, secondary: str, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path, primary=primary, secondary=secondary)
+    _start_run(desktop)
+    screen = desktop.run_screen
+    controller = desktop.football_controller
+    before = controller.state
+    surface = _surface()
+    marks: list[tuple[bool, pygame.Color]] = []
+    original = football_run_screen_module.draw_playbook_mark
+
+    def capture(surface, rect, *, offense, color):
+        marks.append((offense, color))
+        original(surface, rect, offense=offense, color=color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_playbook_mark", capture)
+
+    def check(highlighted: set[int], popup: tuple[int, bool] | None = None) -> None:
+        marks.clear()
+        desktop.router.draw(surface)
+        expected = [
+            (side, desktop.theme.primary if staff in highlighted else desktop.theme.secondary)
+            for staff in range(3) for side in (True, False)
+        ]
+        if popup is not None:
+            owner, offense = popup
+            expected.append((offense, desktop.theme.primary if owner in highlighted
+                             else desktop.theme.secondary))
+        assert marks == expected
+        for staff in range(3):
+            rect = screen.buttons[staff * 3].rect
+            expected_fill = desktop.theme.primary if staff in highlighted else pygame.Color("#c9ceca")
+            assert surface.get_at((rect.left + 15, rect.centery)) == expected_fill
+        assert controller.state == before
+
+    check({0})
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": screen.buttons[6].rect.center}
+    ))
+    check({2})
+    row = screen.buttons[1].rect
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (row.left + 10, row.centery)}
+    ))
+    check({2}, (0, True))
+    row = screen.buttons[2].rect
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (row.left + 10, row.centery)}
+    ))
+    check({2}, (0, False))
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": (1, 1)}))
+    screen._focus(3)
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    check({1}, (1, True))
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    check({1}, (1, False))
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    check({2})
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": screen.buttons[0].rect.center}
+    ))
+    check({0})
+    for _ in range(3):
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    check({0, 1})
+
+
+def test_coach_screen_uses_staff_fonts_in_all_text_paths(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    screen = desktop.run_screen
+    screen.last_error = "Test error"
+    used: list[tuple[str, pygame.font.Font]] = []
+    buttons: list[pygame.font.Font] = []
+    original_text = football_run_screen_module.draw_text
+    original_wrapped = football_run_screen_module.draw_wrapped_text
+    original_button = football_run_screen_module.Button.draw
+
+    def text(surface, text, position, font, color):
+        used.append((text, font))
+        original_text(surface, text, position, font, color)
+
+    def wrapped(surface, text, rect, font, color, **kwargs):
+        used.append((text, font))
+        original_wrapped(surface, text, rect, font, color, **kwargs)
+
+    def button(self, surface, font, theme, **kwargs):
+        buttons.append(font)
+        original_button(self, surface, font, theme, **kwargs)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", text)
+    monkeypatch.setattr(football_run_screen_module, "draw_wrapped_text", wrapped)
+    monkeypatch.setattr(football_run_screen_module.Button, "draw", button)
+    surface = _surface()
+    desktop.router.draw(surface)
+    row = screen.buttons[1].rect
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (row.left + 10, row.centery)}
+    ))
+    desktop.router.draw(surface)
+    screen.confirm_exit = True
+    desktop.router.draw(surface)
+    staff_fonts = {
+        screen._staff_name_font, screen._staff_label_font, screen._staff_body_font,
+        screen._staff_detail_font, screen._staff_stat_font, screen._staff_small_font,
+        screen._staff_main_font, screen._staff_button_font, screen._staff_dialog_title_font,
+    }
+    assert any(text == "Build your staff" and font is screen._coach_title_font
+               for text, font in used)
+    assert any(text == "CHECK: Test error" and font is screen._staff_small_font
+               for text, font in used)
+    assert any(text == "End this run?" and font is screen._staff_dialog_title_font
+               for text, font in used)
+    assert all(font is screen._coach_title_font if text == "Build your staff"
+               else font in staff_fonts for text, font in used)
+    assert buttons and all(font is screen._staff_button_font for font in buttons)
+
+
+@pytest.mark.parametrize("offense", [True, False])
+def test_playbook_marks_are_deterministic_team_colored_and_contrasted(offense: bool) -> None:
+    rect = pygame.Rect(0, 0, 64, 64)
+    background = football_run_screen_module._STAFF_PAPER
+    color = pygame.Color("#bcbcbc")
+    first = pygame.Surface(rect.size)
+    second = pygame.Surface(rect.size)
+    first.fill(background)
+    second.fill(background)
+    coach_art.draw_playbook_mark(first, rect, offense=offense, color=color)
+    coach_art.draw_playbook_mark(second, rect, offense=offense, color=color)
+    assert pygame.image.tobytes(first, "RGB") == pygame.image.tobytes(second, "RGB")
+    assert any(all(abs(first.get_at((x, y))[channel] - color[channel]) <= 3
+                   for channel in range(3)) for x in range(64) for y in range(64))
+    assert any(max(first.get_at((x, y))[:3]) <= 4
+               for x in range(64) for y in range(64))
+    # The former route and bracket extensions must not return.
+    assert first.get_at((60, 32)) == background
 
 
 @pytest.mark.parametrize("coach", (*OFFENSIVE_COACHES, *DEFENSIVE_COACHES))
@@ -499,18 +865,22 @@ def test_coach_detail_contains_all_data_without_clipping(tmp_path: Path, monkeyp
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
     screen = desktop.run_screen
+    desktop.router.draw(_surface())
     displayed: list[str] = []
+    colors: dict[str, pygame.Color] = {}
     original_text = football_run_screen_module.draw_text
     original_wrapped = football_run_screen_module.draw_wrapped_text
+    card = pygame.Rect(104, 185, 312, 423)
 
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
-        assert position[0] + font.size(text)[0] <= 1242
-        assert position[1] + font.get_height() <= 680
+        colors[text] = pygame.Color(color)
+        assert card.contains(pygame.Rect(position, font.size(text))), text
         original_text(surface, text, position, font, color)
 
     def capture_wrapped(surface, text, rect, font, color, **kwargs):
         displayed.append(text)
+        assert card.contains(rect)
         lines: list[str] = []
         current = ""
         for word in text.split():
@@ -528,22 +898,16 @@ def test_coach_detail_contains_all_data_without_clipping(tmp_path: Path, monkeyp
 
     monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
     monkeypatch.setattr(football_run_screen_module, "draw_wrapped_text", capture_wrapped)
-    state = desktop.football_controller.state
-    pair = (
-        FootballCoachPair(coach, DEFENSIVE_COACHES[0])
-        if coach.side is FootballCoachSide.OFFENSE
-        else FootballCoachPair(OFFENSIVE_COACHES[0], coach)
-    )
-    builder = replace(state.team_builder, coach_offer=(pair, pair, pair))
-    screen._draw_coach_selection(
-        _surface(), pygame.Rect(38, 122, 1204, 558),
-        replace(state, team_builder=builder),
-    )
+    screen._draw_coach_details(_surface(), card, coach, staff_index=0)
     for position, modifier in coach.position_modifiers.items():
         label = football_run_screen_module._coach_position_label(position)
-        assert f"{label} {round(modifier * 100):+d}%" in displayed
-    displayed.clear()
-    screen._draw_coach_details(_surface(), pygame.Rect(38, 496, 1204, 184), coach)
+        text = f"{label} {round(modifier * 100):+d}%"
+        assert text in displayed
+        assert colors[text] == (
+            football_run_screen_module._STAFF_POSITIVE if modifier > 0 else
+            football_run_screen_module._STAFF_NEGATIVE if modifier < 0 else
+            football_run_screen_module._COACH_CHALK
+        )
     for action, percentage in coach.action_percentages.items():
         label = football_run_screen_module._coach_action_label(action.value)
         assert f"{label}  {percentage}%" in displayed
@@ -563,10 +927,11 @@ def test_coach_mouse_targets_work_in_resized_windows(tmp_path: Path, window_size
     desktop.router.draw(_surface())
     screen = desktop.run_screen
     for coach in (*OFFENSIVE_COACHES, *DEFENSIVE_COACHES):
+        assert screen._staff_name_font.size(coach.name)[0] <= 254
         assert screen._coach_name_font.size(coach.name.upper())[0] <= 275
         for position, modifier in coach.position_modifiers.items():
             label = football_run_screen_module._coach_position_label(position)
-            assert screen._coach_stat_font.size(
+            assert screen._staff_stat_font.size(
                 f"{label} {round(modifier * 100):+d}%"
             )[0] < 124
     scale = min(window_size[0] / 1280, window_size[1] / 720)

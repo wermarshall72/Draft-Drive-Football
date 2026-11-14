@@ -39,6 +39,20 @@ def _contrast_ink(color: pygame.Color) -> pygame.Color:
     return pygame.Color("#10151b") if luminance > 155 else pygame.Color("#fffaf0")
 
 
+def relative_luminance(color: pygame.Color) -> float:
+    channels = [component / 255 for component in color[:3]]
+    linear = [
+        value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+        for value in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def readable_ink(color: pygame.Color) -> pygame.Color:
+    """Choose black or white by relative luminance for readable text on color."""
+    return pygame.Color("#000000" if relative_luminance(color) > 0.179 else "#ffffff")
+
+
 @dataclass(frozen=True)
 class Theme:
     canvas: pygame.Color
