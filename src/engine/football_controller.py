@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 
@@ -20,6 +21,8 @@ from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
 from src.engine.football_shop import (
     FootballShop,
+    FootballShopCard,
+    FootballShopSection,
     FootballShopState,
     FootballUpgrade,
 )
@@ -45,7 +48,8 @@ class FootballHumanDecision(str, Enum):
     CHOOSE_COACH = "choose_coach"
     DRAFT_PLAYER = "draft_player"
     SHOP = "shop"
-    START_NEXT_GAME = "start_next_game"
+    OPEN_NEXT_SHOP = "open_next_shop"
+    START_NEXT_GAME = "open_next_shop"
     OFFENSIVE_PLAY = "offensive_play"
     DEFENSIVE_SCHEME = "defensive_scheme"
     FOURTH_DOWN = "fourth_down"
@@ -69,7 +73,7 @@ class FootballGameControllerState:
 
 
 class FootballGameController:
-    """Coordinate drafting, the one-time shop, local AI, and regular-season games.
+    """Coordinate drafting, recurring shops, local AI, and regular-season games.
 
     Each random stream has its own seed: builder, shop, AI, and match. Team A
     is always the human roster and Team B is always the local AI roster.
@@ -89,6 +93,9 @@ class FootballGameController:
         ai_seed: int,
         match_seed: int,
         opponent_name: str = "Local AI",
+        shop_catalogs: Mapping[
+            FootballShopSection, tuple[FootballShopCard, ...]
+        ] | None = None,
     ) -> None:
         if not isinstance(team_name, str) or not team_name.strip():
             raise ValueError("Team name must be a non-empty string.")
@@ -108,7 +115,15 @@ class FootballGameController:
                 raise ValueError(f"{seed_name} seed must be an integer.")
 
         self._builder = FootballTeamBuilder(team_name, builder_seed)
-        self._shop_seed = shop_seed
+        self._shop_rng = random.Random(shop_seed)
+        self._shop_catalogs = (
+            {
+                section: tuple(cards)
+                for section, cards in shop_catalogs.items()
+            }
+            if shop_catalogs is not None
+            else None
+        )
         self._ai = FootballAI(
             FootballTeamSide.TEAM_B,
             difficulty,
@@ -158,7 +173,9 @@ class FootballGameController:
         if self._builder.completed:
             self._shop = FootballShop(
                 self._builder.build_roster(),
-                self._shop_seed,
+                rng=self._shop_rng,
+                catalogs=self._shop_catalogs,
+                game_number=self._game_number,
             )
             self._phase = FootballRunPhase.PRE_MATCH_SHOP
         return self.state
@@ -167,7 +184,30 @@ class FootballGameController:
         self, upgrade: FootballUpgrade | int
     ) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
-        self._require_shop().buy(upgrade)
+        self._require_shop().buy_upgrade(upgrade)
+        return self.state
+
+    def buy_shop_card(
+        self,
+        section: FootballShopSection,
+        card_id: str | int,
+    ) -> FootballGameControllerState:
+        self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
+        self._require_shop().buy_card(section, card_id)
+        return self.state
+
+    def unlock_shop_slot(
+        self,
+        section: FootballShopSection,
+        slot_number: int,
+    ) -> FootballGameControllerState:
+        self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
+        self._require_shop().unlock_slot(section, slot_number)
+        return self.state
+
+    def move_to_next_day(self) -> FootballGameControllerState:
+        self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
+        self._require_shop().move_to_next_day()
         return self.state
 
     def finish_shop(self) -> FootballGameControllerState:
@@ -176,11 +216,16 @@ class FootballGameController:
         self._start_match()
         return self.state
 
-    def start_next_game(self) -> FootballGameControllerState:
+    def enter_next_shop(self) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.READY_FOR_NEXT_GAME)
+        self._require_shop().open_next_visit(self._game_number + 1)
         self._game_number += 1
-        self._start_match()
+        self._phase = FootballRunPhase.PRE_MATCH_SHOP
         return self.state
+
+    def start_next_game(self) -> FootballGameControllerState:
+        """Compatibility alias; the next game now requires a fresh shop first."""
+        return self.enter_next_shop()
 
     def choose_offensive_play(
         self, action: OffensivePlayAction
@@ -213,7 +258,11 @@ class FootballGameController:
         return self.state
 
     def _start_match(self) -> None:
-        if self._shop is None or not self._shop.finished:
+        if (
+            self._shop is None
+            or not self._shop.finished
+            or self._shop.game_number != self._game_number
+        ):
             raise ValueError("The pre-match shop must be finished before a match.")
         opponent = self._ai.generate_opponent_roster()
         match_seed = self._match_seed_rng.getrandbits(64)
@@ -290,7 +339,7 @@ class FootballGameController:
         if self._phase is FootballRunPhase.PRE_MATCH_SHOP:
             return FootballHumanDecision.SHOP
         if self._phase is FootballRunPhase.READY_FOR_NEXT_GAME:
-            return FootballHumanDecision.START_NEXT_GAME
+            return FootballHumanDecision.OPEN_NEXT_SHOP
         if self._phase is not FootballRunPhase.MATCH or match is None:
             return None
 

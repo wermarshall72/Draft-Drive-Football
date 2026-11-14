@@ -25,6 +25,7 @@ from src.engine.football_controller import (
 )
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
+from src.engine.football_shop import FootballShopSection
 from src.ui.application import DesktopApplication
 from src.ui import football_run_screen as football_run_screen_module
 from src.ui.layout import LOGICAL_SIZE
@@ -187,7 +188,7 @@ def test_coach_and_eight_position_draft_are_controller_driven(
     assert state.phase is FootballRunPhase.PRE_MATCH_SHOP
     assert state.team_builder.completed
     assert set(state.team_builder.selected_players) == set(FootballPosition)
-    assert state.shop is not None and state.shop.remaining_budget == 6
+    assert state.shop is not None and state.shop.remaining_budget == 12
 
 
 def test_player_draft_cards_explain_partnership_and_inactive_perks(
@@ -271,14 +272,14 @@ def test_shop_purchase_and_finish_start_the_match(tmp_path: Path) -> None:
     assert controller is not None
     shop = controller.state.shop
     assert shop is not None
-    assert shop.remaining_budget == 6
+    assert shop.remaining_budget == 12
 
-    _activate(desktop, "BUY UPGRADE")
+    _activate(desktop, "BUY", index=0)
     purchased = controller.state.shop
     assert purchased is not None
-    assert purchased.remaining_budget == 6 - shop.offer[0].cost
+    assert purchased.remaining_budget == 12 - shop.offer[0].cost
     assert purchased.purchased_upgrades == (shop.offer[0],)
-    _activate(desktop, "BUY UPGRADE", index=1)
+    _activate(desktop, "BUY", index=1)
     purchased_twice = controller.state.shop
     assert purchased_twice is not None
     assert len(purchased_twice.purchased_upgrades) == 2
@@ -292,6 +293,78 @@ def test_shop_purchase_and_finish_start_the_match(tmp_path: Path) -> None:
     assert state.match is not None
     assert state.match.team_a.team_name == "Test Owls"
     assert state.match.team_b.team_name == "Local AI"
+
+
+def test_shop_sections_reroll_unlock_and_keyboard_purchase(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+
+    displayed: list[str] = []
+    original_draw_text = football_run_screen_module.draw_text
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    football_run_screen_module.draw_text = capture_text
+    try:
+        desktop.router.draw(_surface())
+    finally:
+        football_run_screen_module.draw_text = original_draw_text
+
+    joined = " ".join(displayed)
+    assert "THREE SHOPS  /  ONE SHARED AP BUDGET" in joined
+    assert "ACTION POINTS" in joined
+    assert "PLAYER UPGRADES" in joined
+    assert "PLAYS / SCHEMES" in joined
+    assert "COACH UPGRADES" in joined
+    assert "No play/scheme cards yet." in joined
+    assert "No coach upgrades yet." in joined
+    assert "Available after game 3." in joined
+    assert all(
+        upgrade.rarity.value.replace("_", " ").upper() in joined
+        for upgrade in controller.state.shop.offer
+    )
+
+    _activate(desktop, "BUY", keyboard=True)
+    after_purchase = controller.state.shop
+    assert after_purchase is not None and len(after_purchase.purchased_upgrades) == 1
+    _activate(desktop, "MOVE TO NEXT DAY  /  1 AP")
+    after_reroll = controller.state.shop
+    assert after_reroll is not None
+    assert after_reroll.day == 2
+    assert after_reroll.remaining_ap == 11 - after_purchase.purchased_upgrades[0].cost
+
+    _activate(desktop, "UNLOCK 4 AP", index=0)
+    unlocked = controller.state.shop
+    assert unlocked is not None
+    assert unlocked.section(FootballShopSection.PLAYER_UPGRADES).slots[3].unlocked
+    assert unlocked.remaining_ap == after_reroll.remaining_ap - 4
+    _activate(desktop, "FINISH SHOP / START MATCH", keyboard=True)
+    assert controller.state.phase is FootballRunPhase.MATCH
+
+
+def test_shop_at_zero_ap_stays_open_until_explicit_finish(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    for _ in range(12):
+        _activate(desktop, "MOVE TO NEXT DAY  /  1 AP")
+    assert controller.state.shop is not None
+    assert controller.state.shop.remaining_ap == 0
+    assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+
+    desktop.router.draw(_surface())
+    buttons = {button.label: button for button in desktop.run_screen.buttons}
+    assert not buttons["MOVE TO NEXT DAY  /  1 AP"].enabled
+    assert buttons["FINISH SHOP / START MATCH"].enabled
+    _activate(desktop, "FINISH SHOP / START MATCH")
+    assert controller.state.phase is FootballRunPhase.MATCH
 
 
 def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
@@ -382,7 +455,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     assert seen_offense and seen_defense and seen_fourth_down and seen_ai_play
     desktop.router.draw(_surface())
     assert any(
-        button.label in {"NEXT REGULAR-SEASON GAME", "RETURN TO MAIN MENU"}
+        button.label in {"OPEN NEXT GAME SHOP", "RETURN TO MAIN MENU"}
         for button in screen.buttons
     )
 
@@ -458,8 +531,10 @@ def test_result_routes_fired_and_game_ten_playoffs_without_bracket(
         state = controller.state
         if game_number < games:
             assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
-            _activate(desktop, "NEXT REGULAR-SEASON GAME")
+            _activate(desktop, "OPEN NEXT GAME SHOP")
             assert controller.state.game_number == game_number + 1
+            assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            _activate(desktop, "FINISH SHOP / START MATCH")
 
     final = controller.state
     assert final.phase is expected_phase
@@ -471,7 +546,7 @@ def test_result_routes_fired_and_game_ten_playoffs_without_bracket(
     assert not (tmp_path / "legacy-game.db").exists()
 
 
-def test_ready_for_next_game_button_starts_the_next_regular_season_match(
+def test_ready_for_next_game_button_opens_shop_before_the_next_match(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -483,7 +558,11 @@ def test_ready_for_next_game_button_starts_the_next_regular_season_match(
     controller = desktop.football_controller
     assert controller is not None
     assert controller.state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
-    _activate(desktop, "NEXT REGULAR-SEASON GAME", keyboard=True)
+    _activate(desktop, "OPEN NEXT GAME SHOP", keyboard=True)
+    assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+    assert controller.state.shop is not None
+    assert controller.state.shop.remaining_ap == 12
+    _activate(desktop, "FINISH SHOP / START MATCH")
     assert controller.state.phase is FootballRunPhase.MATCH
     assert controller.state.game_number == 2
     assert controller.state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY

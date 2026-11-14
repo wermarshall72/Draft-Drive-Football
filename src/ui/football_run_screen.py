@@ -22,7 +22,12 @@ from src.engine.football_controller import (
     FootballHumanDecision,
     FootballRunPhase,
 )
-from src.engine.football_shop import FootballShopState
+from src.engine.football_shop import (
+    FootballShopRarity,
+    FootballShopSection,
+    FootballShopSlotState,
+    FootballShopState,
+)
 from src.engine.football_team_builder import (
     PLAYER_DRAFT_ORDER,
     FootballPlayerCandidate,
@@ -73,6 +78,12 @@ _MATCH_BRASS = pygame.Color("#dfbd70")
 _MATCH_OPPONENT = pygame.Color("#d0785c")
 _MATCH_INK = pygame.Color("#15241a")
 _MATCH_FOCUS = pygame.Color("#f4d184")
+_RARITY_COLORS = {
+    FootballShopRarity.COMMON: pygame.Color("#a8b2a1"),
+    FootballShopRarity.UNCOMMON: pygame.Color("#68c58a"),
+    FootballShopRarity.RARE: pygame.Color("#df786d"),
+    FootballShopRarity.VERY_RARE: pygame.Color("#c18be8"),
+}
 
 
 class FootballRunScreen(Screen):
@@ -140,8 +151,13 @@ class FootballRunScreen(Screen):
                 "DRAFT / POSITION ORDER",
             ),
             FootballRunPhase.PRE_MATCH_SHOP: (
-                "Training room",
-                "PRE-MATCH / SIX TRAINING POINTS",
+                "Coaching shop",
+                (
+                    f"GAME {state.game_number:02d} / "
+                    f"SHOP DAY {state.shop.day:02d}"
+                    if state.shop is not None
+                    else f"GAME {state.game_number:02d} / PRE-GAME SHOP"
+                ),
             ),
             FootballRunPhase.READY_FOR_NEXT_GAME: (
                 "Final whistle",
@@ -1194,12 +1210,12 @@ class FootballRunScreen(Screen):
             raise RuntimeError("The controller did not provide the active shop state.")
         draw_text(
             surface,
-            "UPGRADE YOUR LINEUP",
+            "THREE SHOPS  /  ONE SHARED AP BUDGET",
             (content.left + 2, content.top + 2),
             self._label_font,
             self.theme.text,
         )
-        points_label = f"{shop.remaining_budget} TRAINING POINTS"
+        points_label = f"{shop.remaining_ap} ACTION POINTS"
         points_width = self._label_font.size(points_label)[0] + 24
         points_rect = pygame.Rect(
             content.right - points_width,
@@ -1215,105 +1231,84 @@ class FootballRunScreen(Screen):
             self._small_font,
             self.theme.secondary_accent,
         )
-        gap = 12
-        cards_top = content.top + 37
-        card_width = (content.width - gap * 2) // 3
-        card_height = content.bottom - cards_top - 47
+        draw_text(
+            surface,
+            "Unspent AP expires when you finish the shop.",
+            (content.left + 2, content.top + 27),
+            self._small_font,
+            self.theme.muted,
+        )
+        gap = 10
+        panel_top = content.top + 50
+        panel_bottom = content.bottom - 56
+        panel_width = (content.width - gap * 2) // 3
+        panel_height = max(1, panel_bottom - panel_top)
         buttons: list[Button] = []
-        for index, upgrade in enumerate(shop.offer):
-            rect = pygame.Rect(
-                content.left + index * (card_width + gap),
-                cards_top,
-                card_width,
-                card_height,
+        for section_index, section_id in enumerate(FootballShopSection):
+            section = shop.section(section_id)
+            panel = pygame.Rect(
+                content.left + section_index * (panel_width + gap),
+                panel_top,
+                panel_width,
+                panel_height,
             )
-            purchased = upgrade in shop.purchased_upgrades
-            affordable = upgrade.cost <= shop.remaining_budget
-            draw_panel(
-                surface,
-                rect,
-                self.theme,
-                selected=purchased,
-                fill=self.theme.panel_alt if purchased else self.theme.panel,
-            )
+            draw_panel(surface, panel, self.theme, fill=self.theme.panel)
             draw_text(
                 surface,
-                f"{upgrade.stat.value.upper()} TRAINING",
-                (rect.left + 18, rect.top + 18),
-                self._title_font,
-                self.theme.text,
-            )
-            draw_text(
-                surface,
-                "TARGET",
-                (rect.left + 18, rect.top + 64),
-                self._small_font,
-                self.theme.muted,
-            )
-            draw_text(
-                surface,
-                _POSITION_LABELS[upgrade.position],
-                (rect.left + 18, rect.top + 83),
+                section.title,
+                (panel.left + 12, panel.top + 11),
                 self._label_font,
                 self.theme.text,
             )
-            draw_text(
-                surface,
-                upgrade.stat.value.upper(),
-                (rect.left + 18, rect.top + 127),
-                self._small_font,
-                self.theme.muted,
-            )
-            draw_text(
-                surface,
-                f"+{upgrade.amount:g}",
-                (rect.left + 18, rect.top + 148),
-                self._display_font,
-                self.theme.secondary_accent,
-            )
-            reason = (
-                "PURCHASED"
-                if purchased
-                else "AVAILABLE"
-                if affordable
-                else "NEED MORE POINTS"
-            )
-            draw_text(
-                surface,
-                f"COST  {upgrade.cost} TP",
-                (rect.left + 18, rect.bottom - 90),
-                self._label_font,
-                self.theme.text,
-            )
-            draw_text(
-                surface,
-                reason,
-                (rect.left + 18, rect.bottom - 68),
-                self._small_font,
-                self.theme.secondary_accent if affordable else self.theme.muted,
-            )
-            button_rect = pygame.Rect(
-                rect.left + 14,
-                rect.bottom - 48,
-                rect.width - 28,
-                34,
-            )
-            buttons.append(
-                Button(
-                    "PURCHASED" if purchased else "BUY UPGRADE",
-                    lambda choice=index: self._submit(
-                        lambda: self._require_controller().buy_upgrade(choice)
-                    ),
-                    button_rect,
-                    enabled=affordable and not purchased,
-                    variant="primary",
+            if not section.catalog_available:
+                status = (
+                    "No play/scheme cards yet."
+                    if section_id is FootballShopSection.PLAYS_SCHEMES
+                    else "No coach upgrades yet."
+                    if section_id is FootballShopSection.COACH_UPGRADES
+                    else "No eligible player upgrades."
                 )
-            )
+                draw_text(
+                    surface,
+                    status,
+                    (panel.left + 12, panel.top + 31),
+                    self._small_font,
+                    self.theme.muted,
+                )
+            row_top = panel.top + 54
+            row_bottom = panel.bottom - 10
+            row_height = max(1, (row_bottom - row_top) // len(section.slots))
+            for slot_index, slot in enumerate(section.slots):
+                row = pygame.Rect(
+                    panel.left + 8,
+                    row_top + slot_index * row_height,
+                    panel.width - 16,
+                    max(1, row_height - 5),
+                )
+                self._draw_shop_slot(
+                    surface, row, slot, buttons, shop.remaining_ap
+                )
 
+        footer_top = content.bottom - 44
+        reroll_rect = pygame.Rect(
+            content.left,
+            footer_top,
+            220,
+            36,
+        )
+        buttons.append(
+            Button(
+                "MOVE TO NEXT DAY  /  1 AP",
+                self._move_to_next_day,
+                reroll_rect,
+                enabled=shop.remaining_ap >= 1,
+                variant="quiet",
+            )
+        )
         finish_rect = pygame.Rect(
-            content.right - 244,
-            content.bottom - 40,
-            244,
+            content.right - 260,
+            footer_top,
+            260,
             36,
         )
         buttons.append(
@@ -1326,6 +1321,135 @@ class FootballRunScreen(Screen):
         )
         self._set_buttons(buttons)
         self._draw_buttons(surface)
+
+    def _draw_shop_slot(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        slot: FootballShopSlotState,
+        buttons: list[Button],
+        remaining_ap: int,
+    ) -> None:
+        card = slot.card
+        purchased = slot.purchased
+        fill = self.theme.panel_alt if purchased else self.theme.panel
+        pygame.draw.rect(surface, fill, rect, border_radius=6)
+        pygame.draw.rect(surface, self.theme.border_soft, rect, width=1, border_radius=6)
+        text_left = rect.left + 8
+        button_width = min(94, max(68, rect.width // 4))
+        button_rect = pygame.Rect(
+            rect.right - button_width - 5,
+            rect.centery - 14,
+            button_width,
+            28,
+        )
+        text_width = max(1, button_rect.left - text_left - 8)
+
+        if not slot.unlocked:
+            cost = slot.unlock_cost
+            draw_text(
+                surface,
+                f"SLOT {slot.slot_number}  /  LOCKED",
+                (text_left, rect.top + 5),
+                self._small_font,
+                self.theme.text,
+            )
+            if slot.disabled_reason:
+                draw_text(
+                    surface,
+                    _fit_text(slot.disabled_reason, self._small_font, text_width),
+                    (text_left, rect.top + 25),
+                    self._small_font,
+                    self.theme.muted,
+                )
+            buttons.append(
+                Button(
+                    f"UNLOCK {cost} AP" if cost is not None else "LOCKED",
+                    lambda section=slot.section, number=slot.slot_number: self._submit(
+                        lambda: self._require_controller().unlock_shop_slot(
+                            section, number
+                        )
+                    ),
+                    button_rect,
+                    enabled=slot.can_unlock,
+                    variant="quiet",
+                )
+            )
+            return
+
+        if card is None:
+            draw_text(
+                surface,
+                f"SLOT {slot.slot_number}  /  EMPTY",
+                (text_left, rect.top + 5),
+                self._small_font,
+                self.theme.text,
+            )
+            reason = slot.disabled_reason or "No eligible cards."
+            draw_text(
+                surface,
+                _fit_text(reason, self._small_font, text_width),
+                (text_left, rect.top + 25),
+                self._small_font,
+                self.theme.muted,
+            )
+            return
+
+        rarity_label = card.rarity.value.replace("_", " ").upper()
+        draw_text(
+            surface,
+            _fit_text(card.name, self._small_font, text_width),
+            (text_left, rect.top + 4),
+            self._small_font,
+            self.theme.text,
+        )
+        draw_text(
+            surface,
+            _fit_text(
+                f"{rarity_label}  /  {card.cost} AP",
+                self._small_font,
+                text_width,
+            ),
+            (text_left, rect.top + 23),
+            self._small_font,
+            _RARITY_COLORS[card.rarity],
+        )
+        if purchased:
+            reason = "PURCHASED"
+        elif card.cost > remaining_ap:
+            reason = f"NEED {card.cost - remaining_ap} MORE AP"
+        elif card.upgrade is not None:
+            reason = f"{card.upgrade.stat.value.upper()}  /  {_POSITION_LABELS[card.upgrade.position]}"
+        else:
+            reason = _fit_text(card.description, self._small_font, text_width)
+        if rect.height >= 58:
+            draw_text(
+                surface,
+                _fit_text(reason, self._small_font, text_width),
+                (text_left, rect.top + 41),
+                self._small_font,
+                self.theme.secondary_accent if not purchased else self.theme.muted,
+            )
+        button_label = (
+            "PURCHASED"
+            if purchased
+            else f"NEED {card.cost - remaining_ap} AP"
+            if card.cost > remaining_ap
+            else "BUY"
+        )
+        buttons.append(
+            Button(
+                button_label,
+                lambda section=slot.section, card_id=card.card_id: self._submit(
+                    lambda: self._require_controller().buy_shop_card(
+                        section, card_id
+                    )
+                ),
+                button_rect,
+                enabled=not purchased and card.cost <= remaining_ap,
+                variant="primary" if not purchased else "quiet",
+            )
+        )
 
     def _draw_match(
         self,
@@ -1691,9 +1815,9 @@ class FootballRunScreen(Screen):
 
         if state.phase is FootballRunPhase.READY_FOR_NEXT_GAME:
             stage = "REGULAR SEASON"
-            explanation = "Next up: regular-season game."
-            primary_label = "NEXT REGULAR-SEASON GAME"
-            primary_action = self._start_next_game
+            explanation = "Next up: a fresh coaching shop before the game."
+            primary_label = "OPEN NEXT GAME SHOP"
+            primary_action = self._open_next_shop
         elif state.phase is FootballRunPhase.FIRED:
             stage = "RUN OVER  /  THREE LOSSES"
             explanation = "Your season is over."
@@ -1811,8 +1935,11 @@ class FootballRunScreen(Screen):
         finally:
             self.state = self._require_controller().state
 
-    def _start_next_game(self) -> None:
-        self._submit(self._require_controller().start_next_game)
+    def _open_next_shop(self) -> None:
+        self._submit(self._require_controller().enter_next_shop)
+
+    def _move_to_next_day(self) -> None:
+        self._submit(self._require_controller().move_to_next_day)
 
     def _request_exit(self) -> None:
         self.confirm_exit = True
