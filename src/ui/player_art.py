@@ -1,6 +1,39 @@
-"""Original placeholder football figure, drawn in the selected team colors."""
+"""Original generated player illustrations with runtime team-color masks."""
+
+from functools import lru_cache
+from pathlib import Path
 
 import pygame
+
+_ASSET_DIR = Path(__file__).parent / "assets" / "draft_players"
+_PLATFORM_SHADOW = pygame.Color("#101712")
+_PLATFORM_DARK = pygame.Color("#536846")
+_PLATFORM_LIGHT = pygame.Color("#879257")
+_PLATFORM_HIGHLIGHT = pygame.Color("#bac184")
+
+
+@lru_cache(maxsize=3)
+def _player_layers(pose: int) -> tuple[pygame.Surface, pygame.Surface, pygame.Surface]:
+    return tuple(
+        pygame.image.load(_ASSET_DIR / f"player_{pose}_{layer}.png")
+        for layer in ("base", "primary_mask", "secondary_mask")
+    )
+
+
+@lru_cache(maxsize=32)
+def _tinted_player(
+    pose: int,
+    primary: tuple[int, int, int],
+    secondary: tuple[int, int, int],
+) -> pygame.Surface:
+    base, primary_mask, secondary_mask = _player_layers(pose)
+    sprite = base.copy()
+    for mask, color in zip((primary_mask, secondary_mask), (primary, secondary)):
+        tint = pygame.Surface(mask.get_size(), pygame.SRCALPHA)
+        tint.fill((*color, 255))
+        tint.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        sprite.blit(tint, (0, 0))
+    return sprite
 
 
 def draw_draft_player(
@@ -8,49 +41,31 @@ def draw_draft_player(
     rect: pygame.Rect,
     primary: pygame.Color,
     secondary: pygame.Color,
+    *,
+    pose: int = 0,
 ) -> None:
-    """Draw a stylized, anonymous uniformed player; this is not production art."""
-    figure = pygame.Surface((180, 230), pygame.SRCALPHA)
-    dark = pygame.Color("#202a27")
-    light = pygame.Color("#f0e8d4")
-    shadow = pygame.Color("#17221e")
+    """Draw a detailed, original prospect sprite in the saved team colors."""
+    pose %= 3
+    pygame.draw.ellipse(
+        surface,
+        _PLATFORM_SHADOW,
+        pygame.Rect(rect.centerx - 76, rect.bottom - 20, 152, 15),
+    )
+    platform = pygame.Rect(rect.centerx - 75, rect.bottom - 25, 150, 21)
+    pygame.draw.ellipse(surface, _PLATFORM_DARK, platform)
+    pygame.draw.ellipse(surface, _PLATFORM_LIGHT, platform.inflate(-4, -5))
+    pygame.draw.arc(
+        surface,
+        _PLATFORM_HIGHLIGHT,
+        platform.inflate(-12, -8),
+        0.1,
+        2.9,
+        2,
+    )
 
-    pygame.draw.ellipse(figure, (23, 34, 30, 65), (29, 215, 122, 11))
-    # Cleats, legs, pants, and jersey are separate pieces of equipment.
-    pygame.draw.polygon(figure, dark, [(57, 204), (77, 204), (76, 218), (48, 218)])
-    pygame.draw.polygon(figure, dark, [(103, 204), (123, 204), (132, 218), (104, 218)])
-    pygame.draw.polygon(figure, light, [(59, 144), (83, 146), (78, 208), (57, 208)])
-    pygame.draw.polygon(figure, light, [(97, 146), (121, 144), (123, 208), (102, 208)])
-    pygame.draw.line(figure, secondary, (60, 158), (59, 200), 4)
-    pygame.draw.line(figure, secondary, (120, 158), (121, 200), 4)
-    pygame.draw.polygon(figure, secondary, [(56, 125), (124, 125), (121, 162),
-                                           (96, 165), (90, 151), (84, 165), (59, 162)])
-    pygame.draw.polygon(figure, light, [(32, 81), (46, 83), (39, 132), (31, 147),
-                                       (20, 141), (23, 125)])
-    pygame.draw.polygon(figure, light, [(148, 81), (134, 83), (141, 132), (149, 147),
-                                       (160, 141), (157, 125)])
-    pygame.draw.polygon(figure, primary, [(59, 53), (44, 58), (27, 74), (31, 101),
-                                         (48, 104), (53, 141), (127, 141),
-                                         (132, 104), (149, 101), (153, 74),
-                                         (136, 58), (121, 53)])
-    pygame.draw.polygon(figure, secondary, [(29, 79), (46, 70), (49, 91), (31, 99)])
-    pygame.draw.polygon(figure, secondary, [(151, 79), (134, 70), (131, 91), (149, 99)])
-    pygame.draw.line(figure, light, (55, 134), (125, 134), 2)
-    pygame.draw.polygon(figure, light, [(73, 82), (83, 82), (83, 112), (72, 112),
-                                       (72, 105), (76, 105), (76, 90), (73, 92)])
-    pygame.draw.polygon(figure, light, [(94, 82), (109, 82), (109, 112), (94, 112)])
-    pygame.draw.rect(figure, primary, (99, 88, 5, 18))
-    pygame.draw.polygon(figure, shadow, [(70, 51), (110, 51), (117, 61),
-                                        (104, 68), (76, 68), (63, 61)])
-    pygame.draw.ellipse(figure, primary, (59, 4, 62, 58))
-    pygame.draw.polygon(figure, secondary, [(84, 5), (96, 5), (97, 43), (83, 43)])
-    pygame.draw.polygon(figure, dark, [(63, 31), (117, 31), (113, 48),
-                                     (103, 57), (77, 57), (67, 48)])
-    pygame.draw.polygon(figure, light, [(70, 36), (110, 36), (106, 44), (74, 44)])
-    pygame.draw.lines(figure, light, False, [(65, 34), (64, 51), (76, 60),
-                                            (104, 60), (116, 51), (115, 34)], 3)
-    pygame.draw.line(figure, light, (68, 48), (112, 48), 3)
-    pygame.draw.line(figure, light, (76, 39), (76, 56), 2)
-    pygame.draw.line(figure, light, (104, 39), (104, 56), 2)
-    scaled = pygame.transform.smoothscale(figure, rect.size)
-    surface.blit(scaled, rect)
+    sprite = _tinted_player(pose, tuple(primary[:3]), tuple(secondary[:3]))
+    height = max(1, rect.height - 12)
+    width = min(rect.width - 4, round(height * 0.64))
+    scaled = pygame.transform.smoothscale(sprite, (width, height))
+    destination = scaled.get_rect(midbottom=(rect.centerx, rect.bottom - 17))
+    surface.blit(scaled, destination)

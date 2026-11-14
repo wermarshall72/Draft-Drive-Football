@@ -96,6 +96,8 @@ _STAFF_INK = pygame.Color("#182620")
 _STAFF_MUTED = pygame.Color("#303c35")
 _COACH_GOLD = pygame.Color("#f1ce7b")
 _COACH_CHALK = pygame.Color("#f5ead1")
+_DRAFT_PURPLE = pygame.Color("#a600e8")
+_DRAFT_PURPLE_PRESSED = pygame.Color("#7800b5")
 _STAFF_CARD = pygame.Color("#242d30")
 _STAFF_PERK = pygame.Color("#354044")
 _STAFF_POSITIVE = pygame.Color("#9fe4ad")
@@ -137,6 +139,8 @@ class FootballRunScreen(Screen):
         self._draft_keyboard_inspection = False
         self._draft_hover_index: int | None = None
         self._draft_card_rects: list[pygame.Rect] = []
+        self._draft_inspection_region: pygame.Rect | None = None
+        self._draft_detail_rect: pygame.Rect | None = None
         self._coach_title_font = coach_font(40, handwritten=True)
         self._coach_name_font = coach_font(23, bold=True)
         self._coach_detail_font = coach_font(15)
@@ -155,6 +159,13 @@ class FootballRunScreen(Screen):
         self._staff_main_font = staff_font(18, semibold=True)
         self._staff_button_font = staff_font(17, semibold=True)
         self._staff_dialog_title_font = staff_font(27, semibold=True)
+        self._draft_title_font = staff_font(36, semibold=True)
+        self._draft_name_font = staff_font(25, semibold=True)
+        self._draft_stat_font = staff_font(21, semibold=True)
+        self._draft_label_font = staff_font(14, semibold=True)
+        self._draft_detail_font = staff_font(15)
+        self._draft_small_font = staff_font(13)
+        self._draft_button_font = staff_font(17, semibold=True)
         self._coach_focus_changed_at = 0
 
     def begin(self, controller: FootballGameController) -> None:
@@ -170,6 +181,8 @@ class FootballRunScreen(Screen):
         self._draft_keyboard_inspection = False
         self._draft_hover_index = None
         self._draft_card_rects = []
+        self._draft_inspection_region = None
+        self._draft_detail_rect = None
         self._coach_focus_changed_at = pygame.time.get_ticks()
 
     def handle_event(self, event: pygame.event.Event) -> None:
@@ -213,13 +226,21 @@ class FootballRunScreen(Screen):
         if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
             if event.type == pygame.KEYDOWN:
                 self._draft_keyboard_inspection = True
+                self._draft_hover_index = None
             elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
                 self._draft_keyboard_inspection = False
-                self._draft_hover_index = next(
+                hovered_index = next(
                     (index for index, rect in enumerate(self._draft_card_rects)
                      if rect.collidepoint(event.pos)),
                     None,
                 )
+                if hovered_index is not None:
+                    self._draft_hover_index = hovered_index
+                elif (
+                    self._draft_inspection_region is None
+                    or not self._draft_inspection_region.collidepoint(event.pos)
+                ):
+                    self._draft_hover_index = None
             elif event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
                 self._draft_hover_index = None
@@ -245,9 +266,9 @@ class FootballRunScreen(Screen):
             self._current_state().phase is FootballRunPhase.PLAYER_DRAFT
             and not self.confirm_exit
             and event.type == pygame.MOUSEMOTION
-            and self._draft_hover_index is not None
+            and self.focus_index != previous_focus
         ):
-            self._focus(self._draft_hover_index)
+            self._focus(previous_focus)
         if (
             self._current_state().phase is FootballRunPhase.COACH_DRAFT
             and self.focus_index != previous_focus
@@ -314,7 +335,9 @@ class FootballRunScreen(Screen):
 
         exit_rect = (
             pygame.Rect(1097, 37, 145, 32)
-            if state.phase in (FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT)
+            if state.phase is FootballRunPhase.COACH_DRAFT
+            else pygame.Rect(1097, 10, 145, 32)
+            if state.phase is FootballRunPhase.PLAYER_DRAFT
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
         )
         self.buttons.append(
@@ -342,7 +365,9 @@ class FootballRunScreen(Screen):
         if self.last_error is not None:
             error_rect = pygame.Rect(
                 layout.margin,
-                layout.height - 49,
+                layout.height - 23
+                if state.phase is FootballRunPhase.PLAYER_DRAFT
+                else layout.height - 49,
                 layout.width - layout.margin * 2,
                 18,
             )
@@ -350,7 +375,10 @@ class FootballRunScreen(Screen):
                 surface,
                 f"CHECK: {self.last_error}",
                 error_rect.topleft,
-                self._staff_small_font if state.phase is FootballRunPhase.COACH_DRAFT
+                self._staff_small_font
+                if state.phase is FootballRunPhase.COACH_DRAFT
+                else self._draft_label_font
+                if state.phase is FootballRunPhase.PLAYER_DRAFT
                 else self._small_font,
                 self.theme.danger,
             )
@@ -1245,6 +1273,47 @@ class FootballRunScreen(Screen):
                 )
                 surface.blit(label, label.get_rect(center=rect.center))
                 continue
+            if button.variant == "draft-select":
+                pressed = self.pressed_index == index and button.enabled
+                hovered = self.hover_index == index and button.enabled
+                rect = button.rect.move(0, 2) if pressed else button.rect
+                fill = (
+                    _DRAFT_PURPLE_PRESSED
+                    if pressed else _DRAFT_PURPLE
+                ) if button.enabled else pygame.Color("#b9beb9")
+                pygame.draw.rect(surface, fill, rect, border_radius=8)
+                pygame.draw.rect(
+                    surface,
+                    readable_ink(fill),
+                    rect,
+                    1,
+                    border_radius=8,
+                )
+                if hovered:
+                    pygame.draw.rect(
+                        surface,
+                        pygame.Color("#f5ead1"),
+                        rect.inflate(-3, -3),
+                        2,
+                        border_radius=6,
+                    )
+                if button.focused:
+                    pygame.draw.rect(surface, "#111416", rect.inflate(7, 7), 3,
+                                     border_radius=11)
+                    pygame.draw.rect(surface, "#ffffff", rect.inflate(3, 3), 1,
+                                     border_radius=9)
+                if pressed:
+                    pygame.draw.line(
+                        surface, readable_ink(fill),
+                        (rect.left + 12, rect.top + 4),
+                        (rect.right - 12, rect.top + 4), 2,
+                    )
+                position = button.label.removeprefix("DRAFT ").strip()
+                label = self._draft_button_font.render(
+                    f"Draft {position}", True, readable_ink(fill)
+                )
+                surface.blit(label, label.get_rect(center=rect.center))
+                continue
             active = button.enabled and (
                 button.focused or self.hover_index == index
             )
@@ -1275,127 +1344,335 @@ class FootballRunScreen(Screen):
         state: FootballGameControllerState,
     ) -> None:
         builder = state.team_builder
-        gap = 6
-        cell_width = (content.width - gap * 7) // 8
+        completed = len(builder.selected_players)
+        required = builder.required_position
+        current_label = (
+            _draft_position_label(required) if required is not None else "Complete"
+        )
+        draw_text(
+            surface,
+            f"Pick {completed + 1} of {len(PLAYER_DRAFT_ORDER)}  ·  {current_label}",
+            (content.left + 2, content.top),
+            self._draft_label_font,
+            _COACH_CHALK,
+        )
+        remaining_label = f"{len(PLAYER_DRAFT_ORDER) - completed} picks remaining"
+        draw_text(
+            surface,
+            remaining_label,
+            (content.right - self._draft_small_font.size(remaining_label)[0],
+             content.top + 2),
+            self._draft_small_font,
+            _COACH_CHALK,
+        )
+
+        gap = 5
+        cell_width = (
+            content.width - gap * (len(PLAYER_DRAFT_ORDER) - 1)
+        ) // len(PLAYER_DRAFT_ORDER)
+        progress_top = content.top + 22
+        progress_height = 58
         for index, position in enumerate(PLAYER_DRAFT_ORDER):
-            rect = pygame.Rect(content.left + index * (cell_width + gap),
-                               content.top, cell_width, 68)
+            rect = pygame.Rect(
+                content.left + index * (cell_width + gap),
+                progress_top,
+                cell_width,
+                progress_height,
+            )
             selected = builder.selected_players.get(position)
             current = position is builder.required_position
-            pygame.draw.rect(surface, _COACH_PAPER if selected else "#213c32", rect)
-            pygame.draw.rect(surface, _COACH_GOLD if current else "#7b806b", rect,
-                             3 if current else 1)
-            color = _COACH_INK if selected else _COACH_CHALK
-            status = "SIGNED" if selected else ("ON THE CLOCK" if current else "UP NEXT")
-            draw_text(surface, _coach_position_label(position), (rect.left + 8, rect.top + 5),
-                      self._coach_main_font, color)
-            status_pos = (
-                (rect.right - 8 - self._coach_small_font.size(status)[0], rect.top + 8)
-                if selected else (rect.left + 8, rect.top + 29)
+            fill = _STAFF_PAPER if selected else (
+                pygame.Color("#253932") if current else pygame.Color("#202a27")
             )
-            draw_text(surface, status, status_pos, self._coach_small_font,
-                      _COACH_GREEN if selected else _COACH_GOLD if current else "#a5b3a5")
+            pygame.draw.rect(surface, fill, rect, border_radius=6)
+            pygame.draw.rect(
+                surface,
+                _DRAFT_PURPLE if current else pygame.Color("#64706a"),
+                rect,
+                2 if current else 1,
+                border_radius=6,
+            )
+            text_color = _STAFF_INK if selected else _COACH_CHALK
+            status = "Drafted" if selected else ("Current pick" if current else "Up next")
+            draw_text(
+                surface,
+                _draft_position_label(position),
+                (rect.left + 7, rect.top + 4),
+                self._draft_label_font,
+                text_color,
+            )
+            draw_text(
+                surface,
+                status,
+                (rect.left + 7, rect.top + 21),
+                self._draft_small_font,
+                _STAFF_INK if selected else (
+                    _DRAFT_PURPLE if current else pygame.Color("#c0c6c2")
+                ),
+            )
             if selected:
-                draw_wrapped_text(surface, selected.name,
-                                  pygame.Rect(rect.left + 8, rect.top + 27, rect.width - 16, 38),
-                                  self._coach_detail_font, _COACH_INK, line_gap=0)
+                draw_wrapped_text(
+                    surface,
+                    selected.name,
+                    pygame.Rect(rect.left + 7, rect.top + 37, rect.width - 14, 18),
+                    self._draft_small_font,
+                    _STAFF_INK,
+                    line_gap=0,
+                )
 
         offers = tuple(candidate for candidate in builder.current_offer
                        if isinstance(candidate, FootballPlayerCandidate))
         gap = 16
-        card_top = content.top + 79
+        card_top = progress_top + progress_height + 10
         card_width = (content.width - gap * 2) // 3
+        details_height = 174
+        detail_top = content.bottom - details_height
+        choice_bottom = detail_top - 9
         self._draft_card_rects = [
-            pygame.Rect(content.left + index * (card_width + gap), card_top, card_width, 317)
+            pygame.Rect(
+                content.left + index * (card_width + gap),
+                card_top,
+                card_width,
+                choice_bottom - card_top,
+            )
             for index in range(len(offers))
         ]
+        details = pygame.Rect(
+            content.left,
+            detail_top,
+            content.width,
+            details_height,
+        )
+        self._draft_detail_rect = details
+        self._draft_inspection_region = pygame.Rect(
+            content.left,
+            card_top,
+            content.width,
+            content.bottom - card_top,
+        )
         inspected_index = self.focus_index if self._draft_keyboard_inspection else self._draft_hover_index
-        inspected = offers[inspected_index] if inspected_index is not None and 0 <= inspected_index < len(offers) else None
+        inspected = (
+            offers[inspected_index]
+            if inspected_index is not None and 0 <= inspected_index < len(offers)
+            else None
+        )
         buttons: list[Button] = []
         for index, (candidate, rect) in enumerate(zip(offers, self._draft_card_rects)):
-            active = inspected_index == index
-            focused = self.focus_index == index
-            pygame.draw.rect(surface, "#171b17", rect.move(5, 6))
-            pygame.draw.rect(surface, _COACH_PAPER, rect)
-            pygame.draw.rect(surface, _COACH_GOLD if focused or active else "#9e8c6b",
-                             rect, 3 if focused or active else 1)
-            draw_text(surface, _fit_text(candidate.name.upper(), self._coach_name_font, rect.width - 36),
-                      (rect.left + 18, rect.top + 10), self._coach_name_font, _COACH_INK)
-            portrait = pygame.Rect(rect.centerx - 57, rect.top + 40, 114, 146)
-            pygame.draw.line(surface, "#b7ad92", (rect.left + 36, rect.top + 185),
-                             (rect.right - 36, rect.top + 185), 1)
-            draw_draft_player(surface, portrait, self.theme.primary, self.theme.secondary)
+            title_width = rect.width - 80
+            draw_text(
+                surface,
+                _fit_text(candidate.name, self._draft_name_font, title_width),
+                (rect.left + 4, rect.top + 1),
+                self._draft_name_font,
+                _COACH_CHALK,
+            )
+            name_width = 62
+            name_rect = pygame.Rect(
+                rect.right - name_width - 4,
+                rect.top + 2,
+                name_width,
+                27,
+            )
+            pygame.draw.rect(surface, "#202a27", name_rect, border_radius=7)
+            pygame.draw.rect(
+                surface, "#64706a", name_rect, 1, border_radius=7
+            )
+            draw_text(
+                surface,
+                _draft_position_label(candidate.position).upper(),
+                (name_rect.left + 7, name_rect.top + 6),
+                self._draft_small_font,
+                _COACH_CHALK,
+            )
+
+            if inspected_index == index:
+                pygame.draw.line(
+                    surface,
+                    _DRAFT_PURPLE,
+                    (rect.left + 4, rect.top + 31),
+                    (rect.left + min(title_width, 174), rect.top + 31),
+                    3,
+                )
+            portrait = pygame.Rect(rect.centerx - 90, rect.top + 34, 180, 185)
+            draw_draft_player(
+                surface, portrait, self.theme.primary, self.theme.secondary, pose=index
+            )
+
+            strip = pygame.Rect(rect.left + 4, rect.bottom - 105, rect.width - 8, 62)
+            pygame.draw.rect(surface, "#111b20", strip, border_radius=10)
+            pygame.draw.rect(surface, "#718087", strip, 2, border_radius=10)
             player = candidate.player
-            metrics = (("POWER", str(player.power)),
-                       ("VOLATILITY", _draft_percentage(player.volatility)),
-                       ("STAMINA", _draft_percentage(player.stamina)))
+            metrics = (
+                ("Power", str(player.power)),
+                ("Volatility", _draft_percentage(player.volatility)),
+                ("Stamina", _draft_percentage(player.stamina)),
+            )
             for stat_index, (label, value) in enumerate(metrics):
-                x = rect.left + 18 + stat_index * ((rect.width - 36) // 3)
-                draw_text(surface, label, (x, rect.top + 198), self._coach_small_font, _COACH_MUTED)
-                draw_text(surface, value, (x, rect.top + 216), self._coach_name_font, _COACH_INK)
+                stat_width = strip.width // 3
+                x = strip.left + 12 + stat_index * stat_width
+                draw_text(
+                    surface,
+                    label,
+                    (x, strip.top + 7),
+                    self._draft_small_font,
+                    pygame.Color("#c0c9c8"),
+                )
+                draw_text(
+                    surface,
+                    value,
+                    (x, strip.top + 27),
+                    self._draft_stat_font,
+                    _COACH_CHALK,
+                )
+                if stat_index < len(metrics) - 1:
+                    pygame.draw.line(
+                        surface,
+                        pygame.Color("#4b5a5f"),
+                        (strip.left + (stat_index + 1) * stat_width, strip.top + 10),
+                        (strip.left + (stat_index + 1) * stat_width, strip.bottom - 10),
+                        1,
+                    )
             buttons.append(Button(
                 f"DRAFT {candidate.position.value}",
                 lambda choice=index, position=candidate.position: self._submit(
                     lambda: self._require_controller().choose_player(position, choice)),
-                pygame.Rect(rect.left + 16, rect.bottom - 48, rect.width - 32, 36),
+                pygame.Rect(rect.left + 10, rect.bottom - 40, rect.width - 20, 34),
                 variant="draft-select",
             ))
-        self._set_buttons(buttons)
-        details = pygame.Rect(content.left, card_top + 330, content.width,
-                              content.bottom - card_top - 330)
-        self._draw_draft_details(surface, details, inspected)
+        self.buttons = buttons
+        self._draw_draft_details(
+            surface,
+            details,
+            inspected,
+            keyboard_inspected=self._draft_keyboard_inspection,
+        )
 
     def _draw_draft_backdrop(self, surface: pygame.Surface) -> None:
         draw_recruiting_table(surface)
-        draw_text(surface, "RECRUITING  /  PLAYER DRAFT", (40, 10),
-                  self._coach_small_font, _COACH_GOLD)
-        draw_text(surface, "Build your roster", (38, 26),
-                  self._coach_title_font, _COACH_CHALK)
-        draw_text(surface, _fit_text(self.team_name.upper(), self._coach_small_font, 250),
-                  (820, 46), self._coach_small_font, _COACH_CHALK)
+        draw_text(
+            surface,
+            "Build your roster",
+            (38, 8),
+            self._draft_title_font,
+            _COACH_CHALK,
+        )
 
     def _draw_draft_details(
         self, surface: pygame.Surface, rect: pygame.Rect,
         candidate: FootballPlayerCandidate | None,
+        *,
+        keyboard_inspected: bool = False,
     ) -> None:
-        pygame.draw.rect(surface, "#101c18", rect.move(5, 6))
-        pygame.draw.rect(surface, "#213c32", rect)
-        pygame.draw.rect(surface, "#6b7b68", rect, 1)
-        pygame.draw.line(surface, _COACH_GOLD, (rect.left + 14, rect.top),
-                         (rect.left + 128, rect.top), 3)
+        pygame.draw.rect(surface, "#111b20", rect, border_radius=9)
+        pygame.draw.rect(surface, "#718087", rect, 1, border_radius=9)
+        draw_text(
+            surface,
+            "Generic player illustration · not a portrait",
+            (rect.left + 18, rect.bottom - 17),
+            self._draft_small_font,
+            pygame.Color("#aeb8b7"),
+        )
         if candidate is None:
-            draw_text(surface, "SCOUT THE PROSPECTS", (rect.left + 24, rect.top + 22),
-                      self._coach_section_font, _COACH_CHALK)
-            draw_text(surface, "Hover a player or use Tab / arrow keys to inspect.",
-                      (rect.left + 24, rect.top + 57), self._coach_body_font, _COACH_CHALK)
-            draw_text(surface, "Draft one player at each position to complete your roster.",
-                      (rect.left + 24, rect.top + 81), self._coach_body_font, _COACH_CHALK)
+            draw_text(
+                surface,
+                "Scout a prospect",
+                (rect.left + 18, rect.top + 13),
+                self._draft_label_font,
+                _COACH_CHALK,
+            )
+            draw_text(
+                surface,
+                "Hover or use Tab / arrow keys to inspect. Enter or Space activates the focused pick.",
+                (rect.left + 18, rect.top + 37),
+                self._draft_small_font,
+                _COACH_CHALK,
+            )
             return
         if candidate.player.player_type_id is None:
             raise RuntimeError("Drafted players must have a catalog player type.")
         player_type = player_type_for_id(candidate.player.player_type_id)
-        draw_text(surface, f"SCOUTING  /  {candidate.name.upper()}",
-                  (rect.left + 24, rect.top + 10), self._coach_main_font, _COACH_CHALK)
-        left, right = rect.left + 24, rect.left + 330
-        draw_text(surface, "PARTNERSHIP", (left, rect.top + 39),
-                  self._coach_small_font, _COACH_GOLD)
-        draw_text(surface, "PERK  /  PLANNED, INACTIVE" if player_type.perk else "PERK",
-                  (right, rect.top + 39), self._coach_small_font, _COACH_GOLD)
+        inspected_label = "Focused prospect" if keyboard_inspected else "Scouting"
+        heading = f"{inspected_label} / {candidate.name}  ·  {_POSITION_LABELS[candidate.position]}"
+        draw_text(
+            surface,
+            _fit_text(heading, self._draft_label_font, rect.width - 36),
+            (rect.left + 18, rect.top + 9),
+            self._draft_label_font,
+            _COACH_CHALK,
+        )
+        stats = (
+            f"Power {candidate.player.power}   ·   "
+            f"Volatility {_draft_percentage(candidate.player.volatility)}   ·   "
+            f"Stamina {_draft_percentage(candidate.player.stamina)}"
+        )
+        draw_text(
+            surface,
+            stats,
+            (rect.left + 18, rect.top + 29),
+            self._draft_small_font,
+            pygame.Color("#c1c6c4"),
+        )
+        left = rect.left + 18
+        right = rect.left + 365
+        draw_text(
+            surface,
+            "Partnership",
+            (left, rect.top + 52),
+            self._draft_label_font,
+            _COACH_GOLD,
+        )
+        perk_heading = (
+            f"Perk · {player_type.perk.name} · planned and inactive"
+            if player_type.perk else "Perk"
+        )
+        draw_text(
+            surface,
+            perk_heading,
+            (right, rect.top + 52),
+            self._draft_label_font,
+            _COACH_GOLD,
+        )
         if player_type.partner_position is None:
             partnership = "None. No partnership bonus."
         else:
             partnership = (
-                f"{_POSITION_LABELS[player_type.partner_position]}: +{PARTNERSHIP_BONUS:.0%} contribution "
-                "when both players contribute to the same play. "
-                f"Combined coach and partnership modifier capped at +{MAX_COMBINED_PLAYER_MODIFIER - 1:.0%}."
+                f"{_POSITION_LABELS[player_type.partner_position]} partner: "
+                f"+{PARTNERSHIP_BONUS:.0%} contribution when both players contribute "
+                "to the same play. Combined coach and partnership contribution "
+                f"tops out at {MAX_COMBINED_PLAYER_MODIFIER:.0%} of base."
             )
-        draw_wrapped_text(surface, partnership,
-                          pygame.Rect(left, rect.top + 60, 275, rect.height - 65),
-                          self._coach_detail_font, _COACH_CHALK, line_gap=1)
-        perk_text = player_type.perk.display_text if player_type.perk else "None."
-        draw_wrapped_text(surface, perk_text,
-                          pygame.Rect(right, rect.top + 60, rect.right - right - 24, rect.height - 65),
-                          self._coach_detail_font, _COACH_CHALK, line_gap=1)
+        draw_wrapped_text(
+            surface,
+            partnership,
+            pygame.Rect(left, rect.top + 73, 330, rect.bottom - rect.top - 95),
+            self._draft_detail_font,
+            _COACH_CHALK,
+            line_gap=0,
+        )
+        if player_type.perk is None:
+            draw_text(
+                surface,
+                "None. This player type has no perk.",
+                (right, rect.top + 73),
+                self._draft_detail_font,
+                _COACH_CHALK,
+            )
+        else:
+            perk = player_type.perk
+            perk_lines = (
+                f"Trigger: {perk.trigger}",
+                f"Effect: {perk.effect}",
+                f"Duration: {perk.duration}  ·  Reset: {perk.reset}",
+                f"Dependency: {perk.dependency}",
+            )
+            for index, line in enumerate(perk_lines):
+                draw_text(
+                    surface,
+                    line,
+                    (right, rect.top + 73 + index * 20),
+                    self._draft_detail_font,
+                    _COACH_CHALK,
+                )
 
     def _draw_shop(
         self,
@@ -2175,6 +2452,20 @@ def _draft_percentage(value: float) -> str:
     if "." in percentage:
         percentage = percentage.rstrip("0").rstrip(".")
     return f"{percentage}%"
+
+
+def _draft_position_label(position: FootballPosition) -> str:
+    labels = {
+        FootballPosition.QB: "QB",
+        FootballPosition.RB: "RB",
+        FootballPosition.WR: "WR",
+        FootballPosition.O_LINE: "O-line",
+        FootballPosition.D_LINE: "D-line",
+        FootballPosition.LINEBACKERS: "Linebackers",
+        FootballPosition.CORNERBACKS: "Cornerbacks",
+        FootballPosition.SAFETIES: "Safeties",
+    }
+    return labels[position]
 
 
 def _coach_position_label(position: FootballPosition) -> str:

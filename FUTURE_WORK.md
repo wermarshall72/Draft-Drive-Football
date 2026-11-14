@@ -18,8 +18,9 @@ or the design changes.
 - [ ] Make future player perks more creative and meaningfully interact with
   future game actions. The current perk proposals are intentionally basic and
   remain informational until perk execution is designed.
-- [ ] Make planned player perk descriptions fully readable on draft cards;
-  at 1280x720, most of each description is clipped by the available space.
+- [x] Make planned player perk descriptions fully readable in prospect
+  inspection; keep the exact condition, effect, duration, reset, and inactive
+  status out of the default card comparison.
 - [ ] Implement approved player perk effects later, when their supporting game
   systems and trigger/reset rules are defined.
 - [ ] Revisit AI difficulty and shop upgrade balance after the player base

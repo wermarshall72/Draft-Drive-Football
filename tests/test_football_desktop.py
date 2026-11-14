@@ -35,12 +35,15 @@ from src.engine.football_player_catalog import (
     player_from_type,
     player_type_for_id,
 )
+from src.ui.theme import readable_ink, relative_luminance
 from src.engine.football_shop import FootballShopSection
 from src.profile import COLOR_CHOICES
 from src.ui.application import DesktopApplication
 from src.ui import coach_art
 from src.ui import football_run_screen as football_run_screen_module
+from src.ui import player_art
 from src.ui.layout import LOGICAL_SIZE
+from src.ui.widgets import Button
 from src.ui.theme import readable_ink
 
 
@@ -242,39 +245,85 @@ def test_player_draft_inspection_tracks_mouse_and_keyboard(
         return " ".join(displayed)
 
     text = render()
-    assert "SCOUT THE PROSPECTS" in text
+    assert "Scout a prospect" in text
     for candidate in offers:
-        assert candidate.name.upper() in text
+        assert candidate.name in text
+        assert candidate.position is controller.state.team_builder.required_position
         assert str(candidate.player.power) in text
         assert football_run_screen_module._draft_percentage(candidate.player.volatility) in text
         assert football_run_screen_module._draft_percentage(candidate.player.stamina) in text
 
+    focus_before = screen.focus_index
     desktop.router.handle_event(pygame.event.Event(
         pygame.MOUSEMOTION, {"pos": screen._draft_card_rects[0].center}
     ))
     text = render()
+    assert screen.focus_index == focus_before
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": screen.buttons[0].rect.center}
+    ))
+    assert screen.focus_index == focus_before
+    assert screen.hover_index == 0
+    assert f"Scouting / {offers[0].name}" in render()
     first_type = player_type_for_id(offers[0].player.player_type_id)
-    assert f"SCOUTING  /  {offers[0].name.upper()}" in text
+    assert f"Scouting / {offers[0].name}" in text
     assert "+10% contribution when both players contribute to the same play" in text
-    assert "capped at +30%" in text
-    assert "PLANNED, INACTIVE" in text
-    assert first_type.perk is not None and first_type.perk.display_text in text
+    assert "tops out at 130% of base" in text
+    assert "planned and inactive" in text
+    assert first_type.perk is not None
+    for detail in (
+        first_type.perk.trigger,
+        first_type.perk.effect,
+        first_type.perk.duration,
+        first_type.perk.reset,
+        first_type.perk.dependency,
+    ):
+        assert detail in text
+
+    for index in (1, 2):
+        desktop.router.handle_event(pygame.event.Event(
+            pygame.MOUSEMOTION, {"pos": screen._draft_card_rects[index].center}
+        ))
+        assert f"Scouting / {offers[index].name}" in render()
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": screen._draft_card_rects[0].center}
+    ))
+    assert f"Scouting / {offers[0].name}" in render()
+
+    detail_rect = screen._draft_detail_rect
+    assert detail_rect is not None
+    assert all(not detail_rect.colliderect(button.rect) for button in screen.buttons[:3])
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": detail_rect.center}
+    ))
+    assert f"Scouting / {offers[0].name}" in render()
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(pygame.event.Event(
+            event_type, {"pos": detail_rect.center, "button": 1}
+        ))
+    assert controller.state.phase is FootballRunPhase.PLAYER_DRAFT
 
     desktop.router.handle_event(pygame.event.Event(
         pygame.MOUSEMOTION, {"pos": screen._draft_card_rects[2].center}
     ))
     text = render()
-    assert f"SCOUTING  /  {offers[2].name.upper()}" in text
+    assert f"Scouting / {offers[2].name}" in text
     assert "None. No partnership bonus." in text
-    assert "PERK None." in text
-    assert first_type.perk.display_text not in text
+    assert "Perk" in text and "None. This player type has no perk." in text
+    assert first_type.perk.effect not in text
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": (1, 1)}))
-    assert "SCOUT THE PROSPECTS" in render()
+    assert "Scout a prospect" in render()
     screen._focus(0)
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
-    assert f"SCOUTING  /  {offers[1].name.upper()}" in render()
+    assert f"Focused prospect / {offers[1].name}" in render()
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    assert f"Focused prospect / {offers[2].name}" in render()
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    assert "Scout a prospect" in render()
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+    assert f"Focused prospect / {offers[0].name}" in render()
     desktop.router.handle_event(pygame.event.Event(pygame.WINDOWLEAVE))
-    assert "SCOUT THE PROSPECTS" in render()
+    assert "Scout a prospect" in render()
     assert controller.state.phase is FootballRunPhase.PLAYER_DRAFT
 
 
@@ -304,9 +353,9 @@ def test_draft_progress_uses_selected_players_and_selection_actions(
     for index, position in enumerate(PLAYER_DRAFT_ORDER):
         displayed.clear()
         desktop.router.draw(_surface())
-        assert displayed.count("SIGNED") == index
-        assert displayed.count("ON THE CLOCK") == 1
-        assert displayed.count("UP NEXT") == len(PLAYER_DRAFT_ORDER) - index - 1
+        assert displayed.count("Drafted") == index
+        assert displayed.count("Current pick") == 1
+        assert displayed.count("Up next") == len(PLAYER_DRAFT_ORDER) - index - 1
         assert all(name in displayed for name in chosen)
         candidate = controller.state.team_builder.current_offer[1]
         chosen.append(candidate.name)
@@ -332,6 +381,7 @@ def test_draft_displays_offered_values_and_uses_team_uniform_colors(
     ))
     displayed: list[str] = []
     colors: list[tuple[pygame.Color, pygame.Color]] = []
+    poses: list[int] = []
     original_text = football_run_screen_module.draw_text
     original_art = football_run_screen_module.draw_draft_player
 
@@ -339,15 +389,43 @@ def test_draft_displays_offered_values_and_uses_team_uniform_colors(
         displayed.append(text)
         original_text(surface, text, position, font, color)
 
-    def capture_art(surface, rect, primary, secondary):
+    def capture_art(surface, rect, primary, secondary, *, pose=0):
         colors.append((primary, secondary))
-        original_art(surface, rect, primary, secondary)
+        poses.append(pose)
+        original_art(surface, rect, primary, secondary, pose=pose)
 
     monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
     monkeypatch.setattr(football_run_screen_module, "draw_draft_player", capture_art)
     desktop.router.draw(_surface())
     assert all(value in displayed for value in ("63.25", "12.5%", "73.5%"))
     assert colors == [(desktop.theme.primary, desktop.theme.secondary)] * 3
+    assert poses == [0, 1, 2]
+
+
+def test_generated_player_sprites_have_distinct_poses_and_team_colors() -> None:
+    colors = (
+        (pygame.Color("#091b78"), pygame.Color("#eac64a")),
+        (pygame.Color("#a12542"), pygame.Color("#f1eadb")),
+    )
+    rendered: list[pygame.Surface] = []
+    for pose in range(3):
+        surface = pygame.Surface((220, 220))
+        surface.fill("#1b2522")
+        player_art.draw_draft_player(
+            surface, pygame.Rect(20, 10, 180, 195), *colors[0], pose=pose
+        )
+        rendered.append(surface)
+    assert len({pygame.image.tobytes(surface, "RGB") for surface in rendered}) == 3
+
+    recolored = pygame.Surface((220, 220))
+    recolored.fill("#1b2522")
+    player_art.draw_draft_player(
+        recolored, pygame.Rect(20, 10, 180, 195), *colors[1], pose=0
+    )
+    assert pygame.image.tobytes(recolored, "RGB") != pygame.image.tobytes(
+        rendered[0], "RGB"
+    )
+    assert recolored.get_at((0, 0)) == pygame.Color("#1b2522")
 
 
 def test_all_draft_catalog_text_fits_its_allocated_space(tmp_path: Path, monkeypatch) -> None:
@@ -357,6 +435,14 @@ def test_all_draft_catalog_text_fits_its_allocated_space(tmp_path: Path, monkeyp
     screen = desktop.run_screen
     surface = _surface()
     original = football_run_screen_module.draw_wrapped_text
+    original_text = football_run_screen_module.draw_text
+    displayed: list[str] = []
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
 
     def check_wrapping(surface, text, rect, font, color, **kwargs):
         lines: list[str] = []
@@ -376,14 +462,45 @@ def test_all_draft_catalog_text_fits_its_allocated_space(tmp_path: Path, monkeyp
         original(surface, text, rect, font, color, **kwargs)
 
     monkeypatch.setattr(football_run_screen_module, "draw_wrapped_text", check_wrapping)
-    detail_rect = pygame.Rect(38, 500, 1204, 190)
+    desktop.router.draw(surface)
+    detail_rect = screen._draft_detail_rect
+    assert detail_rect is not None
+    assert detail_rect.left >= 0 and detail_rect.top >= 0
+    assert detail_rect.right <= surface.get_width()
+    assert detail_rect.bottom <= surface.get_height()
+    assert all(
+        not detail_rect.colliderect(button.rect)
+        for button in screen.buttons[:3]
+    )
     for types in PLAYER_TYPES_BY_POSITION.values():
         for player_type in types:
-            assert screen._coach_name_font.size(player_type.name.upper())[0] <= 354
-            check_wrapping(surface, player_type.name, pygame.Rect(0, 0, 128, 38),
-                           screen._coach_detail_font, pygame.Color("white"), line_gap=0)
+            displayed.clear()
+            assert screen._draft_name_font.size(player_type.name)[0] <= 354
+            check_wrapping(surface, player_type.name, pygame.Rect(0, 0, 128, 26),
+                           screen._draft_small_font, pygame.Color("white"), line_gap=0)
             candidate = FootballPlayerCandidate(player_from_type(player_type), "test")
             screen._draw_draft_details(surface, detail_rect, candidate)
+            perk_width = detail_rect.width - 365 - 18
+            if player_type.perk is not None:
+                perk = player_type.perk
+                heading = f"Perk · {perk.name} · planned and inactive"
+                lines = (
+                    f"Trigger: {perk.trigger}",
+                    f"Effect: {perk.effect}",
+                    f"Duration: {perk.duration}  ·  Reset: {perk.reset}",
+                    f"Dependency: {perk.dependency}",
+                )
+                assert screen._draft_label_font.size(heading)[0] <= perk_width
+                assert all(screen._draft_detail_font.size(line)[0] <= perk_width for line in lines)
+                assert (
+                    detail_rect.top + 73 + 3 * 20
+                    + screen._draft_detail_font.get_height()
+                    <= detail_rect.bottom - 17
+                )
+                assert all(line in " ".join(displayed) for line in lines)
+                assert "planned and inactive" in " ".join(displayed)
+            else:
+                assert "None. This player type has no perk." in displayed
 
 
 @pytest.mark.parametrize("window_size", [(1280, 720), (960, 540), (1024, 768)])
@@ -413,6 +530,139 @@ def test_draft_mouse_inspection_and_selection_in_resized_windows(tmp_path: Path,
         event = pygame.event.Event(event_type, {"pos": physical(button.rect.center), "button": 1})
         desktop.router.handle_event(desktop._logical_event(event))
     assert controller.state.team_builder.selected_players[FootballPosition.QB] is selected
+
+
+@pytest.mark.parametrize(
+    ("primary", "secondary"),
+    [
+        ("yellow", "silver"),
+        ("navy", "blue"),
+        ("sky-blue", "azure"),
+        ("crimson", "rose"),
+    ],
+)
+def test_draft_color_states_keep_action_text_contrasting(
+    tmp_path: Path, primary: str, secondary: str,
+) -> None:
+    application_controller = ApplicationController(
+        tmp_path / "team.json", tmp_path / "legacy-game.db"
+    )
+    application_controller.create_profile("Palette Owls", primary, secondary)
+    desktop = DesktopApplication(
+        application_controller,
+        seed_factory=iter((17, 29, 4, 1)).__next__,
+    )
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    screen = desktop.run_screen
+    canvas = _surface()
+
+    def contrast(first: pygame.Color, second: pygame.Color) -> float:
+        high, low = sorted(
+            (relative_luminance(first), relative_luminance(second)), reverse=True
+        )
+        return (high + 0.05) / (low + 0.05)
+
+    assert contrast(desktop.theme.primary, readable_ink(desktop.theme.primary)) >= 4.5
+    assert contrast(
+        desktop.theme.primary_dark, readable_ink(desktop.theme.primary_dark)
+    ) >= 4.5
+    desktop.router.draw(canvas)
+    button = screen.buttons[0]
+    assert canvas.get_at((button.rect.left + 20, button.rect.top + 15)) == pygame.Color("#a600e8")
+    assert canvas.get_at((button.rect.left - 3, button.rect.centery)) == pygame.Color("#111416")
+    assert canvas.get_at((button.rect.left - 1, button.rect.centery)) == pygame.Color("#ffffff")
+    current_tile = pygame.Rect(38, 113, 146, 58)
+    assert canvas.get_at((current_tile.left, current_tile.centery)) == pygame.Color("#a600e8")
+
+    screen.hover_index = 0
+    screen._draft_hover_index = 0
+    desktop.router.draw(canvas)
+    button = screen.buttons[0]
+    assert canvas.get_at((button.rect.left + 1, button.rect.centery)) == pygame.Color("#f5ead1")
+
+    screen.pressed_index = 0
+    desktop.router.draw(canvas)
+    button = screen.buttons[0]
+    assert canvas.get_at((button.rect.left + 20, button.rect.top + 15)) == pygame.Color("#7800b5")
+    assert contrast(pygame.Color("#7800b5"), readable_ink(pygame.Color("#7800b5"))) >= 4.5
+
+    disabled = Button(
+        "DRAFT QB",
+        lambda: None,
+        button.rect.copy(),
+        enabled=False,
+        variant="draft-select",
+    )
+    screen.buttons = [disabled]
+    screen.pressed_index = None
+    screen.hover_index = None
+    screen._draw_buttons(canvas)
+    disabled_fill = pygame.Color("#b9beb9")
+    assert canvas.get_at((disabled.rect.left + 20, disabled.rect.top + 15)) == disabled_fill
+    assert contrast(disabled_fill, readable_ink(disabled_fill)) >= 4.5
+
+    controller = desktop.football_controller
+    assert controller is not None
+    selected_player = controller.state.team_builder.current_offer[0].player
+    controller.choose_player(FootballPosition.QB, 0)
+    screen.state = controller.state
+    desktop.router.draw(canvas)
+    progress = pygame.Rect(38, 113, 146, 58)
+    assert canvas.get_at((progress.right - 4, progress.top + 6)) == pygame.Color("#a1a8a3")
+    assert controller.state.team_builder.selected_players[FootballPosition.QB] is selected_player
+
+
+def test_draft_draws_do_not_mutate_controller_state_or_consume_offer_rng(
+    tmp_path: Path,
+) -> None:
+    first = _new_desktop(tmp_path / "first")
+    second = _new_desktop(tmp_path / "second")
+    _start_run(first)
+    _start_run(second)
+    _activate(first, "CHOOSE STAFF 02")
+    _activate(second, "CHOOSE STAFF 02")
+    controller = first.football_controller
+    other_controller = second.football_controller
+    assert controller is not None and other_controller is not None
+    initial_state = controller.state
+    initial_offer = initial_state.team_builder.current_offer
+    for _ in range(10):
+        first.router.draw(_surface())
+    assert controller.state == initial_state
+    assert controller.state.team_builder.current_offer == initial_offer
+    controller.choose_player(FootballPosition.QB, 1)
+    other_controller.choose_player(FootballPosition.QB, 1)
+    assert controller.state.team_builder.current_offer == other_controller.state.team_builder.current_offer
+
+
+def test_player_draft_error_preserves_state_and_is_visible(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    desktop.router.draw(_surface())
+    screen = desktop.run_screen
+    controller = desktop.football_controller
+    assert controller is not None
+    before = controller.state
+
+    def reject_choice(*_args, **_kwargs):
+        raise ValueError("Draft rejected.")
+
+    monkeypatch.setattr(controller, "choose_player", reject_choice)
+    next(button for button in screen.buttons if button.label == "DRAFT QB").action()
+    assert controller.state == before
+    assert screen.state == before
+    assert screen.last_error == "Draft rejected."
+    canvas = _surface()
+    desktop.router.draw(canvas)
+    assert any(
+        canvas.get_at((x, y)) == desktop.theme.danger
+        for x in range(24, 800)
+        for y in range(canvas.get_height() - 27, canvas.get_height() - 7)
+    )
 
 
 def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
@@ -1329,7 +1579,7 @@ def test_invalid_action_is_visible_and_does_not_change_controller_state(
     error_visible = any(
         canvas.get_at((x, y)) == desktop.theme.danger
         for x in range(24, 800)
-        for y in range(canvas.get_height() - 55, canvas.get_height() - 35)
+        for y in range(canvas.get_height() - 27, canvas.get_height() - 7)
     )
     assert error_visible
 

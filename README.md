@@ -24,14 +24,21 @@ X/O playbook marks are programmatically drawn in the saved team colors. Staff
 buttons and scouting outlines also use the team's primary and secondary colors.
 If the table artwork is unavailable, the screen logs a warning and draws a fallback.
 During the player draft, hover a prospect or use Tab / arrow keys to inspect
-their partnership and planned, inactive perk; activate the draft button to
-make the pick. The uniformed player figures are original, programmatically
-drawn placeholders in the saved team colors, not production player artwork.
+their partnership and planned, inactive perk; move to another prospect or
+outside the scouting area to dismiss it. Enter or Space activates the focused
+draft button. The draft uses three open prospect presentations over the
+playbook backdrop, with actual roster progress, compact stat strips, and a
+separate scouting panel. Its three full-body player illustrations are original
+generated artwork, stored as transparent base sprites with separate primary
+and secondary color masks so uniforms use the saved team colors. The purple
+draft controls remain a consistent UI accent. These are reusable generic
+prospect illustrations, not portraits of real players.
 Coach-screen typography uses Kalam by Indian Type Foundry and Atkinson
 Hyperlegible by the Braille Institute, and Barlow by Jeremy Tribby (from
 [Google Fonts](https://github.com/google/fonts/tree/main/ofl/barlow)), bundled
 under the SIL Open Font License 1.1. The coach title uses Kalam and supporting
-coach-screen text uses Barlow; Atkinson remains in use for the player draft.
+coach-screen and player-draft text uses Barlow; Atkinson remains in use for
+other desktop UI.
 Their full licenses are in `src/ui/assets/fonts/`; missing fonts fall back to
 the desktop's existing UI font and produce a warning.
 
