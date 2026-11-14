@@ -12,6 +12,8 @@
 
 The existing auto-battler engine, controller, shop, and snapshot code are legacy reference implementations, not gameplay compatibility requirements. Reuse them only where they fit the current direction. Do not infer redesigned mechanics from their old behavior.
 
+See [FUTURE_WORK.md](FUTURE_WORK.md) for deferred redesign work and open decisions; update it when work is completed or the design changes.
+
 ## Development and Tests
 * Supported Python version: 3.10 or newer.
 * Install the test dependency with `python -m pip install -e ".[test]"`.
