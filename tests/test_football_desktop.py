@@ -26,6 +26,7 @@ from src.engine.football_controller import (
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
 from src.ui.application import DesktopApplication
+from src.ui import football_run_screen as football_run_screen_module
 from src.ui.layout import LOGICAL_SIZE
 
 
@@ -92,7 +93,7 @@ def _start_run(
 
 
 def _draft_to_shop(desktop: DesktopApplication) -> None:
-    _activate(desktop, "CHOOSE COACH AVERY")
+    _activate(desktop, "CHOOSE STAFF 01")
     for position in PLAYER_DRAFT_ORDER:
         state = desktop.football_controller.state
         assert state.phase is FootballRunPhase.PLAYER_DRAFT
@@ -167,8 +168,9 @@ def test_coach_and_eight_position_draft_are_controller_driven(
     assert controller is not None
     coach_offer = controller.state.team_builder.coach_offer
 
-    _activate(desktop, f"CHOOSE {coach_offer[0].name.upper()}", keyboard=True)
-    assert controller.state.team_builder.selected_coach is coach_offer[0]
+    _activate(desktop, "CHOOSE STAFF 01", keyboard=True)
+    assert controller.state.team_builder.selected_coach_pair is coach_offer[0]
+    assert controller.state.selected_coach_pair is coach_offer[0]
     assert controller.state.team_builder.required_position is FootballPosition.QB
 
     for position in PLAYER_DRAFT_ORDER:
@@ -186,6 +188,43 @@ def test_coach_and_eight_position_draft_are_controller_driven(
     assert state.team_builder.completed
     assert set(state.team_builder.selected_players) == set(FootballPosition)
     assert state.shop is not None and state.shop.remaining_budget == 6
+
+
+def test_coach_cards_show_both_profiles_perks_and_starter_action_sets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    displayed: list[str] = []
+    original_draw_text = football_run_screen_module.draw_text
+    original_draw_wrapped_text = football_run_screen_module.draw_wrapped_text
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    def capture_wrapped_text(surface, text, rect, font, color, **kwargs):
+        displayed.append(text)
+        original_draw_wrapped_text(surface, text, rect, font, color, **kwargs)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
+    monkeypatch.setattr(
+        football_run_screen_module, "draw_wrapped_text", capture_wrapped_text
+    )
+    desktop.router.draw(_surface())
+    pair = controller.state.team_builder.coach_offer[0]
+
+    assert pair.offense.name.upper() in " ".join(displayed)
+    assert pair.defense.name.upper() in " ".join(displayed)
+    assert any("Trigger:" in text and "Reset:" in text for text in displayed)
+    assert any(text.startswith("PLAYS:") for text in displayed)
+    assert any(text.startswith("SCHEMES:") for text in displayed)
+
+    _activate(desktop, "CHOOSE STAFF 01")
+    assert controller.state.selected_coach_pair is pair
 
 
 def test_shop_purchase_and_finish_start_the_match(tmp_path: Path) -> None:
@@ -423,7 +462,7 @@ def test_invalid_action_is_visible_and_does_not_change_controller_state(
     coach_button = next(
         button
         for button in desktop.run_screen.buttons
-        if button.label == "CHOOSE COACH AVERY"
+        if button.label == "CHOOSE STAFF 01"
     )
     coach_button.action()
     controller = desktop.football_controller
@@ -456,7 +495,7 @@ def test_repeated_draws_do_not_change_state_or_consume_gameplay_rng(
     _start_run(first)
     _start_run(replay)
     for desktop in (first, replay):
-        _activate(desktop, "CHOOSE COACH AVERY")
+        _activate(desktop, "CHOOSE STAFF 01")
     first_controller = first.football_controller
     replay_controller = replay.football_controller
     assert first_controller is not None and replay_controller is not None

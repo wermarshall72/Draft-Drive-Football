@@ -8,6 +8,7 @@
 * Three losses end a run immediately. Surviving game 10 advances to the playoffs.
 * The desktop app is the main experience; Steam and a possible Apple app are long-term goals.
 * `src/engine/football_controller.py` exposes `FootballGameController` and immutable state views for the interactive flow; keep UI and framework dependencies out of this module.
+* Coach selection offers three seeded, distinct offense/defense pairs from five styles per side. The selected pair is locked for the run; position bonuses and typed perks resolve centrally in the simulator, with defensive positions determined by the selected scheme even on a mismatch. All coaches retain the same six directly selectable plays or schemes.
 
 The existing auto-battler engine, controller, shop, and snapshot code are legacy reference implementations, not gameplay compatibility requirements. Reuse them only where they fit the current direction. Do not infer redesigned mechanics from their old behavior.
 

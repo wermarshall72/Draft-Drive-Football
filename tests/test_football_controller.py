@@ -5,7 +5,6 @@ import pytest
 
 from src.engine.football import (
     DefensiveSchemeAction,
-    FootballCoach,
     FootballFourthDownAction,
     FootballMatchResult,
     FootballMatchStatus,
@@ -20,6 +19,7 @@ from src.engine.football_controller import (
     FootballRunPhase,
 )
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerCandidate
+from src.engine.football_coaches import FootballCoachPair
 
 
 def _controller(
@@ -93,7 +93,12 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     assert state.phase is FootballRunPhase.PRE_MATCH_SHOP
     assert state.team_builder.completed
     assert state.shop is not None
-    assert state.shop.roster.coach is state.team_builder.selected_coach
+    selected_pair = state.team_builder.selected_coach_pair
+    assert selected_pair is not None
+    assert (
+        state.shop.roster.coach_assignment
+        == selected_pair.assignment
+    )
     assert state.shop.remaining_budget == 6
     assert len(state.shop.offer) == 3
 
@@ -106,6 +111,10 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     controller.buy_upgrade(power_upgrade)
     controller.buy_upgrade(stamina_upgrade)
     assert controller.state.shop is not None
+    assert (
+        controller.state.shop.roster.coach_assignment
+        == selected_pair.assignment
+    )
     assert controller.state.shop.remaining_budget == 1
     assert len(controller.state.shop.purchased_upgrades) == 2
 
@@ -117,6 +126,11 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     assert match_view.match is not None
     assert match_view.match.team_a.team_name == "Human Team"
     assert match_view.match.team_b.team_name == "Local AI"
+    assert (
+        match_view.match.team_a.coach_assignment
+        == selected_pair.assignment
+    )
+    assert match_view.match.team_b.coach_assignment is not None
     assert match_view.match.possession is FootballTeamSide.TEAM_A
     assert match_view.match.match_events
     assert isinstance(match_view.match.match_events[0].action, DefensiveSchemeAction)
@@ -215,7 +229,10 @@ def test_invalid_and_out_of_turn_actions_preserve_state_and_all_random_streams()
     with pytest.raises(ValueError, match="phase"):
         controller.start_next_game()
     with pytest.raises(ValueError, match="not included"):
-        controller.choose_coach(FootballCoach("Not offered"))
+        offered_pair = controller.state.team_builder.coach_offer[0]
+        controller.choose_coach(
+            FootballCoachPair(offered_pair.offense, offered_pair.defense)
+        )
     assert controller.state == initial
     assert controller._builder._rng.getstate() == builder_rng
 

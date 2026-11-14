@@ -9,7 +9,6 @@ from enum import Enum
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
-    FootballCoach,
     FootballFourthDownAction,
     FootballMatchState,
     FootballMatchStatus,
@@ -17,6 +16,7 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
+from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
 from src.engine.football_shop import (
     FootballShop,
@@ -62,6 +62,7 @@ class FootballGameControllerState:
     human_decision: FootballHumanDecision | None
     opponent_name: str
     opponent_difficulty: FootballAIDifficulty
+    selected_coach_pair: FootballCoachPair | None
     game_number: int
     wins: int
     losses: int
@@ -135,12 +136,13 @@ class FootballGameController:
             human_decision=self._human_decision(match),
             opponent_name=self._opponent_name,
             opponent_difficulty=self._difficulty,
+            selected_coach_pair=self._builder.selected_coach_pair,
             game_number=self._game_number,
             wins=self._wins,
             losses=self._losses,
         )
 
-    def choose_coach(self, choice: FootballCoach | int) -> FootballGameControllerState:
+    def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.COACH_DRAFT)
         self._builder.choose_coach(choice)
         self._phase = FootballRunPhase.PLAYER_DRAFT

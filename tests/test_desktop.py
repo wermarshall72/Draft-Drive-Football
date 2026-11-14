@@ -80,7 +80,7 @@ def test_keyboard_starts_a_controller_run_without_game_side_effects(
 
     assert desktop.router.current_id == "football_run"
     assert desktop.football_controller is not None
-    assert desktop.football_controller.state.team_builder.selected_coach is None
+    assert desktop.football_controller.state.team_builder.selected_coach_pair is None
     assert not database_path.exists()
     assert not pygame.get_init()
 

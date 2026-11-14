@@ -14,6 +14,7 @@ from src.engine.football import (
     FootballRoster,
     FootballSpecialTeams,
 )
+from src.engine.football_coaches import COACH_PAIR_OFFERS, FootballCoachPair
 
 PLAYER_DRAFT_ORDER = (
     FootballPosition.QB,
@@ -25,13 +26,6 @@ PLAYER_DRAFT_ORDER = (
     FootballPosition.CORNERBACKS,
     FootballPosition.SAFETIES,
 )
-
-_COACHES = (
-    FootballCoach("Coach Avery"),
-    FootballCoach("Coach Ellis"),
-    FootballCoach("Coach Riley"),
-)
-
 
 @dataclass(frozen=True)
 class _PlayerTemplate:
@@ -70,19 +64,16 @@ _PLAYER_TEMPLATES = (
 class FootballTeamBuilderState:
     """Immutable view of the current coach/player choice and draft progress."""
 
-    coach_offer: tuple[FootballCoach, ...]
-    selected_coach: FootballCoach | None
+    coach_offer: tuple[FootballCoachPair, ...]
+    selected_coach_pair: FootballCoachPair | None
     required_position: FootballPosition | None
-    current_offer: tuple[FootballCoach | FootballPlayerCandidate, ...]
+    current_offer: tuple[FootballCoachPair | FootballPlayerCandidate, ...]
     selected_players: Mapping[FootballPosition, FootballPlayer]
     completed: bool
 
 
 class FootballTeamBuilder:
-    """Draft a coach and one player for each position using a persistent RNG.
-
-    Coaches are identity-only choices for now; gameplay effects are deferred.
-    """
+    """Draft a paired coaching staff and one player for each position."""
 
     def __init__(
         self,
@@ -105,28 +96,29 @@ class FootballTeamBuilder:
             special_teams if special_teams is not None else FootballSpecialTeams()
         )
         self._rng = random.Random(seed)
-        self._selected_coach: FootballCoach | None = None
+        self._coach_offer = tuple(self._rng.sample(COACH_PAIR_OFFERS, 3))
+        self._selected_coach_pair: FootballCoachPair | None = None
         self._selected_players: dict[FootballPosition, FootballPlayer] = {}
         self._required_position: FootballPosition | None = None
         self._current_offer: tuple[
-            FootballCoach | FootballPlayerCandidate, ...
-        ] = _COACHES
+            FootballCoachPair | FootballPlayerCandidate, ...
+        ] = self._coach_offer
         self._roster: FootballRoster | None = None
 
     @property
-    def coach_offer(self) -> tuple[FootballCoach, ...]:
-        return _COACHES
+    def coach_offer(self) -> tuple[FootballCoachPair, ...]:
+        return self._coach_offer
 
     @property
-    def selected_coach(self) -> FootballCoach | None:
-        return self._selected_coach
+    def selected_coach_pair(self) -> FootballCoachPair | None:
+        return self._selected_coach_pair
 
     @property
     def required_position(self) -> FootballPosition | None:
         return self._required_position
 
     @property
-    def current_offer(self) -> tuple[FootballCoach | FootballPlayerCandidate, ...]:
+    def current_offer(self) -> tuple[FootballCoachPair | FootballPlayerCandidate, ...]:
         return self._current_offer
 
     @property
@@ -137,31 +129,31 @@ class FootballTeamBuilder:
     def state(self) -> FootballTeamBuilderState:
         return FootballTeamBuilderState(
             coach_offer=self.coach_offer,
-            selected_coach=self._selected_coach,
+            selected_coach_pair=self._selected_coach_pair,
             required_position=self._required_position,
             current_offer=self._current_offer,
             selected_players=MappingProxyType(dict(self._selected_players)),
             completed=self.completed,
         )
 
-    def choose_coach(self, choice: FootballCoach | int) -> FootballCoach:
+    def choose_coach(self, choice: FootballCoachPair | int) -> FootballCoachPair:
         self._require_active()
-        if self._selected_coach is not None:
+        if self._selected_coach_pair is not None:
             raise ValueError("A coach has already been selected.")
-        selected = self._offered_choice(choice, FootballCoach, self._current_offer)
-        if not isinstance(selected, FootballCoach):
+        selected = self._offered_choice(choice, FootballCoachPair, self._current_offer)
+        if not isinstance(selected, FootballCoachPair):
             raise ValueError("Current coach offer contains an invalid item.")
-        coach = selected
-        self._selected_coach = coach
+        coach_pair = selected
+        self._selected_coach_pair = coach_pair
         self._required_position = PLAYER_DRAFT_ORDER[0]
         self._current_offer = self._player_offer(self._required_position)
-        return coach
+        return coach_pair
 
     def choose_player(
         self, position: FootballPosition, choice: FootballPlayerCandidate | int
     ) -> FootballPlayer:
         self._require_active()
-        if self._selected_coach is None:
+        if self._selected_coach_pair is None:
             raise ValueError("Choose a coach before drafting players.")
         if not isinstance(position, FootballPosition):
             raise ValueError("Draft position must be a FootballPosition.")
@@ -187,8 +179,12 @@ class FootballTeamBuilder:
             self._roster = FootballRoster(
                 team_name=self.team_name,
                 players=self._selected_players,
-                coach=self._selected_coach,
+                coach=FootballCoach(
+                    f"{self._selected_coach_pair.offense.name} / "
+                    f"{self._selected_coach_pair.defense.name}"
+                ),
                 special_teams=self._special_teams,
+                coach_assignment=self._selected_coach_pair.assignment,
             )
         else:
             self._required_position = PLAYER_DRAFT_ORDER[next_index]
@@ -220,10 +216,10 @@ class FootballTeamBuilder:
 
     @staticmethod
     def _offered_choice(
-        choice: FootballCoach | FootballPlayerCandidate | int,
-        expected_type: type[FootballCoach] | type[FootballPlayerCandidate],
-        offer: tuple[FootballCoach | FootballPlayerCandidate, ...],
-    ) -> FootballCoach | FootballPlayerCandidate:
+        choice: FootballCoachPair | FootballPlayerCandidate | int,
+        expected_type: type[FootballCoachPair] | type[FootballPlayerCandidate],
+        offer: tuple[FootballCoachPair | FootballPlayerCandidate, ...],
+    ) -> FootballCoachPair | FootballPlayerCandidate:
         if isinstance(choice, bool):
             raise ValueError("Choice must be an offered item or a valid offer index.")
         if isinstance(choice, int):

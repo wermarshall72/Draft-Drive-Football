@@ -107,6 +107,7 @@ class FootballShop:
             players=updated_players,
             coach=self._roster.coach,
             special_teams=self._roster.special_teams,
+            coach_assignment=self._roster.coach_assignment,
         )
 
         self._remaining_budget -= selected.cost

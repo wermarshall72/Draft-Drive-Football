@@ -64,6 +64,42 @@ class FootballFourthDownAction(str, Enum):
     FIELD_GOAL = "field_goal"
 
 
+FOOTBALL_PLAY_MATCHUPS = MappingProxyType({
+    OffensivePlayAction.RB_RUN: (
+        (FootballPosition.O_LINE, FootballPosition.RB),
+        (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
+    ),
+    OffensivePlayAction.SCREEN_PASS: (
+        (FootballPosition.O_LINE, FootballPosition.WR),
+        (FootballPosition.D_LINE, FootballPosition.CORNERBACKS),
+    ),
+    OffensivePlayAction.PA_PASS: (
+        (FootballPosition.QB, FootballPosition.RB),
+        (FootballPosition.SAFETIES, FootballPosition.LINEBACKERS),
+    ),
+    OffensivePlayAction.SHORT_PASS: (
+        (FootballPosition.RB, FootballPosition.WR),
+        (FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS),
+    ),
+    OffensivePlayAction.MEDIUM_PASS: (
+        (FootballPosition.QB, FootballPosition.O_LINE),
+        (FootballPosition.SAFETIES, FootballPosition.D_LINE),
+    ),
+    OffensivePlayAction.DEEP_PASS: (
+        (FootballPosition.QB, FootballPosition.WR),
+        (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
+    ),
+})
+
+
+def matchup_for_play(
+    play: OffensivePlayAction,
+) -> tuple[tuple[FootballPosition, ...], tuple[FootballPosition, ...]]:
+    if not isinstance(play, OffensivePlayAction) or play not in FOOTBALL_PLAY_MATCHUPS:
+        raise ValueError(f"Unsupported play: {play!r}")
+    return FOOTBALL_PLAY_MATCHUPS[play]
+
+
 def _validate_name(value: str, field_name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string.")
@@ -117,6 +153,16 @@ class FootballCoach:
 
 
 @dataclass(frozen=True)
+class FootballCoachAssignment:
+    offensive_coach_id: str
+    defensive_coach_id: str
+
+    def __post_init__(self) -> None:
+        _validate_name(self.offensive_coach_id, "Offensive coach identifier")
+        _validate_name(self.defensive_coach_id, "Defensive coach identifier")
+
+
+@dataclass(frozen=True)
 class FootballSpecialTeams:
     name: str = "Special Teams"
 
@@ -130,6 +176,7 @@ class FootballRoster:
     players: Mapping[FootballPosition, FootballPlayer]
     coach: FootballCoach
     special_teams: FootballSpecialTeams
+    coach_assignment: FootballCoachAssignment | None = None
 
     def __post_init__(self) -> None:
         _validate_name(self.team_name, "Team name")
@@ -160,6 +207,10 @@ class FootballRoster:
             raise ValueError("Coach must be a FootballCoach.")
         if not isinstance(self.special_teams, FootballSpecialTeams):
             raise ValueError("Special teams must be a FootballSpecialTeams object.")
+        if self.coach_assignment is not None and not isinstance(
+            self.coach_assignment, FootballCoachAssignment
+        ):
+            raise ValueError("Coach assignment must be a FootballCoachAssignment or None.")
         object.__setattr__(self, "players", MappingProxyType(dict(self.players)))
 
 
@@ -175,6 +226,7 @@ class FootballPlayResult:
     incomplete: bool = False
     offense_power: float = 0.0
     defense_power: float = 0.0
+    perk_effects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.offensive_play, OffensivePlayAction):
@@ -197,6 +249,11 @@ class FootballPlayResult:
         _validate_finite_number(self.defense_power, "Defense power")
         if self.offense_power < 0 or self.defense_power < 0:
             raise ValueError("Play powers must be non-negative.")
+        if not isinstance(self.perk_effects, tuple) or any(
+            not isinstance(effect, str) or not effect.strip()
+            for effect in self.perk_effects
+        ):
+            raise ValueError("Perk effects must be a tuple of non-empty strings.")
 
 
 @dataclass(frozen=True)
@@ -219,6 +276,7 @@ class FootballMatchEvent:
     points_scored: int = 0
     scoring_team: FootballTeamSide | None = None
     field_goal_distance: float | None = None
+    perk_effects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_nonnegative_int(self.sequence, "Event sequence")
@@ -282,6 +340,13 @@ class FootballMatchEvent:
             raise ValueError("Event clock use must match its play result.")
         if self.play_result is not None and self.points_scored != self.play_result.points_scored:
             raise ValueError("Event scoring must match its play result.")
+        if not isinstance(self.perk_effects, tuple) or any(
+            not isinstance(effect, str) or not effect.strip()
+            for effect in self.perk_effects
+        ):
+            raise ValueError("Perk effects must be a tuple of non-empty strings.")
+        if self.play_result is not None and self.perk_effects != self.play_result.perk_effects:
+            raise ValueError("Event perk effects must match its play result.")
 
 
 @dataclass(frozen=True)

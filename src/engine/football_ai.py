@@ -19,6 +19,7 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
+from src.engine.football_coaches import COACH_PAIR_OFFERS
 from src.engine.football_simulator import (
     field_goal_distance_for_position,
     field_goal_success_probability,
@@ -84,6 +85,7 @@ class FootballAI:
             FootballAIDifficulty.STANDARD: STANDARD_POWER_ADJUSTMENT,
             FootballAIDifficulty.HARD: HARD_POWER_ADJUSTMENT,
         }[self.difficulty]
+        coach_pair = self._rng.choice(COACH_PAIR_OFFERS)
         players = {
             position: FootballPlayer(
                 name=f"{self.team_name} {position.value}",
@@ -97,8 +99,11 @@ class FootballAI:
         return FootballRoster(
             team_name=self.team_name,
             players=players,
-            coach=FootballCoach(f"{self.team_name} Coach"),
+            coach=FootballCoach(
+                f"{coach_pair.offense.name} / {coach_pair.defense.name}"
+            ),
             special_teams=FootballSpecialTeams(f"{self.team_name} Special Teams"),
+            coach_assignment=coach_pair.assignment,
         )
 
     def choose_action(

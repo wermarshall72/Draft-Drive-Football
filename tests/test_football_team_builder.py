@@ -12,6 +12,7 @@ from src.engine.football_team_builder import (
     FootballPlayerCandidate,
     FootballTeamBuilder,
 )
+from src.engine.football_coaches import COACH_PAIR_OFFERS
 
 
 def _draft(
@@ -31,6 +32,9 @@ def test_draft_order_offers_three_valid_distinct_players_per_position() -> None:
 
     assert builder.required_position is None
     assert builder.current_offer == builder.coach_offer
+    assert len(builder.coach_offer) == 3
+    assert len(set(builder.coach_offer)) == 3
+    assert all(pair in COACH_PAIR_OFFERS for pair in builder.coach_offer)
     builder.choose_coach(builder.current_offer[1])
 
     for position in PLAYER_DRAFT_ORDER:
@@ -51,7 +55,8 @@ def test_draft_order_offers_three_valid_distinct_players_per_position() -> None:
     assert builder.required_position is None
     assert builder.current_offer == ()
     assert set(roster.players) == set(PLAYER_DRAFT_ORDER)
-    assert roster.coach is builder.selected_coach
+    assert builder.selected_coach_pair is builder.coach_offer[1]
+    assert roster.coach_assignment == builder.selected_coach_pair.assignment
     assert isinstance(roster.special_teams, FootballSpecialTeams)
     assert len(roster.players) == 8
     assert roster.coach not in roster.players.values()
