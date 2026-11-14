@@ -6,12 +6,14 @@ import pytest
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardCopy,
     FootballCoach,
     FootballCoachAssignment,
     FootballFourthDownAction,
     FootballMatchEvent,
     FootballMatchState,
     FootballMatchStatus,
+    FootballDeckState,
     FootballPlayer,
     FootballPlayResult,
     FootballPosition,
@@ -19,6 +21,7 @@ from src.engine.football import (
     FootballSpecialTeams,
     FootballTeamSide,
     OffensivePlayAction,
+    matchup_for_scheme,
 )
 from src.engine.football_simulator import (
     FATIGUE_RAMP_PLAYS,
@@ -34,6 +37,10 @@ from src.engine.football_player_catalog import (
     PLAYER_BASE_VOLATILITY,
     player_from_type,
     player_types_for_position,
+)
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
 )
 from src.engine.football_shop import FootballShop, FootballUpgradeStat
 
@@ -93,6 +100,14 @@ def _roster(
 
 
 def _match_state(**overrides) -> FootballMatchState:
+    offense_copies = tuple(
+        FootballCardCopy(f"test:offense:{card_id}", card_id)
+        for card_id in OFFENSIVE_PLAY_CATALOG
+    )
+    defense_copies = tuple(
+        FootballCardCopy(f"test:defense:{card_id}", card_id)
+        for card_id in DEFENSIVE_SCHEME_CATALOG
+    )
     values = {
         "team_a": _roster("Home"),
         "team_b": _roster("Away"),
@@ -105,6 +120,32 @@ def _match_state(**overrides) -> FootballMatchState:
         "offense_field_position": 25.0,
         "game_clock_seconds": 900,
         "period": 1,
+        "team_a_offense_deck": FootballDeckState(
+            offense_copies, hand=offense_copies
+        ),
+        "team_a_defense_deck": FootballDeckState(
+            defense_copies, hand=defense_copies
+        ),
+        "team_b_offense_deck": FootballDeckState(
+            tuple(
+                replace(card, copy_id=f"away:{card.copy_id}")
+                for card in offense_copies
+            ),
+            hand=tuple(
+                replace(card, copy_id=f"away:{card.copy_id}")
+                for card in offense_copies
+            ),
+        ),
+        "team_b_defense_deck": FootballDeckState(
+            tuple(
+                replace(card, copy_id=f"away:{card.copy_id}")
+                for card in defense_copies
+            ),
+            hand=tuple(
+                replace(card, copy_id=f"away:{card.copy_id}")
+                for card in defense_copies
+            ),
+        ),
         "awaited_action": FootballAwaitedAction.DEFENSIVE_SCHEME,
     }
     values.update(overrides)
@@ -205,7 +246,7 @@ def test_partnerships_use_play_and_selected_scheme_contributors(
     scheme: DefensiveSchemeAction,
 ) -> None:
     offense_positions, _ = matchup_for_play(play)
-    _, defense_positions = matchup_for_play(OffensivePlayAction(scheme.value))
+    defense_positions, matched_plays = matchup_for_scheme(scheme)
     offense = _roster_with_mutual_partners(
         "Home",
         offense_positions,
@@ -224,10 +265,10 @@ def test_partnerships_use_play_and_selected_scheme_contributors(
 
     assert result is not None
     assert result.offense_power == pytest.approx(
-        115.0 * (0.96 if scheme.value == play.value else 1.0)
+        115.0 * (0.96 if play in matched_plays else 1.0)
     )
     assert result.defense_power == pytest.approx(
-        115.0 * (1.12 if scheme.value == play.value else 1.0)
+        115.0 * (1.12 if play in matched_plays else 1.0)
     )
 
 
@@ -345,12 +386,19 @@ def test_player_perk_text_does_not_affect_match_resolution() -> None:
 
 @pytest.mark.parametrize("play", list(OffensivePlayAction))
 def test_matching_scheme_changes_power_but_mismatching_scheme_does_not(play):
+    matching_scheme = next(
+        scheme
+        for scheme in DefensiveSchemeAction
+        if play in matchup_for_scheme(scheme)[1]
+    )
     matching = _sim_with_scheme(
-        scheme=DefensiveSchemeAction(play.value),
+        scheme=matching_scheme,
         rng=SequenceRNG((0.99,), (0.0,)),
     )
     mismatching_scheme = next(
-        scheme for scheme in DefensiveSchemeAction if scheme.value != play.value
+        scheme
+        for scheme in DefensiveSchemeAction
+        if play not in matchup_for_scheme(scheme)[1]
     )
     mismatching = _sim_with_scheme(
         scheme=mismatching_scheme,
@@ -856,8 +904,8 @@ def test_seeded_match_instance_replays_identical_actions_and_advances_one_rng():
     [
         (lambda sim: sim.resolve_offensive_play(OffensivePlayAction.RB_RUN), "awaiting"),
         (lambda sim: sim.resolve_fourth_down(FootballFourthDownAction.PUNT), "awaiting"),
-        (lambda sim: sim.select_defensive_scheme("bad"), "DefensiveSchemeAction"),
-        (lambda sim: sim.resolve_offensive_play("bad"), "OffensivePlayAction"),
+        (lambda sim: sim.select_defensive_scheme("bad"), "not in the current hand"),
+        (lambda sim: sim.resolve_offensive_play("bad"), "awaiting"),
         (lambda sim: sim.resolve_fourth_down("bad"), "FootballFourthDownAction"),
     ],
 )

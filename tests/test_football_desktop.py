@@ -18,8 +18,13 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+)
 from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_controller import (
+    FootballGameController,
     FootballHumanDecision,
     FootballRunPhase,
 )
@@ -36,7 +41,11 @@ from src.engine.football_player_catalog import (
     player_type_for_id,
 )
 from src.ui.theme import readable_ink, relative_luminance
-from src.engine.football_shop import FootballShopSection
+from src.engine.football_shop import (
+    FootballShopCard,
+    FootballShopRarity,
+    FootballShopSection,
+)
 from src.profile import COLOR_CHOICES
 from src.ui.application import DesktopApplication
 from src.ui import coach_art
@@ -66,6 +75,36 @@ def _new_desktop(
         application_controller,
         seed_factory=lambda: next(seed_values),
     )
+
+
+def _new_desktop_with_removal_offer(tmp_path: Path) -> DesktopApplication:
+    desktop = _new_desktop(tmp_path)
+    removal = FootballShopCard(
+        card_id="test-removal",
+        name="Remove One Card",
+        description="Remove one owned play or scheme.",
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=2,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        is_removal=True,
+    )
+    controller = FootballGameController(
+        "Test Owls",
+        difficulty=FootballAIDifficulty.STANDARD,
+        builder_seed=17,
+        shop_seed=29,
+        ai_seed=4,
+        match_seed=1,
+        shop_catalogs={
+            FootballShopSection.PLAYS_SCHEMES: (removal,),
+        },
+    )
+    desktop.football_controller = controller
+    desktop.run_screen.begin(controller)
+    desktop.router.show("football_run")
+    return desktop
 
 
 def _surface() -> pygame.Surface:
@@ -125,6 +164,16 @@ def _start_match(desktop: DesktopApplication) -> None:
     _start_run(desktop)
     _draft_to_shop(desktop)
     _activate(desktop, "FINISH SHOP / START MATCH")
+
+
+def _play_first_match_card(desktop: DesktopApplication) -> None:
+    desktop.router.draw(_surface())
+    button = next(
+        button
+        for button in desktop.run_screen.buttons
+        if button.variant == "hand-card"
+    )
+    button.action()
 
 
 def _force_result(monkeypatch, winner: FootballTeamSide) -> None:
@@ -1396,7 +1445,9 @@ def test_shop_sections_reroll_unlock_and_keyboard_purchase(tmp_path: Path) -> No
     assert "PLAYER UPGRADES" in joined
     assert "PLAYS / SCHEMES" in joined
     assert "COACH UPGRADES" in joined
-    assert "No play/scheme cards yet." in joined
+    assert controller.state.shop is not None
+    assert controller.state.shop.section(FootballShopSection.PLAYS_SCHEMES).catalog_available
+    assert "No play/scheme cards yet." not in joined
     assert "No coach upgrades yet." in joined
     assert "Available after game 3." in joined
     assert all(
@@ -1442,6 +1493,84 @@ def test_shop_at_zero_ap_stays_open_until_explicit_finish(tmp_path: Path) -> Non
     assert controller.state.phase is FootballRunPhase.MATCH
 
 
+def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    shop = controller.state.shop
+    _activate(desktop, "BUY")
+
+    displayed: list[str] = []
+    original_draw_text = football_run_screen_module.draw_text
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
+    _activate(desktop, "DEPTH CHART")
+    desktop.router.draw(_surface())
+    assert "CURRENT RUN SNAPSHOT" in " ".join(displayed)
+    assert "OFFENSE" in " ".join(displayed)
+    assert "DEFENSE" in " ".join(displayed)
+    assert "PURCHASED RUN UPGRADES" in " ".join(displayed)
+    for player in shop.roster.players.values():
+        assert player.name in " ".join(displayed)
+    assert "BACK TO SHOP" in {button.label for button in desktop.run_screen.buttons}
+
+    displayed.clear()
+    _activate(desktop, "BACK TO SHOP")
+    _activate(desktop, "PLAYBOOK")
+    desktop.router.draw(_surface())
+    joined = " ".join(displayed)
+    assert "OWNED CARDS" in joined
+    current_shop = controller.state.shop
+    assert current_shop is not None
+    for card in current_shop.offensive_deck:
+        assert OFFENSIVE_PLAY_CATALOG[card.card_id].name in joined
+    for card in current_shop.defensive_deck:
+        assert DEFENSIVE_SCHEME_CATALOG[card.card_id].name in joined
+
+
+def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop_with_removal_offer(tmp_path)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    before = controller.state.shop
+
+    _activate(desktop, "SELECT CARD")
+    assert desktop.run_screen._shop_review_mode == "playbook"
+    pending = controller.state.shop
+    assert pending is not None and pending.pending_removal is not None
+    assert pending.remaining_ap == before.remaining_ap
+    desktop.router.draw(_surface())
+    _activate(desktop, "CANCEL SELECTION")
+    cancelled = controller.state.shop
+    assert cancelled is not None and cancelled.pending_removal is None
+    assert cancelled.remaining_ap == before.remaining_ap
+
+    _activate(desktop, "SELECT CARD")
+    desktop.router.draw(_surface())
+    remove_button = next(
+        button for button in desktop.run_screen.buttons if button.label == "REMOVE"
+    )
+    remove_button.action()
+    removed = controller.state.shop
+    assert removed is not None and removed.pending_removal is None
+    assert removed.remaining_ap == before.remaining_ap - 2
+    assert len(removed.offensive_deck) + len(removed.defensive_deck) == (
+        len(before.offensive_deck) + len(before.defensive_deck) - 1
+    )
+
+
 def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     tmp_path: Path,
 ) -> None:
@@ -1469,30 +1598,26 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
         event_count = len(state.match.match_events)
         if state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY:
             seen_offense = True
-            expected = OffensivePlayAction.DEEP_PASS
-            allowed = {
-                "RB RUN",
-                "SCREEN PASS",
-                "PLAY-ACTION PASS",
-                "SHORT PASS",
-                "MEDIUM PASS",
-                "DEEP PASS",
-            }
-            assert set(labels) - {"PAUSE"} == allowed
-            labels["DEEP PASS"].action()
+            deck = state.match.team_a_offense_deck
+            assert deck is not None and deck.hand
+            card = deck.hand[0]
+            expected = OFFENSIVE_PLAY_CATALOG[card.card_id].action
+            hand_buttons = [
+                button for button in screen.buttons if button.variant == "hand-card"
+            ]
+            assert len(hand_buttons) == min(3, len(deck.hand))
+            hand_buttons[0].action()
         elif state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
             seen_defense = True
-            expected = DefensiveSchemeAction.RB_RUN
-            allowed = {
-                "RB RUN SCHEME",
-                "SCREEN PASS SCHEME",
-                "PLAY-ACTION SCHEME",
-                "SHORT PASS SCHEME",
-                "MEDIUM PASS SCHEME",
-                "DEEP PASS SCHEME",
-            }
-            assert set(labels) - {"PAUSE"} == allowed
-            labels["RB RUN SCHEME"].action()
+            deck = state.match.team_a_defense_deck
+            assert deck is not None and deck.hand
+            card = deck.hand[0]
+            expected = DEFENSIVE_SCHEME_CATALOG[card.card_id].action
+            hand_buttons = [
+                button for button in screen.buttons if button.variant == "hand-card"
+            ]
+            assert len(hand_buttons) == min(3, len(deck.hand))
+            hand_buttons[0].action()
         elif state.human_decision is FootballHumanDecision.FOURTH_DOWN:
             seen_fourth_down = True
             expected = FootballFourthDownAction.PUNT
@@ -1544,22 +1669,26 @@ def test_match_screen_uses_pause_and_numbered_play_calls(tmp_path: Path) -> None
 
     desktop.router.draw(_surface())
     labels = {button.label: button for button in screen.buttons}
-    assert set(labels) == {
-        "RB RUN",
-        "SCREEN PASS",
-        "PLAY-ACTION PASS",
-        "SHORT PASS",
-        "MEDIUM PASS",
-        "DEEP PASS",
-        "PAUSE",
-    }
+    match = controller.state.match
+    assert match is not None and match.team_a_offense_deck is not None
+    hand = match.team_a_offense_deck.hand
+    expected_labels = [
+        football_run_screen_module._PLAY_LABELS[
+            OFFENSIVE_PLAY_CATALOG[card.card_id].action
+        ]
+        for card in hand
+    ]
+    assert [button.label for button in screen.buttons[:-1]] == expected_labels
+    assert screen.buttons[-1].label == "PAUSE"
 
     desktop.router.handle_event(
         pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_2})
     )
     match = controller.state.match
     assert match is not None
-    assert match.match_events[-1].action is OffensivePlayAction.SCREEN_PASS
+    assert match.match_events[-1].action is OFFENSIVE_PLAY_CATALOG[
+        hand[1].card_id
+    ].action
 
     desktop.router.draw(_surface())
     next(button for button in screen.buttons if button.label == "PAUSE").action()
@@ -1568,6 +1697,90 @@ def test_match_screen_uses_pause_and_numbered_play_calls(tmp_path: Path) -> None
         "DISCARD RUN",
         "KEEP PLAYING",
     }
+
+
+def test_match_cards_support_click_drag_drop_and_reject_invalid_drops(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    screen = desktop.run_screen
+    desktop.router.draw(_surface())
+    state = controller.state
+    assert state.match is not None and state.match.team_a_offense_deck is not None
+    first_copy = state.match.team_a_offense_deck.hand[0]
+    first_rect = screen._hand_card_rects[first_copy.copy_id]
+    unchanged = controller.state
+
+    desktop.router.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN,
+            {"pos": first_rect.center, "button": 1},
+        )
+    )
+    desktop.router.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            {"pos": (5, 5), "button": 1},
+        )
+    )
+    assert controller.state == unchanged
+    assert screen.last_error == "Invalid drop. Place the card in the play area."
+
+    desktop.router.draw(_surface())
+    first_rect = screen._hand_card_rects[first_copy.copy_id]
+    desktop.router.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN,
+            {"pos": first_rect.center, "button": 1},
+        )
+    )
+    desktop.router.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            {"pos": first_rect.center, "button": 1},
+        )
+    )
+    after_click = controller.state
+    assert after_click.match is not None
+    assert first_copy in after_click.match.team_a_offense_deck.discard_pile
+
+    desktop.router.draw(_surface())
+    decision = controller.state.human_decision
+    match = controller.state.match
+    assert match is not None
+    if decision is FootballHumanDecision.OFFENSIVE_PLAY:
+        deck = match.team_a_offense_deck
+    else:
+        assert decision is FootballHumanDecision.DEFENSIVE_SCHEME
+        deck = match.team_a_defense_deck
+    assert deck is not None and deck.hand
+    dragged_copy = deck.hand[0]
+    dragged_rect = screen._hand_card_rects[dragged_copy.copy_id]
+    assert screen._play_area_rect is not None
+    desktop.router.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN,
+            {"pos": dragged_rect.center, "button": 1},
+        )
+    )
+    desktop.router.handle_event(
+        pygame.event.Event(
+            pygame.MOUSEBUTTONUP,
+            {"pos": screen._play_area_rect.center, "button": 1},
+        )
+    )
+    after_drop = controller.state.match
+    assert after_drop is not None
+    resulting_deck = (
+        after_drop.team_a_offense_deck
+        if decision is FootballHumanDecision.OFFENSIVE_PLAY
+        else after_drop.team_a_defense_deck
+    )
+    assert resulting_deck is not None
+    assert dragged_copy in resulting_deck.discard_pile
 
 
 @pytest.mark.parametrize(
@@ -1602,7 +1815,7 @@ def test_result_routes_fired_and_game_ten_playoffs_without_bracket(
     assert controller is not None
 
     for game_number in range(1, games + 1):
-        _activate(desktop, "DEEP PASS")
+        _play_first_match_card(desktop)
         state = controller.state
         if game_number < games:
             assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
@@ -1628,7 +1841,7 @@ def test_ready_for_next_game_button_opens_shop_before_the_next_match(
     desktop = _new_desktop(tmp_path)
     _start_match(desktop)
     _force_result(monkeypatch, FootballTeamSide.TEAM_A)
-    _activate(desktop, "DEEP PASS")
+    _play_first_match_card(desktop)
 
     controller = desktop.football_controller
     assert controller is not None
@@ -1711,8 +1924,8 @@ def test_repeated_draws_do_not_change_state_or_consume_gameplay_rng(
     for _ in range(30):
         first.router.draw(_surface())
     assert first_controller.state == replay_controller.state
-    _activate(first, "DEEP PASS")
-    _activate(replay, "DEEP PASS")
+    _play_first_match_card(first)
+    _play_first_match_card(replay)
     assert first_controller.state == replay_controller.state
     assert not (tmp_path / "first" / "legacy-game.db").exists()
     assert not (tmp_path / "replay" / "legacy-game.db").exists()

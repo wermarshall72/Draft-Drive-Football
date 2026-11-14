@@ -5,7 +5,9 @@ import pytest
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardCopy,
     FootballCoach,
+    FootballDeckState,
     FootballFourthDownAction,
     FootballMatchState,
     FootballPlayer,
@@ -14,6 +16,12 @@ from src.engine.football import (
     FootballSpecialTeams,
     FootballTeamSide,
     OffensivePlayAction,
+)
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+    STARTING_DEFENSIVE_ACTIONS,
+    STARTING_OFFENSIVE_ACTIONS,
 )
 from src.engine.football_ai import (
     EASY_POWER_ADJUSTMENT,
@@ -57,6 +65,22 @@ def _roster(
 
 
 def _state(**overrides: object) -> FootballMatchState:
+    offense_a = tuple(
+        FootballCardCopy(f"test:a:offense:{card_id}", card_id)
+        for card_id in OFFENSIVE_PLAY_CATALOG
+    )
+    offense_b = tuple(
+        FootballCardCopy(f"test:b:offense:{card_id}", card_id)
+        for card_id in OFFENSIVE_PLAY_CATALOG
+    )
+    defense_a = tuple(
+        FootballCardCopy(f"test:a:defense:{card_id}", card_id)
+        for card_id in DEFENSIVE_SCHEME_CATALOG
+    )
+    defense_b = tuple(
+        FootballCardCopy(f"test:b:defense:{card_id}", card_id)
+        for card_id in DEFENSIVE_SCHEME_CATALOG
+    )
     values: dict[str, object] = {
         "team_a": _roster("Home"),
         "team_b": _roster("Away"),
@@ -69,6 +93,10 @@ def _state(**overrides: object) -> FootballMatchState:
         "offense_field_position": 25.0,
         "game_clock_seconds": 900,
         "period": 1,
+        "team_a_offense_deck": FootballDeckState(offense_a, hand=offense_a),
+        "team_a_defense_deck": FootballDeckState(defense_a, hand=defense_a),
+        "team_b_offense_deck": FootballDeckState(offense_b, hand=offense_b),
+        "team_b_defense_deck": FootballDeckState(defense_b, hand=defense_b),
     }
     values.update(overrides)
     if values.get("awaited_action") in (
@@ -355,3 +383,55 @@ def test_easy_ai_random_stream_is_independent_from_match_simulator_stream() -> N
     ai.choose_action(state)
 
     assert simulator.rng.getstate() == match_rng.getstate()
+
+
+@pytest.mark.parametrize(
+    ("difficulty", "game_number", "expected_extra"),
+    [
+        (FootballAIDifficulty.EASY, 1, 1),
+        (FootballAIDifficulty.EASY, 10, 2),
+        (FootballAIDifficulty.STANDARD, 10, 3),
+        (FootballAIDifficulty.HARD, 10, 4),
+    ],
+)
+def test_ai_decks_scale_reproducibly_without_consuming_decision_rng(
+    difficulty, game_number, expected_extra
+) -> None:
+    first = _ai(difficulty, seed=201)
+    replay = _ai(difficulty, seed=201)
+    roster = first.generate_opponent_roster()
+    replay_roster = replay.generate_opponent_roster()
+    decision_rng = first._rng.getstate()
+
+    offense, defense = first.generate_opponent_decks(game_number, roster)
+    replay_decks = replay.generate_opponent_decks(game_number, replay_roster)
+
+    assert len(offense) == len(STARTING_OFFENSIVE_ACTIONS) + expected_extra
+    assert len(defense) == len(STARTING_DEFENSIVE_ACTIONS) + expected_extra
+    assert (offense, defense) == replay_decks
+    assert first._rng.getstate() == decision_rng
+
+
+def test_ai_uses_only_its_hand_or_basic_fallback() -> None:
+    ai = _ai(FootballAIDifficulty.STANDARD, side=FootballTeamSide.TEAM_B)
+    team_b_play = FootballCardCopy("ai:hand:play", OffensivePlayAction.JET_SWEEP.value)
+    team_a_play = FootballCardCopy("human:hidden:play", OffensivePlayAction.DEEP_PASS.value)
+    team_b_scheme = FootballCardCopy(
+        "ai:hand:scheme", DefensiveSchemeAction.COVER_TWO_SHELL.value
+    )
+    state = _state(
+        possession=FootballTeamSide.TEAM_B,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        team_a_offense_deck=FootballDeckState((team_a_play,), hand=(team_a_play,)),
+        team_b_offense_deck=FootballDeckState((team_b_play,), hand=(team_b_play,)),
+        team_b_defense_deck=FootballDeckState((team_b_scheme,), hand=(team_b_scheme,)),
+    )
+
+    assert ai.choose_action(state) is OffensivePlayAction.JET_SWEEP
+    empty_hand = FootballDeckState((team_b_play,), draw_pile=(team_b_play,))
+    fallback_state = _state(
+        possession=FootballTeamSide.TEAM_B,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        team_b_offense_deck=empty_hand,
+    )
+    assert ai.choose_action(fallback_state) is OffensivePlayAction.RB_RUN

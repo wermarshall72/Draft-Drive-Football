@@ -47,6 +47,9 @@ class OffensivePlayAction(str, Enum):
     SHORT_PASS = "short_pass"
     MEDIUM_PASS = "medium_pass"
     DEEP_PASS = "deep_pass"
+    QB_SNEAK = "qb_sneak"
+    JET_SWEEP = "jet_sweep"
+    QUICK_OUT = "quick_out"
 
 
 class DefensiveSchemeAction(str, Enum):
@@ -56,6 +59,9 @@ class DefensiveSchemeAction(str, Enum):
     SHORT_PASS = "short_pass"
     MEDIUM_PASS = "medium_pass"
     DEEP_PASS = "deep_pass"
+    GOAL_LINE_FRONT = "goal_line_front"
+    COVER_TWO_SHELL = "cover_two_shell"
+    FIRE_ZONE_BLITZ = "fire_zone_blitz"
 
 
 class FootballFourthDownAction(str, Enum):
@@ -89,8 +95,69 @@ FOOTBALL_PLAY_MATCHUPS = MappingProxyType({
         (FootballPosition.QB, FootballPosition.WR),
         (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
     ),
+    OffensivePlayAction.QB_SNEAK: (
+        (FootballPosition.QB, FootballPosition.O_LINE),
+        (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
+    ),
+    OffensivePlayAction.JET_SWEEP: (
+        (FootballPosition.WR, FootballPosition.O_LINE),
+        (FootballPosition.D_LINE, FootballPosition.CORNERBACKS),
+    ),
+    OffensivePlayAction.QUICK_OUT: (
+        (FootballPosition.QB, FootballPosition.WR),
+        (FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS),
+    ),
 })
 
+FOOTBALL_SCHEME_MATCHUPS = MappingProxyType({
+    DefensiveSchemeAction.RB_RUN: (
+        (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
+        frozenset((OffensivePlayAction.RB_RUN,)),
+    ),
+    DefensiveSchemeAction.SCREEN_PASS: (
+        (FootballPosition.D_LINE, FootballPosition.CORNERBACKS),
+        frozenset((OffensivePlayAction.SCREEN_PASS,)),
+    ),
+    DefensiveSchemeAction.PA_PASS: (
+        (FootballPosition.SAFETIES, FootballPosition.LINEBACKERS),
+        frozenset((OffensivePlayAction.PA_PASS,)),
+    ),
+    DefensiveSchemeAction.SHORT_PASS: (
+        (FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS),
+        frozenset((OffensivePlayAction.SHORT_PASS,)),
+    ),
+    DefensiveSchemeAction.MEDIUM_PASS: (
+        (FootballPosition.SAFETIES, FootballPosition.D_LINE),
+        frozenset((OffensivePlayAction.MEDIUM_PASS,)),
+    ),
+    DefensiveSchemeAction.DEEP_PASS: (
+        (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
+        frozenset((OffensivePlayAction.DEEP_PASS,)),
+    ),
+    DefensiveSchemeAction.GOAL_LINE_FRONT: (
+        (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
+        frozenset((
+            OffensivePlayAction.RB_RUN,
+            OffensivePlayAction.QB_SNEAK,
+            OffensivePlayAction.JET_SWEEP,
+        )),
+    ),
+    DefensiveSchemeAction.COVER_TWO_SHELL: (
+        (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
+        frozenset((
+            OffensivePlayAction.DEEP_PASS,
+            OffensivePlayAction.MEDIUM_PASS,
+            OffensivePlayAction.QUICK_OUT,
+        )),
+    ),
+    DefensiveSchemeAction.FIRE_ZONE_BLITZ: (
+        (FootballPosition.LINEBACKERS, FootballPosition.D_LINE),
+        frozenset((
+            OffensivePlayAction.PA_PASS,
+            OffensivePlayAction.MEDIUM_PASS,
+        )),
+    ),
+})
 
 def matchup_for_play(
     play: OffensivePlayAction,
@@ -98,6 +165,54 @@ def matchup_for_play(
     if not isinstance(play, OffensivePlayAction) or play not in FOOTBALL_PLAY_MATCHUPS:
         raise ValueError(f"Unsupported play: {play!r}")
     return FOOTBALL_PLAY_MATCHUPS[play]
+
+
+def matchup_for_scheme(
+    scheme: DefensiveSchemeAction,
+) -> tuple[tuple[FootballPosition, ...], frozenset[OffensivePlayAction]]:
+    if not isinstance(scheme, DefensiveSchemeAction) or scheme not in FOOTBALL_SCHEME_MATCHUPS:
+        raise ValueError(f"Unsupported scheme: {scheme!r}")
+    return FOOTBALL_SCHEME_MATCHUPS[scheme]
+
+
+@dataclass(frozen=True)
+class FootballCardCopy:
+    """One owned copy of a play or scheme, identified independently of its type."""
+
+    copy_id: str
+    card_id: str
+
+    def __post_init__(self) -> None:
+        _validate_name(self.copy_id, "Card copy identifier")
+        _validate_name(self.card_id, "Card identifier")
+
+
+@dataclass(frozen=True)
+class FootballDeckState:
+    """Owned cards and their match-local draw, hand, and discard zones."""
+
+    owned: tuple[FootballCardCopy, ...]
+    draw_pile: tuple[FootballCardCopy, ...] = ()
+    hand: tuple[FootballCardCopy, ...] = ()
+    discard_pile: tuple[FootballCardCopy, ...] = ()
+
+    def __post_init__(self) -> None:
+        zones = (self.owned, self.draw_pile, self.hand, self.discard_pile)
+        if any(
+            not isinstance(zone, tuple)
+            or any(not isinstance(card, FootballCardCopy) for card in zone)
+            for zone in zones
+        ):
+            raise ValueError("Deck cards and zones must be immutable tuples of card copies.")
+        owned_ids = [card.copy_id for card in self.owned]
+        if len(owned_ids) != len(set(owned_ids)):
+            raise ValueError("Owned card copy identifiers must be unique.")
+        zone_cards = self.draw_pile + self.hand + self.discard_pile
+        zone_ids = [card.copy_id for card in zone_cards]
+        if len(zone_ids) != len(set(zone_ids)):
+            raise ValueError("A card copy cannot be in more than one deck zone.")
+        if zone_ids and set(zone_ids) != set(owned_ids):
+            raise ValueError("Every owned card copy must be in exactly one deck zone.")
 
 
 def _validate_name(value: str, field_name: str) -> None:
@@ -398,6 +513,10 @@ class FootballMatchState:
     current_drive_defensive_scheme: DefensiveSchemeAction | None = None
     final_result: FootballMatchResult | None = None
     match_events: tuple[FootballMatchEvent, ...] = ()
+    team_a_offense_deck: FootballDeckState | None = None
+    team_a_defense_deck: FootballDeckState | None = None
+    team_b_offense_deck: FootballDeckState | None = None
+    team_b_defense_deck: FootballDeckState | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.team_a, FootballRoster) or not isinstance(
@@ -457,6 +576,16 @@ class FootballMatchState:
             not isinstance(event, FootballMatchEvent) for event in self.match_events
         ):
             raise ValueError("Match events must be an immutable tuple of football events.")
+        if any(
+            deck is not None and not isinstance(deck, FootballDeckState)
+            for deck in (
+                self.team_a_offense_deck,
+                self.team_a_defense_deck,
+                self.team_b_offense_deck,
+                self.team_b_defense_deck,
+            )
+        ):
+            raise ValueError("Match decks must be FootballDeckState instances or None.")
         if any(event.sequence != index for index, event in enumerate(self.match_events, 1)):
             raise ValueError("Match event sequence numbers must be contiguous.")
         if self.status is FootballMatchStatus.COMPLETED:

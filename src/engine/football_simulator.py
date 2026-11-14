@@ -15,6 +15,8 @@ from numbers import Real
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardCopy,
+    FootballDeckState,
     FootballFourthDownAction,
     FootballMatchEvent,
     FootballMatchResult,
@@ -24,6 +26,7 @@ from src.engine.football import (
     FootballRoster,
     FootballTeamSide,
     OffensivePlayAction,
+    matchup_for_scheme,
     matchup_for_play,
 )
 from src.engine.football_coaches import (
@@ -32,6 +35,13 @@ from src.engine.football_coaches import (
     coaches_for_assignment,
 )
 from src.engine.football_player_catalog import player_contribution_modifier
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+    FootballPlayFamily,
+    starting_defensive_deck,
+    starting_offensive_deck,
+)
 
 REGULATION_PERIOD_SECONDS = 900
 OVERTIME_PERIOD_SECONDS = 300
@@ -73,21 +83,14 @@ PASS_INTERCEPTION_PROBABILITY = 0.12
 GO_FOR_IT_BASE_SUCCESS_PROBABILITY = 0.52
 GO_FOR_IT_MAX_SUCCESS_PROBABILITY = 0.78
 
-_PASS_PLAYS = {
-    OffensivePlayAction.SCREEN_PASS,
-    OffensivePlayAction.PA_PASS,
-    OffensivePlayAction.SHORT_PASS,
-    OffensivePlayAction.MEDIUM_PASS,
-    OffensivePlayAction.DEEP_PASS,
-}
-
+_PASS_PLAYS = frozenset(
+    definition.action
+    for definition in OFFENSIVE_PLAY_CATALOG.values()
+    if definition.family is FootballPlayFamily.PASS
+)
 _BASE_YARDAGE = {
-    OffensivePlayAction.RB_RUN: 4.0,
-    OffensivePlayAction.SCREEN_PASS: 3.5,
-    OffensivePlayAction.PA_PASS: 5.0,
-    OffensivePlayAction.SHORT_PASS: 5.5,
-    OffensivePlayAction.MEDIUM_PASS: 6.5,
-    OffensivePlayAction.DEEP_PASS: 8.0,
+    definition.action: definition.base_yards
+    for definition in OFFENSIVE_PLAY_CATALOG.values()
 }
 
 
@@ -137,7 +140,7 @@ def _drive_yards_remaining(position: float) -> float:
 def _scheme_matches_play(
     scheme: DefensiveSchemeAction | None, play: OffensivePlayAction
 ) -> bool:
-    return scheme is not None and scheme.value == play.value
+    return scheme is not None and play in matchup_for_scheme(scheme)[1]
 
 
 def _complete_match(state: FootballMatchState) -> FootballMatchState:
@@ -297,6 +300,227 @@ class FootballMatchSimulator:
             raise ValueError("An in-progress overtime match must start tied.")
         self.state = match_state
         self.rng = random.Random(match_state.random_seed)
+        self._deck_rngs = {
+            "team_a_offense": random.Random(match_state.random_seed ^ 0xA110),
+            "team_a_defense": random.Random(match_state.random_seed ^ 0xA120),
+            "team_b_offense": random.Random(match_state.random_seed ^ 0xB110),
+            "team_b_defense": random.Random(match_state.random_seed ^ 0xB120),
+        }
+        self._initialize_decks()
+
+    def _initialize_decks(self) -> None:
+        changes: dict[str, FootballDeckState] = {}
+        for side in FootballTeamSide:
+            for offensive in (True, False):
+                group = "offense" if offensive else "defense"
+                field_name = f"{side.value}_{group}_deck"
+                deck = getattr(self.state, field_name)
+                if deck is None:
+                    owned = (
+                        starting_offensive_deck(side.value)
+                        if offensive
+                        else starting_defensive_deck(side.value)
+                    )
+                    deck = FootballDeckState(owned)
+                catalog = (
+                    OFFENSIVE_PLAY_CATALOG
+                    if offensive
+                    else DEFENSIVE_SCHEME_CATALOG
+                )
+                if any(card.card_id not in catalog for card in deck.owned):
+                    raise ValueError(f"{group.title()} deck contains an unknown card.")
+                if not (deck.draw_pile or deck.hand or deck.discard_pile):
+                    deck = self._deal_deck(
+                        deck.owned,
+                        self._deck_rngs[f"{side.value}_{group}"],
+                        3 if offensive else 2,
+                    )
+                changes[field_name] = deck
+        if any(getattr(self.state, field) != deck for field, deck in changes.items()):
+            self.state = replace(self.state, **changes)
+
+    @staticmethod
+    def _deck_field(side: FootballTeamSide, *, offensive: bool) -> str:
+        return f"{side.value}_{'offense' if offensive else 'defense'}_deck"
+
+    def _deck_for(
+        self, side: FootballTeamSide, *, offensive: bool
+    ) -> FootballDeckState:
+        deck = getattr(self.state, self._deck_field(side, offensive=offensive))
+        if not isinstance(deck, FootballDeckState):
+            raise RuntimeError("The match deck was not initialized.")
+        return deck
+
+    def _set_deck(
+        self,
+        side: FootballTeamSide,
+        *,
+        offensive: bool,
+        deck: FootballDeckState,
+    ) -> None:
+        self.state = replace(
+            self.state,
+            **{self._deck_field(side, offensive=offensive): deck},
+        )
+
+    @staticmethod
+    def _deal_deck(
+        owned: tuple[FootballCardCopy, ...],
+        rng: random.Random,
+        hand_size: int,
+    ) -> FootballDeckState:
+        cards = list(owned)
+        rng.shuffle(cards)
+        hand = tuple(cards[:hand_size])
+        return FootballDeckState(
+            owned=owned,
+            draw_pile=tuple(cards[hand_size:]),
+            hand=hand,
+        )
+
+    def _select_offensive_card(
+        self, selection: OffensivePlayAction | str | None
+    ) -> tuple[OffensivePlayAction, FootballCardCopy | None]:
+        deck = self._deck_for(self.state.possession, offensive=True)
+        selected: FootballCardCopy | None = None
+        action: OffensivePlayAction | None = None
+        if isinstance(selection, OffensivePlayAction):
+            action = selection
+            selected = next(
+                (
+                    card
+                    for card in deck.hand
+                    if OFFENSIVE_PLAY_CATALOG[card.card_id].action is action
+                ),
+                None,
+            )
+            if selected is None and deck.hand:
+                raise ValueError("Offensive play is not available in the current hand.")
+        elif isinstance(selection, str):
+            selected = next(
+                (card for card in deck.hand if card.copy_id == selection),
+                None,
+            )
+            if selected is None:
+                raise ValueError("Offensive card is not in the current hand.")
+            action = OFFENSIVE_PLAY_CATALOG[selected.card_id].action
+        elif selection is not None:
+            raise ValueError("Offensive selection must be a card id, play, or None.")
+
+        if selected is None:
+            if deck.hand:
+                raise ValueError("The fallback is available only when the hand is empty.")
+            if action not in (None, OffensivePlayAction.RB_RUN):
+                raise ValueError("The empty-hand fallback is the basic inside run.")
+            return OffensivePlayAction.RB_RUN, None
+        return action, selected
+
+    def _select_scheme_card(
+        self, selection: DefensiveSchemeAction | str | None
+    ) -> tuple[DefensiveSchemeAction, FootballCardCopy | None]:
+        side = _opponent(self.state.possession)
+        deck = self._deck_for(side, offensive=False)
+        selected: FootballCardCopy | None = None
+        action: DefensiveSchemeAction | None = None
+        if isinstance(selection, DefensiveSchemeAction):
+            action = selection
+            selected = next(
+                (
+                    card
+                    for card in deck.hand
+                    if DEFENSIVE_SCHEME_CATALOG[card.card_id].action is action
+                ),
+                None,
+            )
+            if selected is None and deck.hand:
+                raise ValueError("Defensive scheme is not available in the current hand.")
+        elif isinstance(selection, str):
+            selected = next(
+                (card for card in deck.hand if card.copy_id == selection),
+                None,
+            )
+            if selected is None:
+                raise ValueError("Defensive card is not in the current hand.")
+            action = DEFENSIVE_SCHEME_CATALOG[selected.card_id].action
+        elif selection is not None:
+            raise ValueError("Defensive selection must be a card id, scheme, or None.")
+
+        if selected is None:
+            if deck.hand:
+                raise ValueError("The fallback is available only when the hand is empty.")
+            if action not in (None, DefensiveSchemeAction.RB_RUN):
+                raise ValueError("The empty-hand fallback is the basic run-fit scheme.")
+            return DefensiveSchemeAction.RB_RUN, None
+        return action, selected
+
+    def _cycle_played_card(
+        self,
+        side: FootballTeamSide,
+        *,
+        offensive: bool,
+        card: FootballCardCopy | None,
+    ) -> None:
+        deck = self._deck_for(side, offensive=offensive)
+        hand = list(deck.hand)
+        discard = list(deck.discard_pile)
+        if card is not None:
+            hand.remove(card)
+            discard.append(card)
+        rng = self._deck_rngs[
+            f"{side.value}_{'offense' if offensive else 'defense'}"
+        ]
+        draw_pile = list(deck.draw_pile)
+        if not draw_pile and discard:
+            rng.shuffle(discard)
+            draw_pile, discard = discard, []
+        if draw_pile:
+            hand.append(draw_pile.pop(0))
+        self._set_deck(
+            side,
+            offensive=offensive,
+            deck=FootballDeckState(
+                owned=deck.owned,
+                draw_pile=tuple(draw_pile),
+                hand=tuple(hand),
+                discard_pile=tuple(discard),
+            ),
+        )
+
+    def _finish_play_action(
+        self,
+        state: FootballMatchState,
+        offensive_side: FootballTeamSide,
+        card: FootballCardCopy | None,
+        *,
+        previous_period: int,
+    ) -> FootballMatchState:
+        self.state = state
+        self._cycle_played_card(offensive_side, offensive=True, card=card)
+        self._reset_for_period_boundary(previous_period)
+        return self.state
+
+    def _reset_for_period_boundary(self, previous_period: int) -> None:
+        reset_at_boundary = (previous_period == 1 and self.state.period == 2) or (
+            previous_period == 2 and self.state.period == 3
+        )
+        if reset_at_boundary:
+            self._reset_all_decks()
+
+    def _reset_all_decks(self) -> None:
+        changes: dict[str, FootballDeckState] = {}
+        for side in FootballTeamSide:
+            for offensive in (True, False):
+                group = "offense" if offensive else "defense"
+                field_name = self._deck_field(side, offensive=offensive)
+                current = getattr(self.state, field_name)
+                if not isinstance(current, FootballDeckState):
+                    raise RuntimeError("The match deck was not initialized.")
+                changes[field_name] = self._deal_deck(
+                    current.owned,
+                    self._deck_rngs[f"{side.value}_{group}"],
+                    3 if offensive else 2,
+                )
+        self.state = replace(self.state, **changes)
 
     def _require_action(self, expected: FootballAwaitedAction) -> None:
         if self.state.status is FootballMatchStatus.COMPLETED:
@@ -307,19 +531,23 @@ class FootballMatchSimulator:
             raise ValueError("No action is legal after the period clock has expired.")
 
     def select_defensive_scheme(
-        self, scheme: DefensiveSchemeAction
+        self, scheme: DefensiveSchemeAction | str | None
     ) -> FootballMatchState:
-        if not isinstance(scheme, DefensiveSchemeAction):
-            raise ValueError("Defense must be a DefensiveSchemeAction.")
         if self.state.current_drive_defensive_scheme is not None:
             raise ValueError("A defensive scheme cannot be replaced mid-drive.")
         self._require_action(FootballAwaitedAction.DEFENSIVE_SCHEME)
+        selected_scheme, selected_card = self._select_scheme_card(scheme)
         updated = replace(
             self.state,
-            current_drive_defensive_scheme=scheme,
+            current_drive_defensive_scheme=selected_scheme,
             awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
         )
-        self.state = _record_event(updated, action=scheme)
+        self.state = _record_event(updated, action=selected_scheme)
+        self._cycle_played_card(
+            _opponent(self.state.possession),
+            offensive=False,
+            card=selected_card,
+        )
         return self.state
 
     def _adjusted_power(self, player_power: float, stamina: float, prior_plays: int) -> float:
@@ -345,13 +573,16 @@ class FootballMatchSimulator:
                 return self.state.match_events[index + 1 :]
         return ()
 
-    def resolve_offensive_play(self, play: OffensivePlayAction) -> FootballMatchState:
-        if not isinstance(play, OffensivePlayAction):
-            raise ValueError("Offensive play must be an OffensivePlayAction.")
+    def resolve_offensive_play(
+        self, play: OffensivePlayAction | str | None
+    ) -> FootballMatchState:
         self._require_action(FootballAwaitedAction.OFFENSIVE_PLAY)
         scheme = self.state.current_drive_defensive_scheme
         if scheme is None:
             raise ValueError("A defensive scheme must be chosen before the snap.")
+        previous_period = self.state.period
+        offensive_side = self.state.possession
+        play, selected_card = self._select_offensive_card(play)
 
         offense_roster = (
             self.state.team_a
@@ -363,8 +594,9 @@ class FootballMatchSimulator:
             if self.state.possession is FootballTeamSide.TEAM_A
             else self.state.team_a
         )
-        offense_slots, _ = matchup_for_play(play)
-        _, defense_slots = matchup_for_play(OffensivePlayAction(scheme.value))
+        play_definition = OFFENSIVE_PLAY_CATALOG[play.value]
+        offense_slots = play_definition.contributors
+        defense_slots = matchup_for_scheme(scheme)[0]
         offense_players = [offense_roster.players[position] for position in offense_slots]
         defense_players = [defense_roster.players[position] for position in defense_slots]
         offense_coach, _ = self._coach_profiles(offense_roster)
@@ -423,7 +655,7 @@ class FootballMatchSimulator:
         yards += self.rng.uniform(-spread, spread)
         turnover = False
         incomplete = False
-        if play in _PASS_PLAYS:
+        if play_definition.family is FootballPlayFamily.PASS:
             roll = self.rng.random()
             incomplete_threshold = min(1.0, PASS_INCOMPLETE_BASE_PROBABILITY + (
                 MATCHED_SCHEME_INCOMPLETE_BONUS if same_scheme else 0.0
@@ -475,11 +707,13 @@ class FootballMatchSimulator:
             yards = min(yards, 0.0)
 
         if (
-            play is OffensivePlayAction.RB_RUN
+            play_definition.family is FootballPlayFamily.RUN
             and offense_perk is not None
             and offense_perk.kind is FootballCoachPerkKind.FIRST_RUN_YARDS
             and not any(
-                event.action is OffensivePlayAction.RB_RUN
+                isinstance(event.action, OffensivePlayAction)
+                and OFFENSIVE_PLAY_CATALOG[event.action.value].family
+                is FootballPlayFamily.RUN
                 for event in drive_events
             )
         ):
@@ -493,7 +727,7 @@ class FootballMatchSimulator:
                     "Ground and Pound: first run attempt used; turnover prevented the bonus"
                 )
         if (
-            play in _PASS_PLAYS
+            play_definition.family is FootballPlayFamily.PASS
             and not incomplete
             and not turnover
             and offense_perk is not None
@@ -501,7 +735,9 @@ class FootballMatchSimulator:
             is FootballCoachPerkKind.FIRST_COMPLETED_PASS_YARDS
             and not any(
                 event.play_result is not None
-                and event.action in _PASS_PLAYS
+                and isinstance(event.action, OffensivePlayAction)
+                and OFFENSIVE_PLAY_CATALOG[event.action.value].family
+                is FootballPlayFamily.PASS
                 and not event.play_result.incomplete
                 and not event.play_result.turnover
                 for event in drive_events
@@ -510,7 +746,7 @@ class FootballMatchSimulator:
             yards += offense_perk.value
             perk_effects.append("Air Raid: +3 yards on the first completed pass")
         if (
-            play in _PASS_PLAYS
+            play_definition.family is FootballPlayFamily.PASS
             and self.state.down == 1
             and not incomplete
             and not turnover
@@ -520,8 +756,8 @@ class FootballMatchSimulator:
             yards += offense_perk.value
             perk_effects.append("Pro Style: +2 yards on a first-down pass")
         if (
-            play is OffensivePlayAction.RB_RUN
-            and scheme is DefensiveSchemeAction.RB_RUN
+            play_definition.family is FootballPlayFamily.RUN
+            and same_scheme
             and not turnover
             and defense_perk is not None
             and defense_perk.kind
@@ -536,7 +772,7 @@ class FootballMatchSimulator:
             else TURNOVER_PLAY_CLOCK_SECONDS
             if turnover
             else RUN_PLAY_CLOCK_SECONDS
-            if play is OffensivePlayAction.RB_RUN
+            if play_definition.family is FootballPlayFamily.RUN
             else COMPLETED_PASS_CLOCK_SECONDS
         )
         positive_gain = yards > 0
@@ -575,7 +811,12 @@ class FootballMatchSimulator:
                 clock_seconds_used=result.clock_seconds_used,
                 perk_effects=result.perk_effects,
             )
-            return self.state
+            return self._finish_play_action(
+                self.state,
+                offensive_side,
+                selected_card,
+                previous_period=previous_period,
+            )
 
         if new_position >= GOAL_LINE_YARDS and positive_gain:
             scoring_team = self.state.possession
@@ -609,7 +850,12 @@ class FootballMatchSimulator:
                 clock_seconds_used=result.clock_seconds_used,
                 perk_effects=result.perk_effects,
             )
-            return self.state
+            return self._finish_play_action(
+                self.state,
+                offensive_side,
+                selected_card,
+                previous_period=previous_period,
+            )
 
         if turnover:
             return_yards = (
@@ -681,7 +927,12 @@ class FootballMatchSimulator:
             clock_seconds_used=result.clock_seconds_used,
             perk_effects=result.perk_effects,
         )
-        return self.state
+        return self._finish_play_action(
+            self.state,
+            offensive_side,
+            selected_card,
+            previous_period=previous_period,
+        )
 
     def _finish_action(
         self,
@@ -702,6 +953,7 @@ class FootballMatchSimulator:
         if self.state.down != 4:
             raise ValueError("Fourth-down decisions are only legal on fourth down.")
 
+        previous_period = self.state.period
         state = self.state
         points = 0
         scoring_team = None
@@ -827,4 +1079,5 @@ class FootballMatchSimulator:
             clock_seconds_used=min(self.state.game_clock_seconds, clock_cost),
             perk_effects=perk_effects,
         )
+        self._reset_for_period_boundary(previous_period)
         return self.state

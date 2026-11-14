@@ -15,6 +15,7 @@ from src.engine.football import (
 from src.engine.football_coaches import (
     FootballCoachProfile,
     FootballCoachSide,
+    coaches_for_assignment,
 )
 from src.engine.football_player_catalog import (
     MAX_COMBINED_PLAYER_MODIFIER,
@@ -28,10 +29,18 @@ from src.engine.football_controller import (
     FootballRunPhase,
 )
 from src.engine.football_shop import (
+    MIN_PLAYBOOK_DECK_SIZE,
     FootballShopRarity,
     FootballShopSection,
     FootballShopSlotState,
     FootballShopState,
+    FootballUpgradeStat,
+)
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+    FootballPlayDefinition,
+    FootballSchemeDefinition,
 )
 from src.engine.football_team_builder import (
     PLAYER_DRAFT_ORDER,
@@ -52,6 +61,9 @@ _PLAY_LABELS = {
     OffensivePlayAction.SHORT_PASS: "SHORT PASS",
     OffensivePlayAction.MEDIUM_PASS: "MEDIUM PASS",
     OffensivePlayAction.DEEP_PASS: "DEEP PASS",
+    OffensivePlayAction.QB_SNEAK: "QUARTERBACK SNEAK",
+    OffensivePlayAction.JET_SWEEP: "JET SWEEP",
+    OffensivePlayAction.QUICK_OUT: "QUICK OUT",
 }
 
 _SCHEME_LABELS = {
@@ -61,6 +73,9 @@ _SCHEME_LABELS = {
     DefensiveSchemeAction.SHORT_PASS: "SHORT PASS SCHEME",
     DefensiveSchemeAction.MEDIUM_PASS: "MEDIUM PASS SCHEME",
     DefensiveSchemeAction.DEEP_PASS: "DEEP PASS SCHEME",
+    DefensiveSchemeAction.GOAL_LINE_FRONT: "GOAL-LINE FRONT",
+    DefensiveSchemeAction.COVER_TWO_SHELL: "COVER TWO SHELL",
+    DefensiveSchemeAction.FIRE_ZONE_BLITZ: "FIRE-ZONE BLITZ",
 }
 
 _POSITION_LABELS = {
@@ -167,6 +182,15 @@ class FootballRunScreen(Screen):
         self._draft_small_font = staff_font(13)
         self._draft_button_font = staff_font(17, semibold=True)
         self._coach_focus_changed_at = 0
+        self._shop_review_mode: str | None = None
+        self._playbook_scroll = 0
+        self._playbook_max_scroll = 0
+        self._match_hand_scroll = 0
+        self._match_hand_max_scroll = 0
+        self._match_hand_area_rect: pygame.Rect | None = None
+        self._hand_card_rects: dict[str, pygame.Rect] = {}
+        self._play_area_rect: pygame.Rect | None = None
+        self._dragging_card_id: str | None = None
 
     def begin(self, controller: FootballGameController) -> None:
         self.controller = controller
@@ -183,9 +207,82 @@ class FootballRunScreen(Screen):
         self._draft_popup_pressed = False
         self._draft_card_rects = []
         self._draft_detail_rect = None
+        self._shop_review_mode = None
+        self._playbook_scroll = 0
+        self._playbook_max_scroll = 0
+        self._match_hand_scroll = 0
+        self._match_hand_max_scroll = 0
+        self._hand_card_rects = {}
+        self._play_area_rect = None
+        self._match_hand_area_rect = None
+        self._dragging_card_id = None
         self._coach_focus_changed_at = pygame.time.get_ticks()
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        state = self._current_state()
+        if (
+            state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and self._shop_review_mode is not None
+        ):
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self._leave_shop_review()
+                return
+            if (
+                event.type == pygame.MOUSEWHEEL
+                and self._shop_review_mode == "playbook"
+            ):
+                self._playbook_scroll = max(
+                    0,
+                    min(
+                        self._playbook_max_scroll,
+                        self._playbook_scroll - event.y,
+                    ),
+                )
+                return
+        if state.phase is FootballRunPhase.MATCH and not self.confirm_exit:
+            if (
+                event.type == pygame.MOUSEWHEEL
+                and self._match_hand_area_rect is not None
+                and self._match_hand_max_scroll > 0
+            ):
+                self._match_hand_scroll = max(
+                    0,
+                    min(
+                        self._match_hand_max_scroll,
+                        self._match_hand_scroll - event.y,
+                    ),
+                )
+                return
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                selected_id = next(
+                    (
+                        copy_id
+                        for copy_id, rect in self._hand_card_rects.items()
+                        if rect.collidepoint(event.pos)
+                    ),
+                    None,
+                )
+                if selected_id is not None:
+                    self._dragging_card_id = selected_id
+                    return
+            if (
+                event.type == pygame.MOUSEBUTTONUP
+                and event.button == 1
+                and self._dragging_card_id is not None
+            ):
+                selected_id = self._dragging_card_id
+                self._dragging_card_id = None
+                origin = self._hand_card_rects.get(selected_id)
+                valid_drop = (
+                    self._play_area_rect is not None
+                    and self._play_area_rect.collidepoint(event.pos)
+                ) or (origin is not None and origin.collidepoint(event.pos))
+                if valid_drop:
+                    self._submit_match_hand_card(selected_id)
+                else:
+                    self.last_error = "Invalid drop. Place the card in the play area."
+                    self.state = self._require_controller().state
+                return
         if self._current_state().phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
             if event.type == pygame.KEYDOWN:
                 self._coach_keyboard_inspection = True
@@ -261,6 +358,9 @@ class FootballRunScreen(Screen):
                 self._draft_keyboard_inspection = False
                 self._draft_popup_pressed = False
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if self._shop_review_mode is not None:
+                self._leave_shop_review()
+                return
             self.confirm_exit = not self.confirm_exit
             self._coach_hover_index = None
             self._coach_popup_pressed = False
@@ -344,7 +444,12 @@ class FootballRunScreen(Screen):
         elif state.phase is FootballRunPhase.PLAYER_DRAFT:
             self._draw_player_draft(surface, content, state)
         elif state.phase is FootballRunPhase.PRE_MATCH_SHOP:
-            self._draw_shop(surface, content, state.shop)
+            if self._shop_review_mode == "depth":
+                self._draw_depth_chart(surface, content, state)
+            elif self._shop_review_mode == "playbook":
+                self._draw_playbook(surface, content, state.shop)
+            else:
+                self._draw_shop(surface, content, state.shop)
         else:
             self._draw_result(surface, content, state)
 
@@ -459,14 +564,15 @@ class FootballRunScreen(Screen):
         )
         self._set_buttons(self.buttons)
         for index, button in enumerate(self.buttons[:-1]):
-            self._draw_match_call_button(
-                surface,
-                button,
-                index + 1,
-                focused=button.focused,
-                hovered=self.hover_index == index,
-                pressed=self.pressed_index == index,
-            )
+            if button.variant != "hand-card":
+                self._draw_match_call_button(
+                    surface,
+                    button,
+                    index + 1,
+                    focused=button.focused,
+                    hovered=self.hover_index == index,
+                    pressed=self.pressed_index == index,
+                )
         self._draw_match_pause_button(
             surface,
             self.buttons[-1],
@@ -896,29 +1002,13 @@ class FootballRunScreen(Screen):
     ) -> None:
         decision = state.human_decision
         if decision is FootballHumanDecision.OFFENSIVE_PLAY:
-            labels = tuple(_PLAY_LABELS.items())
             heading = "OFFENSE   /   CALL THE PLAY"
-            actions = [
-                (
-                    label,
-                    lambda action=action: self._submit_match_action(
-                        lambda: self._require_controller().choose_offensive_play(action)
-                    ),
-                )
-                for action, label in labels
-            ]
+            self._draw_match_hand(surface, rect, state, offensive=True)
+            return
         elif decision is FootballHumanDecision.DEFENSIVE_SCHEME:
-            labels = tuple(_SCHEME_LABELS.items())
             heading = "DEFENSE   /   SET THE DRIVE"
-            actions = [
-                (
-                    label,
-                    lambda action=action: self._submit_match_action(
-                        lambda: self._require_controller().choose_defensive_scheme(action)
-                    ),
-                )
-                for action, label in labels
-            ]
+            self._draw_match_hand(surface, rect, state, offensive=False)
+            return
         elif decision is FootballHumanDecision.FOURTH_DOWN:
             heading = "FOURTH DOWN   /   MAKE THE CALL"
             actions = [
@@ -941,6 +1031,9 @@ class FootballRunScreen(Screen):
             self._small_font,
             _MATCH_BRASS,
         )
+        self._match_hand_area_rect = None
+        self._hand_card_rects = {}
+        self._play_area_rect = None
         self._match_call_rect = pygame.Rect(
             rect.left,
             rect.top + 24,
@@ -973,6 +1066,219 @@ class FootballRunScreen(Screen):
                 button_height,
             )
             self.buttons.append(Button(label, callback, button_rect))
+
+    def _draw_match_hand(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        state: FootballGameControllerState,
+        *,
+        offensive: bool,
+    ) -> None:
+        match = state.match
+        if match is None:
+            raise RuntimeError("The controller did not provide an active match state.")
+        deck = (
+            match.team_a_offense_deck
+            if offensive
+            else match.team_a_defense_deck
+        )
+        if deck is None:
+            raise RuntimeError("The controller did not provide the human's match deck.")
+        catalog = OFFENSIVE_PLAY_CATALOG if offensive else DEFENSIVE_SCHEME_CATALOG
+        labels = _PLAY_LABELS if offensive else _SCHEME_LABELS
+
+        draw_text(
+            surface,
+            (
+                "OFFENSE  /  CALL THE PLAY  /  SELECT OR DRAG A CARD"
+                if offensive
+                else "DEFENSE  /  SET THE DRIVE  /  SELECT OR DRAG A CARD"
+            ),
+            (rect.left + 2, rect.top),
+            self._small_font,
+            _MATCH_BRASS,
+        )
+        self._play_area_rect = pygame.Rect(
+            rect.left,
+            rect.top + 20,
+            rect.width,
+            32,
+        )
+        pygame.draw.rect(
+            surface,
+            _MATCH_PANEL,
+            self._play_area_rect,
+            border_radius=5,
+        )
+        pygame.draw.rect(
+            surface,
+            _MATCH_BRASS,
+            self._play_area_rect,
+            width=1,
+            border_radius=5,
+        )
+        draw_text(
+            surface,
+            "DROP PLAY HERE" if offensive else "DROP SCHEME HERE",
+            (self._play_area_rect.left + 10, self._play_area_rect.top + 8),
+            self._small_font,
+            _MATCH_CHALK,
+        )
+        pile_label = (
+            f"HAND {len(deck.hand)}   /   DRAW {len(deck.draw_pile)}   /   "
+            f"DISCARD {len(deck.discard_pile)}"
+        )
+        hand_top = self._play_area_rect.bottom + 5
+        draw_text(
+            surface,
+            pile_label,
+            (rect.left + 2, hand_top),
+            self._small_font,
+            _MATCH_MUTED,
+        )
+        hand_top += self._small_font.get_height() + 2
+        self._match_hand_area_rect = pygame.Rect(
+            rect.left,
+            hand_top,
+            rect.width,
+            max(1, rect.bottom - hand_top),
+        )
+        self._hand_card_rects = {}
+        self.buttons = []
+        if deck.hand:
+            columns = min(3, len(deck.hand))
+            gap_x = 8
+            gap_y = 5
+            card_width = (rect.width - gap_x * (columns - 1)) // columns
+            card_height = 54
+            visible_rows = max(
+                1,
+                (self._match_hand_area_rect.height + gap_y) // (card_height + gap_y),
+            )
+            total_rows = (len(deck.hand) + columns - 1) // columns
+            self._match_hand_max_scroll = max(0, total_rows - visible_rows)
+            self._match_hand_scroll = min(
+                self._match_hand_scroll, self._match_hand_max_scroll
+            )
+            start = self._match_hand_scroll * columns
+            visible_cards = deck.hand[start : start + visible_rows * columns]
+            for visible_index, card in enumerate(visible_cards):
+                row, column = divmod(visible_index, columns)
+                card_rect = pygame.Rect(
+                    self._match_hand_area_rect.left + column * (card_width + gap_x),
+                    self._match_hand_area_rect.top + row * (card_height + gap_y),
+                    card_width,
+                    card_height,
+                )
+                definition = catalog[card.card_id]
+                label = labels[definition.action]
+                fill = (
+                    pygame.Color("#344536")
+                    if card.copy_id == self._dragging_card_id
+                    else _MATCH_PANEL
+                )
+                button_index = len(self.buttons)
+                focused = self.focus_index == button_index
+                hovered = self.hover_index == button_index
+                pressed = self.pressed_index == button_index
+                pygame.draw.rect(surface, fill, card_rect, border_radius=5)
+                pygame.draw.rect(
+                    surface,
+                    _MATCH_FOCUS if focused or hovered else _MATCH_PANEL_EDGE,
+                    card_rect,
+                    width=2 if focused or hovered or pressed
+                    or card.copy_id == self._dragging_card_id else 1,
+                    border_radius=5,
+                )
+                draw_text(
+                    surface,
+                    _fit_text(label, self._small_font, card_rect.width - 12),
+                    (card_rect.left + 6, card_rect.top + 5),
+                    self._small_font,
+                    _MATCH_CHALK,
+                )
+                contributor_label = ", ".join(
+                    _POSITION_LABELS[position] for position in definition.contributors
+                )
+                draw_text(
+                    surface,
+                    _fit_text(
+                        contributor_label,
+                        self._small_font,
+                        card_rect.width - 12,
+                    ),
+                    (card_rect.left + 6, card_rect.top + 27),
+                    self._small_font,
+                    _MATCH_MUTED,
+                )
+                self._hand_card_rects[card.copy_id] = card_rect
+                self.buttons.append(
+                    Button(
+                        label,
+                        lambda copy_id=card.copy_id: self._submit_match_hand_card(
+                            copy_id
+                        ),
+                        card_rect,
+                        variant="hand-card",
+                    )
+                )
+        else:
+            self._match_hand_max_scroll = 0
+            self._match_hand_scroll = 0
+            fallback = (
+                OffensivePlayAction.RB_RUN
+                if offensive
+                else DefensiveSchemeAction.RB_RUN
+            )
+            fallback_label = (
+                "FALLBACK / INSIDE RUN"
+                if offensive
+                else "FALLBACK / RUN FIT"
+            )
+            fallback_rect = pygame.Rect(
+                self._match_hand_area_rect.left + 2,
+                self._match_hand_area_rect.top + 2,
+                min(280, self._match_hand_area_rect.width - 4),
+                min(48, self._match_hand_area_rect.height - 2),
+            )
+            self.buttons.append(
+                Button(
+                    fallback_label,
+                    lambda: self._submit_match_action(
+                        lambda: (
+                            self._require_controller().choose_offensive_play(fallback)
+                            if offensive
+                            else self._require_controller().choose_defensive_scheme(fallback)
+                        )
+                    ),
+                    fallback_rect,
+                )
+            )
+
+        if self._match_hand_max_scroll:
+            draw_text(
+                surface,
+                f"Scroll hand  /  {self._match_hand_scroll + 1} of "
+                f"{self._match_hand_max_scroll + 1}",
+                (self._match_hand_area_rect.right - 150, hand_top - 2),
+                self._small_font,
+                _MATCH_MUTED,
+            )
+
+    def _submit_match_hand_card(self, copy_id: str) -> None:
+        state = self._current_state()
+        decision = state.human_decision
+        if decision is FootballHumanDecision.OFFENSIVE_PLAY:
+            self._submit_match_action(
+                lambda: self._require_controller().choose_offensive_play(copy_id)
+            )
+        elif decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+            self._submit_match_action(
+                lambda: self._require_controller().choose_defensive_scheme(copy_id)
+            )
+        else:
+            raise RuntimeError("A hand card can only be played during a play or scheme call.")
 
     def _draw_match_call_button(
         self,
@@ -1725,6 +2031,397 @@ class FootballRunScreen(Screen):
                 )
                 detail_y += wrapped_lines * self._draft_detail_font.get_height() + 1
 
+    def _draw_depth_chart(
+        self,
+        surface: pygame.Surface,
+        content: pygame.Rect,
+        state: FootballGameControllerState,
+    ) -> None:
+        shop = state.shop
+        if shop is None:
+            raise RuntimeError("The controller did not provide the active shop state.")
+
+        draw_text(
+            surface,
+            "DEPTH CHART  /  CURRENT RUN SNAPSHOT",
+            (content.left + 2, content.top + 2),
+            self._label_font,
+            self.theme.text,
+        )
+        offense_coach, defense_coach = coaches_for_assignment(
+            shop.roster.coach_assignment
+        )
+        coach_top = content.top + 28
+        coach_height = 102
+        gap = 12
+        coach_width = (content.width - gap) // 2
+        for index, (profile, side) in enumerate(
+            (
+                (offense_coach, FootballCoachSide.OFFENSE),
+                (defense_coach, FootballCoachSide.DEFENSE),
+            )
+        ):
+            rect = pygame.Rect(
+                content.left + index * (coach_width + gap),
+                coach_top,
+                coach_width,
+                coach_height,
+            )
+            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
+            name = profile.name if profile is not None else f"No {side.value} coach"
+            draw_text(
+                surface,
+                _fit_text(f"{side.value.upper()}  /  {name}", self._label_font, rect.width - 24),
+                (rect.left + 12, rect.top + 9),
+                self._label_font,
+                self.theme.text,
+            )
+            modifiers = (
+                "   ".join(
+                    f"{_POSITION_LABELS[position]} {value:+.0%}"
+                    for position, value in profile.position_modifiers.items()
+                )
+                if profile is not None
+                else "No position modifiers."
+            )
+            draw_text(
+                surface,
+                _fit_text(modifiers, self._small_font, rect.width - 24),
+                (rect.left + 12, rect.top + 34),
+                self._small_font,
+                self.theme.secondary_accent,
+            )
+            perk_text = (
+                f"ACTIVE PERK  /  {_coach_perk_summary(profile)}"
+                if profile is not None
+                else "ACTIVE PERK  /  None"
+            )
+            draw_wrapped_text(
+                surface,
+                perk_text,
+                pygame.Rect(rect.left + 12, rect.top + 54, rect.width - 24, 42),
+                self._small_font,
+                self.theme.muted,
+                line_gap=2,
+            )
+
+        player_top = coach_top + coach_height + 12
+        player_height = max(1, content.bottom - player_top - 105)
+        player_width = (content.width - gap) // 2
+        groups = (
+            (
+                "OFFENSE",
+                (
+                    FootballPosition.QB,
+                    FootballPosition.RB,
+                    FootballPosition.WR,
+                    FootballPosition.O_LINE,
+                ),
+            ),
+            (
+                "DEFENSE",
+                (
+                    FootballPosition.D_LINE,
+                    FootballPosition.LINEBACKERS,
+                    FootballPosition.CORNERBACKS,
+                    FootballPosition.SAFETIES,
+                ),
+            ),
+        )
+        for column, (heading, positions) in enumerate(groups):
+            rect = pygame.Rect(
+                content.left + column * (player_width + gap),
+                player_top,
+                player_width,
+                player_height,
+            )
+            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
+            draw_text(
+                surface,
+                heading,
+                (rect.left + 12, rect.top + 8),
+                self._label_font,
+                self.theme.text,
+            )
+            row_top = rect.top + 31
+            row_height = max(1, (rect.height - 37) // len(positions))
+            for row, position in enumerate(positions):
+                player = shop.roster.players[position]
+                player_type = (
+                    player_type_for_id(player.player_type_id)
+                    if player.player_type_id is not None
+                    else None
+                )
+                type_name = player_type.name if player_type is not None else "Basic"
+                partnership = (
+                    f"Conditional +10% with {_POSITION_LABELS[player_type.partner_position]}"
+                    if player_type is not None
+                    and player_type.partner_position is not None
+                    else "No partnership"
+                )
+                perk = (
+                    f"{player_type.perk.name}: {player_type.perk.effect}"
+                    if player_type is not None and player_type.perk is not None
+                    else "No player perk"
+                )
+                row_rect = pygame.Rect(
+                    rect.left + 10,
+                    row_top + row * row_height,
+                    rect.width - 20,
+                    row_height - 2,
+                )
+                if row % 2:
+                    pygame.draw.rect(surface, self.theme.panel_alt, row_rect, border_radius=5)
+                draw_text(
+                    surface,
+                    _fit_text(
+                        f"{_POSITION_LABELS[position]}  /  {player.name}  /  {type_name}",
+                        self._small_font,
+                        row_rect.width - 12,
+                    ),
+                    (row_rect.left + 6, row_rect.top + 3),
+                    self._small_font,
+                    self.theme.text,
+                )
+                stats = (
+                    f"POWER {player.power:.1f}  VOL {player.volatility:.2f}  "
+                    f"STA {player.stamina:.2f}  /  {partnership}"
+                )
+                draw_text(
+                    surface,
+                    _fit_text(stats, self._small_font, row_rect.width - 12),
+                    (row_rect.left + 6, row_rect.top + 19),
+                    self._small_font,
+                    self.theme.secondary_accent,
+                )
+                if row_height >= 62:
+                    draw_text(
+                        surface,
+                        _fit_text(perk, self._small_font, row_rect.width - 12),
+                        (row_rect.left + 6, row_rect.top + 35),
+                        self._small_font,
+                        self.theme.muted,
+                    )
+
+        upgrade_rect = pygame.Rect(
+            content.left,
+            content.bottom - 96,
+            content.width,
+            86,
+        )
+        draw_panel(surface, upgrade_rect, self.theme, fill=self.theme.panel)
+        draw_text(
+            surface,
+            "PURCHASED RUN UPGRADES  /  CURRENT STATS ABOVE INCLUDE THESE",
+            (upgrade_rect.left + 12, upgrade_rect.top + 8),
+            self._small_font,
+            self.theme.text,
+        )
+        totals: dict[tuple[FootballPosition, FootballUpgradeStat], float] = {}
+        for upgrade in shop.purchased_upgrades:
+            key = (upgrade.position, upgrade.stat)
+            totals[key] = totals.get(key, 0.0) + upgrade.amount
+        upgrade_summary = (
+            "  /  ".join(
+                f"{_POSITION_LABELS[position]} {stat.value.upper()} +{amount:g}"
+                for (position, stat), amount in totals.items()
+            )
+            if totals
+            else "No player upgrades purchased."
+        )
+        draw_wrapped_text(
+            surface,
+            upgrade_summary,
+            pygame.Rect(
+                upgrade_rect.left + 12,
+                upgrade_rect.top + 28,
+                upgrade_rect.width - 24,
+                34,
+            ),
+            self._small_font,
+            self.theme.secondary_accent,
+            line_gap=2,
+        )
+        draw_text(
+            surface,
+            "Coach upgrades: none purchased; that catalog is not implemented.",
+            (upgrade_rect.left + 12, upgrade_rect.top + 62),
+            self._small_font,
+            self.theme.muted,
+        )
+        self._draw_shop_review_footer(surface, content, pending=False)
+
+    def _draw_playbook(
+        self,
+        surface: pygame.Surface,
+        content: pygame.Rect,
+        shop: FootballShopState | None,
+    ) -> None:
+        if shop is None:
+            raise RuntimeError("The controller did not provide the active shop state.")
+        pending = shop.pending_removal is not None
+        heading = (
+            "PLAYBOOK  /  SELECT ONE OWNED COPY TO REMOVE"
+            if pending
+            else "PLAYBOOK  /  OWNED CARDS, NOT THE CURRENT MATCH HAND"
+        )
+        draw_text(
+            surface,
+            heading,
+            (content.left + 2, content.top + 2),
+            self._label_font,
+            self.theme.text,
+        )
+        columns = (
+            ("OFFENSE", shop.offensive_deck, OFFENSIVE_PLAY_CATALOG),
+            ("DEFENSE", shop.defensive_deck, DEFENSIVE_SCHEME_CATALOG),
+        )
+        gap = 12
+        top = content.top + 30
+        footer_top = content.bottom - 48
+        panel_height = max(1, footer_top - top)
+        panel_width = (content.width - gap) // 2
+        row_top_offset = 46
+        row_height = 48
+        visible_rows = max(1, (panel_height - row_top_offset - 8) // row_height)
+        self._playbook_max_scroll = max(
+            0, max(len(cards) for _, cards, _ in columns) - visible_rows
+        )
+        self._playbook_scroll = min(self._playbook_scroll, self._playbook_max_scroll)
+        buttons: list[Button] = []
+        for column, (title, cards, catalog) in enumerate(columns):
+            rect = pygame.Rect(
+                content.left + column * (panel_width + gap),
+                top,
+                panel_width,
+                panel_height,
+            )
+            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
+            minimum = "  /  MIN 4"
+            draw_text(
+                surface,
+                f"{title}  /  {len(cards)} CARDS{minimum}",
+                (rect.left + 12, rect.top + 10),
+                self._label_font,
+                self.theme.text,
+            )
+            counts: dict[str, int] = {}
+            for card in cards:
+                counts[card.card_id] = counts.get(card.card_id, 0) + 1
+            seen: dict[str, int] = {}
+            start_index = self._playbook_scroll
+            for card in cards[:start_index]:
+                seen[card.card_id] = seen.get(card.card_id, 0) + 1
+            for visible_index, card in enumerate(
+                cards[start_index : start_index + visible_rows]
+            ):
+                index = start_index + visible_index
+                seen[card.card_id] = seen.get(card.card_id, 0) + 1
+                definition = catalog[card.card_id]
+                label = (
+                    f"{definition.name}  /  COPY {seen[card.card_id]} OF "
+                    f"{counts[card.card_id]}"
+                )
+                row = pygame.Rect(
+                    rect.left + 8,
+                    rect.top + row_top_offset + visible_index * row_height,
+                    rect.width - 16,
+                    row_height - 3,
+                )
+                pygame.draw.rect(
+                    surface,
+                    self.theme.panel_alt if index % 2 else self.theme.panel,
+                    row,
+                    border_radius=5,
+                )
+                remove_width = 72 if pending else 0
+                text_width = row.width - remove_width - 16
+                draw_text(
+                    surface,
+                    _fit_text(label, self._small_font, text_width),
+                    (row.left + 7, row.top + 3),
+                    self._small_font,
+                    self.theme.text,
+                )
+                contributors = ", ".join(
+                    _POSITION_LABELS[position]
+                    for position in definition.contributors
+                )
+                detail = f"{contributors}  /  {definition.description}"
+                draw_text(
+                    surface,
+                    _fit_text(detail, self._small_font, text_width),
+                    (row.left + 7, row.top + 21),
+                    self._small_font,
+                    self.theme.muted,
+                )
+                if pending:
+                    can_remove = len(cards) > MIN_PLAYBOOK_DECK_SIZE
+                    buttons.append(
+                        Button(
+                            "REMOVE",
+                            lambda copy_id=card.copy_id: self._submit(
+                                lambda: self._require_controller().remove_owned_card(
+                                    copy_id
+                                )
+                            ),
+                            pygame.Rect(
+                                row.right - remove_width,
+                                row.top + 7,
+                                remove_width - 2,
+                                28,
+                            ),
+                            enabled=can_remove,
+                            variant="quiet",
+                        )
+                    )
+        if self._playbook_max_scroll:
+            draw_text(
+                surface,
+                f"Scroll to browse / {self._playbook_scroll + 1} of "
+                f"{self._playbook_max_scroll + 1}",
+                (content.left + 2, content.top + 16),
+                self._small_font,
+                self.theme.muted,
+            )
+        buttons.append(
+            Button(
+                "CANCEL SELECTION" if pending else "BACK TO SHOP",
+                self._leave_shop_review,
+                pygame.Rect(content.right - 210, content.bottom - 40, 210, 34),
+                variant="primary",
+            )
+        )
+        self._set_buttons(buttons)
+        self._draw_buttons(surface)
+
+    def _draw_shop_review_footer(
+        self,
+        surface: pygame.Surface,
+        content: pygame.Rect,
+        *,
+        pending: bool,
+    ) -> None:
+        buttons = [
+            Button(
+                "CANCEL SELECTION" if pending else "BACK TO SHOP",
+                self._leave_shop_review,
+                pygame.Rect(content.right - 210, content.bottom - 40, 210, 34),
+                variant="primary",
+            )
+        ]
+        self.buttons = buttons
+        self._set_buttons(buttons)
+        self._draw_buttons(surface)
+
+    def _leave_shop_review(self) -> None:
+        if (
+            self._current_state().shop is not None
+            and self._current_state().shop.pending_removal is not None
+        ):
+            self._submit(self._require_controller().cancel_card_removal)
+        self._shop_review_mode = None
+
     def _draw_shop(
         self,
         surface: pygame.Surface,
@@ -1811,7 +2508,7 @@ class FootballRunScreen(Screen):
                     max(1, row_height - 5),
                 )
                 self._draw_shop_slot(
-                    surface, row, slot, buttons, shop.remaining_ap
+                    surface, row, slot, buttons, shop
                 )
 
         footer_top = content.bottom - 44
@@ -1827,6 +2524,30 @@ class FootballRunScreen(Screen):
                 self._move_to_next_day,
                 reroll_rect,
                 enabled=shop.remaining_ap >= 1,
+                variant="quiet",
+            )
+        )
+        review_width = 142
+        review_gap = 8
+        review_left = content.left + 230
+        buttons.append(
+            Button(
+                "DEPTH CHART",
+                lambda: setattr(self, "_shop_review_mode", "depth"),
+                pygame.Rect(review_left, footer_top, review_width, 36),
+                variant="quiet",
+            )
+        )
+        buttons.append(
+            Button(
+                "PLAYBOOK",
+                lambda: setattr(self, "_shop_review_mode", "playbook"),
+                pygame.Rect(
+                    review_left + review_width + review_gap,
+                    footer_top,
+                    review_width,
+                    36,
+                ),
                 variant="quiet",
             )
         )
@@ -1853,8 +2574,9 @@ class FootballRunScreen(Screen):
         rect: pygame.Rect,
         slot: FootballShopSlotState,
         buttons: list[Button],
-        remaining_ap: int,
+        shop: FootballShopState,
     ) -> None:
+        remaining_ap = shop.remaining_ap
         card = slot.card
         purchased = slot.purchased
         fill = self.theme.panel_alt if purchased else self.theme.panel
@@ -1943,6 +2665,8 @@ class FootballRunScreen(Screen):
             reason = "PURCHASED"
         elif card.cost > remaining_ap:
             reason = f"NEED {card.cost - remaining_ap} MORE AP"
+        elif slot.disabled_reason:
+            reason = slot.disabled_reason
         elif card.upgrade is not None:
             reason = f"{card.upgrade.stat.value.upper()}  /  {_POSITION_LABELS[card.upgrade.position]}"
         else:
@@ -1960,18 +2684,38 @@ class FootballRunScreen(Screen):
             if purchased
             else f"NEED {card.cost - remaining_ap} AP"
             if card.cost > remaining_ap
+            else "CHOOSE IN PLAYBOOK"
+            if card.is_removal and shop.pending_removal is card
+            else "SELECT CARD"
+            if card.is_removal and not slot.disabled_reason
+            else "UNAVAILABLE"
+            if slot.disabled_reason
             else "BUY"
         )
+
+        def purchase(
+            section: FootballShopSection = slot.section,
+            card_id: str = card.card_id,
+            is_removal: bool = card.is_removal,
+        ) -> None:
+            self._submit(
+                lambda: self._require_controller().buy_shop_card(section, card_id)
+            )
+            updated = self._current_state().shop
+            if is_removal and updated is not None and updated.pending_removal is not None:
+                self._shop_review_mode = "playbook"
+
         buttons.append(
             Button(
                 button_label,
-                lambda section=slot.section, card_id=card.card_id: self._submit(
-                    lambda: self._require_controller().buy_shop_card(
-                        section, card_id
-                    )
-                ),
+                purchase,
                 button_rect,
-                enabled=not purchased and card.cost <= remaining_ap,
+                enabled=(
+                    not purchased
+                    and card.cost <= remaining_ap
+                    and slot.disabled_reason is None
+                    and shop.pending_removal is None
+                ),
                 variant="primary" if not purchased else "quiet",
             )
         )

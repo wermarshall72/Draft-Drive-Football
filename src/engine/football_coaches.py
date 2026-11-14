@@ -13,7 +13,12 @@ from src.engine.football import (
     FootballCoachAssignment,
     FootballPosition,
     OffensivePlayAction,
+    matchup_for_scheme,
     matchup_for_play,
+)
+from src.engine.football_decks import (
+    STARTING_DEFENSIVE_ACTIONS,
+    STARTING_OFFENSIVE_ACTIONS,
 )
 
 
@@ -45,8 +50,8 @@ DEFENSIVE_POSITIONS = (
     FootballPosition.CORNERBACKS,
     FootballPosition.SAFETIES,
 )
-OFFENSIVE_ACTIONS = tuple(OffensivePlayAction)
-DEFENSIVE_ACTIONS = tuple(DefensiveSchemeAction)
+OFFENSIVE_ACTIONS = STARTING_OFFENSIVE_ACTIONS
+DEFENSIVE_ACTIONS = STARTING_DEFENSIVE_ACTIONS
 
 
 @dataclass(frozen=True)
@@ -146,7 +151,7 @@ class FootballCoachProfile:
             positions = (
                 offense_positions
                 if self.side is FootballCoachSide.OFFENSE
-                else matchup_for_play(OffensivePlayAction(play.value))[1]
+                else matchup_for_scheme(DefensiveSchemeAction(play.value))[0]
             )
             action = (
                 play

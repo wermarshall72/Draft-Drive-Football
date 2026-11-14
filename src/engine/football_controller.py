@@ -10,6 +10,7 @@ from enum import Enum
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballDeckState,
     FootballFourthDownAction,
     FootballMatchState,
     FootballMatchStatus,
@@ -196,6 +197,16 @@ class FootballGameController:
         self._require_shop().buy_card(section, card_id)
         return self.state
 
+    def remove_owned_card(self, copy_id: str) -> FootballGameControllerState:
+        self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
+        self._require_shop().remove_owned_card(copy_id)
+        return self.state
+
+    def cancel_card_removal(self) -> FootballGameControllerState:
+        self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
+        self._require_shop().cancel_card_removal()
+        return self.state
+
     def unlock_shop_slot(
         self,
         section: FootballShopSection,
@@ -228,20 +239,28 @@ class FootballGameController:
         return self.enter_next_shop()
 
     def choose_offensive_play(
-        self, action: OffensivePlayAction
+        self, action: OffensivePlayAction | str | None
     ) -> FootballGameControllerState:
-        if not isinstance(action, OffensivePlayAction):
-            raise ValueError("Action must be an OffensivePlayAction.")
+        if (
+            action is not None
+            and not isinstance(action, OffensivePlayAction)
+            and type(action) is not str
+        ):
+            raise ValueError("Action must be an OffensivePlayAction or card copy id.")
         self._require_decision(FootballHumanDecision.OFFENSIVE_PLAY)
         self._require_simulator().resolve_offensive_play(action)
         self._advance_match()
         return self.state
 
     def choose_defensive_scheme(
-        self, action: DefensiveSchemeAction
+        self, action: DefensiveSchemeAction | str | None
     ) -> FootballGameControllerState:
-        if not isinstance(action, DefensiveSchemeAction):
-            raise ValueError("Action must be a DefensiveSchemeAction.")
+        if (
+            action is not None
+            and not isinstance(action, DefensiveSchemeAction)
+            and type(action) is not str
+        ):
+            raise ValueError("Action must be a DefensiveSchemeAction or card copy id.")
         self._require_decision(FootballHumanDecision.DEFENSIVE_SCHEME)
         self._require_simulator().select_defensive_scheme(action)
         self._advance_match()
@@ -265,6 +284,10 @@ class FootballGameController:
         ):
             raise ValueError("The pre-match shop must be finished before a match.")
         opponent = self._ai.generate_opponent_roster()
+        opponent_offense, opponent_defense = self._ai.generate_opponent_decks(
+            self._game_number,
+            opponent,
+        )
         match_seed = self._match_seed_rng.getrandbits(64)
         match_state = FootballMatchState(
             team_a=self._shop.roster,
@@ -279,6 +302,10 @@ class FootballGameController:
             game_clock_seconds=900,
             period=1,
             awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+            team_a_offense_deck=FootballDeckState(self._require_shop().offensive_deck),
+            team_a_defense_deck=FootballDeckState(self._require_shop().defensive_deck),
+            team_b_offense_deck=FootballDeckState(opponent_offense),
+            team_b_defense_deck=FootballDeckState(opponent_defense),
         )
         self._simulator = FootballMatchSimulator(match_state)
         self._phase = FootballRunPhase.MATCH

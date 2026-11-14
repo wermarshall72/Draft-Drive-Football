@@ -15,10 +15,16 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+)
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
 from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_shop import (
     ACTION_POINT_BUDGET,
+    CARD_REMOVAL_COST,
+    MIN_PLAYBOOK_DECK_SIZE,
     POWER_UPGRADE_AMOUNT,
     RARITY_WEIGHTS,
     STAMINA_UPGRADE_AMOUNT,
@@ -355,7 +361,7 @@ def _future_catalog_card(
     )
 
 
-def test_three_sections_start_with_requested_slots_and_no_future_cards() -> None:
+def test_three_sections_start_with_requested_slots_and_playbook_cards() -> None:
     shop = FootballShop(_roster(), 4)
     state = shop.state
 
@@ -367,8 +373,13 @@ def test_three_sections_start_with_requested_slots_and_no_future_cards() -> None
     assert player.slots[3].unlock_cost == 4 and player.slots[3].can_unlock
     assert len([slot for slot in player.slots if slot.unlocked and slot.card]) == 3
     assert [slot.unlocked for slot in plays.slots] == [True] * 4 + [False] * 2
-    assert all(slot.card is None for slot in plays.slots)
-    assert plays.slots[4].unlock_cost == 4 and not plays.slots[4].can_unlock
+    assert plays.catalog_available
+    assert all(slot.card is not None for slot in plays.slots[:4])
+    assert all(
+        card.eligible(shop.roster)
+        for card in shop._catalogs[FootballShopSection.PLAYS_SCHEMES]
+    )
+    assert plays.slots[4].unlock_cost == 4 and plays.slots[4].can_unlock
     assert plays.slots[5].unlock_cost == 5 and not plays.slots[5].can_unlock
     assert [slot.unlocked for slot in coaches.slots] == [False, False]
     assert coaches.slots[0].unlock_cost == 4
@@ -376,10 +387,12 @@ def test_three_sections_start_with_requested_slots_and_no_future_cards() -> None
     assert "after game 3" in coaches.slots[0].disabled_reason
     assert coaches.slots[1].unlock_cost == 6 and not coaches.slots[1].can_unlock
 
+    unlocked = shop.unlock_slot(FootballShopSection.PLAYS_SCHEMES, 5)
+    assert unlocked.remaining_ap == 8
+    assert unlocked.section(FootballShopSection.PLAYS_SCHEMES).slots[4].card is not None
+    assert unlocked.section(FootballShopSection.PLAYS_SCHEMES).slots[5].can_unlock
     before = shop.state
     rng_before = shop._rng.getstate()
-    with pytest.raises(ValueError, match="catalog is not available"):
-        shop.unlock_slot(FootballShopSection.PLAYS_SCHEMES, 5)
     with pytest.raises(ValueError, match="after game 3"):
         shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
     assert shop.state == before
@@ -391,6 +404,159 @@ def test_three_sections_start_with_requested_slots_and_no_future_cards() -> None
     ).slots[0]
     assert not coach_slot.can_unlock
     assert "not available yet" in coach_slot.disabled_reason
+
+
+@pytest.mark.parametrize(
+    ("kind", "definition", "starting_size"),
+    [
+        ("play", OFFENSIVE_PLAY_CATALOG["qb_sneak"], 6),
+        ("scheme", DEFENSIVE_SCHEME_CATALOG["cover_two_shell"], 6),
+    ],
+)
+def test_buying_a_play_or_scheme_adds_one_owned_copy(
+    kind, definition, starting_size
+) -> None:
+    card = FootballShopCard(
+        card_id=f"{kind}:{definition.card_id}",
+        name=definition.name,
+        description=definition.description,
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=2,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        football_card=definition,
+    )
+    shop = FootballShop(
+        _roster(),
+        41,
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (card,)},
+    )
+
+    before_ap = shop.remaining_ap
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    deck = shop.offensive_deck if kind == "play" else shop.defensive_deck
+    assert len(deck) == starting_size + 1
+    assert deck[-1].card_id == definition.card_id
+    assert shop.remaining_ap == before_ap - card.cost
+
+
+def test_play_ownership_persists_across_shop_visits_and_upgrade_history_is_run_wide() -> None:
+    definition = OFFENSIVE_PLAY_CATALOG["qb_sneak"]
+    card = FootballShopCard(
+        card_id=f"play:{definition.card_id}",
+        name=definition.name,
+        description=definition.description,
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=2,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        football_card=definition,
+    )
+    shop = FootballShop(
+        _roster(),
+        43,
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (card,)},
+    )
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    first_copy = shop.offensive_deck[-1]
+    upgrade = shop.offer[0]
+    shop.buy_upgrade(upgrade)
+    shop.finish()
+    shop.open_next_visit(2)
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+
+    copies = [
+        owned for owned in shop.offensive_deck
+        if owned.card_id == definition.card_id
+    ]
+    assert len(copies) == 2
+    assert copies[0].copy_id != copies[1].copy_id
+    assert first_copy in copies
+    assert shop.state.purchased_upgrades == (upgrade,)
+
+
+def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() -> None:
+    removal = FootballShopCard(
+        card_id="remove-one-card",
+        name="Remove One Card",
+        description="Remove one owned play or scheme.",
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=CARD_REMOVAL_COST,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        is_removal=True,
+    )
+    shop = FootballShop(
+        _roster(),
+        47,
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
+    )
+    initial = shop.state
+    copy_to_remove = initial.offensive_deck[-1]
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, removal.card_id)
+    pending = shop.state
+    assert pending.pending_removal is removal
+    assert pending.remaining_ap == initial.remaining_ap
+    assert pending.offensive_deck == initial.offensive_deck
+    assert not pending.section(FootballShopSection.PLAYS_SCHEMES).slots[0].purchased
+
+    shop.cancel_card_removal()
+    assert shop.state == initial
+
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, removal.card_id)
+    removed = shop.remove_owned_card(copy_to_remove.copy_id)
+    assert removed.remaining_ap == initial.remaining_ap - CARD_REMOVAL_COST
+    assert copy_to_remove not in removed.offensive_deck
+    assert len(removed.offensive_deck) == 5
+    assert removed.pending_removal is None
+    assert removed.section(FootballShopSection.PLAYS_SCHEMES).slots[0].purchased
+
+
+def test_removal_respects_four_card_minimum_and_disables_empty_service_offer() -> None:
+    removal = FootballShopCard(
+        card_id="remove-one-card",
+        name="Remove One Card",
+        description="Remove one owned play or scheme.",
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=CARD_REMOVAL_COST,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        is_removal=True,
+    )
+    shop = FootballShop(
+        _roster(),
+        49,
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
+    )
+    for visit in range(4):
+        state = shop.state
+        target = (
+            state.offensive_deck[-1]
+            if len(state.offensive_deck) > MIN_PLAYBOOK_DECK_SIZE
+            else state.defensive_deck[-1]
+        )
+        shop.buy_card(FootballShopSection.PLAYS_SCHEMES, removal.card_id)
+        shop.remove_owned_card(target.copy_id)
+        if visit < 3:
+            shop.finish()
+            shop.open_next_visit(visit + 2)
+
+    shop.finish()
+    shop.open_next_visit(5)
+    state = shop.state
+    assert len(state.offensive_deck) == MIN_PLAYBOOK_DECK_SIZE
+    assert len(state.defensive_deck) == MIN_PLAYBOOK_DECK_SIZE
+    removal_slot = state.section(FootballShopSection.PLAYS_SCHEMES).slots[0]
+    assert removal_slot.card is not None
+    assert removal_slot.disabled_reason == "Both decks are at the 4-card minimum."
+    before = shop.state
+    with pytest.raises(ValueError, match="4-card minimum"):
+        shop.buy_card(FootballShopSection.PLAYS_SCHEMES, removal.card_id)
+    assert shop.state == before
 
 
 def test_player_slot_unlock_is_affordable_and_immediately_offered() -> None:

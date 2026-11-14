@@ -3,6 +3,8 @@
 ## Current Gameplay Direction
 * The game is offline-first against local AI. Asynchronous player snapshots are a later goal.
 * Matches are interactive: the user chooses each offensive play and one defensive scheme at the start of each defensive drive; that scheme remains active for the drive. AI controls the side the user is not controlling.
+* Offensive plays and defensive schemes are selected from separate run-owned decks. The opening playbook contains the six basic actions per side; match hands are dealt independently, played cards cycle through discard/draw, and only the human's current hand is shown as selectable in the desktop match screen. The shop can add catalog cards or permanently remove a selected owned copy, while preserving a four-card minimum per deck.
+* The pre-match shop's Depth Chart and Playbook reviews are read-only except for the explicit pending-removal flow. Keep those screens tied to the current run's roster, coach assignment, upgrades, and owned deck copies.
 * Drives use football downs and first downs, not a fixed number of plays.
 * The roster has exactly eight player positions: QB, RB, WR, O-line, D-line, linebackers, cornerbacks, and safeties. Coach and special teams are separate from those player slots.
 * Three losses end a run immediately. Surviving game 10 advances to the playoffs.

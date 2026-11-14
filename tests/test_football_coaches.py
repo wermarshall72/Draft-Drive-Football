@@ -6,9 +6,11 @@ import pytest
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardCopy,
     FootballCoach,
     FootballCoachAssignment,
     FootballFourthDownAction,
+    FootballDeckState,
     FootballMatchState,
     FootballPlayer,
     FootballPosition,
@@ -21,6 +23,7 @@ from src.engine.football_ai import FootballAI, FootballAIDifficulty
 from src.engine.football_coaches import (
     COACH_PAIR_OFFERS,
     COACHES_BY_ID,
+    DEFENSIVE_ACTIONS,
     DEFENSIVE_COACHES,
     DEFENSIVE_POSITIONS,
     OFFENSIVE_ACTIONS,
@@ -76,6 +79,8 @@ def _simulator(
 ) -> FootballMatchSimulator:
     team_a = _roster("Home", offense_assignment)
     team_b = _roster("Away", defense_assignment)
+    offense_deck = _test_deck(OffensivePlayAction, "home-offense")
+    defense_deck = _test_deck(DefensiveSchemeAction, "away-defense")
     state = FootballMatchState(
         team_a=team_a,
         team_b=team_b,
@@ -94,12 +99,26 @@ def _simulator(
             else FootballAwaitedAction.DEFENSIVE_SCHEME
         ),
         current_drive_defensive_scheme=scheme if down == 4 else None,
+        team_a_offense_deck=offense_deck,
+        team_b_defense_deck=defense_deck,
     )
     simulator = FootballMatchSimulator(state)
     simulator.rng = FixedRNG(rolls)
     if down != 4:
         simulator.select_defensive_scheme(scheme)
     return simulator
+
+
+def _test_deck(
+    action_type: type[OffensivePlayAction] | type[DefensiveSchemeAction],
+    prefix: str,
+) -> FootballDeckState:
+    cards = tuple(
+        FootballCardCopy(f"{prefix}:{action.value}:{copy_number}", action.value)
+        for action in action_type
+        for copy_number in range(8)
+    )
+    return FootballDeckState(owned=cards, hand=cards)
 
 
 def _assignment(offense: str, defense: str = "balanced_defense") -> FootballCoachAssignment:
@@ -115,8 +134,8 @@ def test_catalog_is_complete_side_scoped_and_has_all_six_actions() -> None:
         assert set(coach.action_percentages) == set(OFFENSIVE_ACTIONS)
     for coach in DEFENSIVE_COACHES:
         assert set(coach.position_modifiers) == set(DEFENSIVE_POSITIONS)
-        assert coach.actions == tuple(DefensiveSchemeAction)
-        assert set(coach.action_percentages) == set(DefensiveSchemeAction)
+        assert coach.actions == DEFENSIVE_ACTIONS
+        assert set(coach.action_percentages) == set(DEFENSIVE_ACTIONS)
 
 
 def test_specialists_distribute_position_modifiers_and_balanced_profiles_are_uniform() -> None:
@@ -464,6 +483,10 @@ def test_ai_generates_a_reproducible_coach_pair_used_by_the_roster() -> None:
         game_clock_seconds=900,
         period=1,
         awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+        team_a_offense_deck=_test_deck(OffensivePlayAction, "human-offense"),
+        team_a_defense_deck=_test_deck(DefensiveSchemeAction, "human-defense"),
+        team_b_offense_deck=_test_deck(OffensivePlayAction, "ai-offense"),
+        team_b_defense_deck=_test_deck(DefensiveSchemeAction, "ai-defense"),
     )
     simulator = FootballMatchSimulator(state)
     simulator.rng = FixedRNG()

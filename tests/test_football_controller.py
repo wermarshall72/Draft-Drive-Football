@@ -12,6 +12,7 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
+from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG
 from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_controller import (
     FootballGameController,
@@ -166,14 +167,20 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
         assert state.match is not None
         assert state.human_decision is not None
         if state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY:
-            controller.choose_offensive_play(OffensivePlayAction.DEEP_PASS)
+            hand = state.match.team_a_offense_deck
+            assert hand is not None and hand.hand
+            controller.choose_offensive_play(hand.hand[0].copy_id)
         elif state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+            hand = state.match.team_a_defense_deck
+            assert hand is not None and hand.hand
+            selected = hand.hand[0]
+            expected_scheme = DEFENSIVE_SCHEME_CATALOG[selected.card_id].action
             prior_event_count = len(state.match.match_events)
-            controller.choose_defensive_scheme(DefensiveSchemeAction.RB_RUN)
+            controller.choose_defensive_scheme(selected.copy_id)
             updated = controller.state.match
             assert updated is not None
             first_new_event = updated.match_events[prior_event_count]
-            assert first_new_event.action is DefensiveSchemeAction.RB_RUN
+            assert first_new_event.action is expected_scheme
             assert first_new_event.possession is FootballTeamSide.TEAM_B
             human_defensive_drives += 1
         elif state.human_decision is FootballHumanDecision.FOURTH_DOWN:

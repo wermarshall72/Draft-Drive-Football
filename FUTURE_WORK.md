@@ -32,11 +32,15 @@ or the design changes.
 - [x] Implement the recurring three-part pre-game shop framework with shared
   AP, seeded rarity offers, player upgrades, and permanent slot unlocks.
 - [ ] Create the larger player-upgrade catalog and its additional effects.
-- [ ] Create the offensive-play, defensive-scheme, and coach-upgrade catalogs;
-  their currently empty sections and unlocks remain unavailable to purchase.
-- [ ] Design and implement offensive and defensive deck-building and card
-  cycling. The six current plays and schemes remain directly selectable until
-  a deck design is approved.
+- [x] Add an initial offensive-play and defensive-scheme catalog to the shop,
+  including deck additions and permanent removal of an explicitly selected
+  owned copy. Each deck must retain at least four cards.
+- [x] Implement match-local hands, draw/discard cycling, empty-hand fallbacks,
+  period-boundary resets, and hand-limited AI choices for both sides.
+- [x] Add shop Depth Chart and Playbook review screens and a match UI for the
+  human hand, card selection, and drag/drop calls.
+- [ ] Expand the initial play/scheme catalog and create the coach-upgrade
+  catalog; coach-upgrade offers and their unlocks remain unavailable.
 - [ ] Design future player synergies, temporary upgrades, and AP-saving
   actions. Unspent AP currently expires at the end of each shop visit.
 - [ ] Implement a playoff bracket; the current run ends at the playoffs marker.

@@ -8,6 +8,8 @@ from enum import Enum
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardCopy,
+    FootballDeckState,
     FootballCoach,
     FootballFourthDownAction,
     FootballMatchState,
@@ -17,6 +19,7 @@ from src.engine.football import (
     FootballSpecialTeams,
     FootballTeamSide,
     OffensivePlayAction,
+    matchup_for_scheme,
 )
 from src.engine.football_coaches import COACH_PAIR_OFFERS
 from src.engine.football_player_catalog import (
@@ -31,6 +34,14 @@ from src.engine.football_simulator import (
     field_goal_success_probability,
     matchup_for_play,
 )
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+    starting_defensive_deck,
+    starting_offensive_deck,
+)
+from src.engine.football_coaches import coaches_for_assignment
+from src.engine.football_player_catalog import player_contribution_modifier
 
 
 class FootballAIDifficulty(str, Enum):
@@ -46,10 +57,6 @@ HARD_POWER_ADJUSTMENT = 0.5
 
 AI_MIN_FIELD_GOAL_SUCCESS_PROBABILITY = 0.5
 LATE_GAME_SECONDS = 120
-
-_PLAY_ACTIONS = tuple(OffensivePlayAction)
-_SCHEME_ACTIONS = tuple(DefensiveSchemeAction)
-
 
 class FootballAI:
     """One local AI identity with a persistent, explicitly seeded random stream.
@@ -113,6 +120,78 @@ class FootballAI:
             coach_assignment=coach_pair.assignment,
         )
 
+    def generate_opponent_decks(
+        self, game_number: int, roster: FootballRoster
+    ) -> tuple[tuple[FootballCardCopy, ...], tuple[FootballCardCopy, ...]]:
+        """Return deterministic run decks using an RNG separate from AI decisions."""
+        if isinstance(game_number, bool) or not isinstance(game_number, int) or game_number < 1:
+            raise ValueError("AI deck game number must be a positive integer.")
+        if not isinstance(roster, FootballRoster):
+            raise ValueError("AI deck generation requires a FootballRoster.")
+        rng = random.Random(self.seed ^ (game_number * 0x9E3779B1))
+        extra_count = min(
+            {
+                FootballAIDifficulty.EASY: 2,
+                FootballAIDifficulty.STANDARD: 3,
+                FootballAIDifficulty.HARD: 4,
+            }[self.difficulty],
+            1 + (game_number - 1) // 3,
+        )
+        offense, defense = coaches_for_assignment(roster.coach_assignment)
+        offense_cards = list(starting_offensive_deck(f"ai:{game_number}"))
+        defense_cards = list(starting_defensive_deck(f"ai:{game_number}"))
+
+        def weighted_choice(definitions, *, is_offense: bool):
+            scored = []
+            for definition in definitions:
+                positions = definition.contributors
+                players = tuple(roster.players[position] for position in positions)
+                coach = offense if is_offense else defense
+                strength = sum(
+                    player.power
+                    * player_contribution_modifier(
+                        player,
+                        players,
+                        coach.position_modifiers[player.position]
+                        if coach is not None
+                        else 0.0,
+                    )
+                    for player in players
+                )
+                scored.append((strength, definition))
+            scored.sort(key=lambda item: item[0], reverse=True)
+            pool_size = (
+                len(scored)
+                if self.difficulty is FootballAIDifficulty.EASY
+                else min(5, len(scored))
+                if self.difficulty is FootballAIDifficulty.STANDARD
+                else min(3, len(scored))
+            )
+            return rng.choice(scored[:pool_size])[1]
+
+        for index in range(extra_count):
+            play = weighted_choice(
+                tuple(OFFENSIVE_PLAY_CATALOG.values()),
+                is_offense=True,
+            )
+            scheme = weighted_choice(
+                tuple(DEFENSIVE_SCHEME_CATALOG.values()),
+                is_offense=False,
+            )
+            offense_cards.append(
+                FootballCardCopy(
+                    f"ai:{game_number}:offense:purchased:{index + 1}",
+                    play.card_id,
+                )
+            )
+            defense_cards.append(
+                FootballCardCopy(
+                    f"ai:{game_number}:defense:purchased:{index + 1}",
+                    scheme.card_id,
+                )
+            )
+        return tuple(offense_cards), tuple(defense_cards)
+
     def choose_action(
         self, state: FootballMatchState
     ) -> DefensiveSchemeAction | OffensivePlayAction | FootballFourthDownAction:
@@ -129,16 +208,22 @@ class FootballAI:
         if awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME:
             if state.possession is self.team_side:
                 raise ValueError("AI cannot choose a defensive scheme while on offense.")
+            schemes = self._hand_schemes(state)
+            if not schemes:
+                return DefensiveSchemeAction.RB_RUN
             if self.difficulty is FootballAIDifficulty.EASY:
-                return self._rng.choice(_SCHEME_ACTIONS)
-            return self._choose_defensive_scheme(state)
+                return self._rng.choice(schemes)
+            return self._choose_defensive_scheme(state, schemes)
 
         if awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY:
             if state.possession is not self.team_side:
                 raise ValueError("AI cannot choose an offensive play while on defense.")
+            plays = self._hand_plays(state)
+            if not plays:
+                return OffensivePlayAction.RB_RUN
             if self.difficulty is FootballAIDifficulty.EASY:
-                return self._rng.choice(_PLAY_ACTIONS)
-            return self._choose_offensive_play(state)
+                return self._rng.choice(plays)
+            return self._choose_offensive_play(state, plays)
 
         if awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
             if state.possession is not self.team_side:
@@ -160,14 +245,35 @@ class FootballAI:
 
         raise ValueError(f"AI cannot act while awaiting {awaited_action!r}.")
 
-    def _choose_offensive_play(self, state: FootballMatchState) -> OffensivePlayAction:
+    def _hand_plays(self, state: FootballMatchState) -> tuple[OffensivePlayAction, ...]:
+        deck = self._deck_for_state(state, offensive=True)
+        return tuple(OFFENSIVE_PLAY_CATALOG[card.card_id].action for card in deck.hand)
+
+    def _hand_schemes(self, state: FootballMatchState) -> tuple[DefensiveSchemeAction, ...]:
+        deck = self._deck_for_state(state, offensive=False)
+        return tuple(DEFENSIVE_SCHEME_CATALOG[card.card_id].action for card in deck.hand)
+
+    def _deck_for_state(
+        self, state: FootballMatchState, *, offensive: bool
+    ) -> FootballDeckState:
+        group = "offense" if offensive else "defense"
+        deck = getattr(state, f"{self.team_side.value}_{group}_deck")
+        if not isinstance(deck, FootballDeckState):
+            raise ValueError("AI requires initialized match decks.")
+        return deck
+
+    def _choose_offensive_play(
+        self,
+        state: FootballMatchState,
+        plays: tuple[OffensivePlayAction, ...],
+    ) -> OffensivePlayAction:
         if self.difficulty is FootballAIDifficulty.HARD:
             return max(
-                _PLAY_ACTIONS,
+                plays,
                 key=lambda play: self._hard_play_score(state, play),
             )
         return max(
-            _PLAY_ACTIONS,
+            plays,
             key=lambda play: self._situational_play_score(state, play),
         )
 
@@ -181,6 +287,9 @@ class FootballAI:
             OffensivePlayAction.SHORT_PASS: 0.8,
             OffensivePlayAction.MEDIUM_PASS: 0.3,
             OffensivePlayAction.DEEP_PASS: 0.1,
+            OffensivePlayAction.QB_SNEAK: 1.0,
+            OffensivePlayAction.JET_SWEEP: 0.9,
+            OffensivePlayAction.QUICK_OUT: 0.6,
         }
         if state.yards_to_go >= 8:
             scores[OffensivePlayAction.MEDIUM_PASS] += 1.4
@@ -221,17 +330,21 @@ class FootballAI:
         )
         return self._situational_play_score(state, play) + 5.0 * matchup_edge
 
-    def _choose_defensive_scheme(self, state: FootballMatchState) -> DefensiveSchemeAction:
+    def _choose_defensive_scheme(
+        self,
+        state: FootballMatchState,
+        schemes: tuple[DefensiveSchemeAction, ...],
+    ) -> DefensiveSchemeAction:
         if self.difficulty is FootballAIDifficulty.STANDARD:
             return max(
-                _SCHEME_ACTIONS,
+                schemes,
                 key=lambda scheme: self._likely_offensive_play_score(state, scheme),
             )
 
         offense = self._roster_for_side(state, self._opponent(self.team_side))
         defense = self._roster_for_side(state, self.team_side)
         return max(
-            _SCHEME_ACTIONS,
+            schemes,
             key=lambda scheme: self._hard_defensive_scheme_score(
                 state, scheme, offense, defense
             ),
@@ -240,7 +353,11 @@ class FootballAI:
     def _likely_offensive_play_score(
         self, state: FootballMatchState, scheme: DefensiveSchemeAction
     ) -> float:
-        # A scheme counters the play with the same enum value in the simulator.
+        _, counters = matchup_for_scheme(scheme)
+        if scheme not in tuple(DefensiveSchemeAction)[:6]:
+            return max(
+                self._situational_play_score(state, play) for play in counters
+            )
         score = 1.0
         if state.yards_to_go <= 2:
             score += 1.8 if scheme in (
@@ -271,8 +388,15 @@ class FootballAI:
         offense: FootballRoster,
         defense: FootballRoster,
     ) -> float:
-        play = OffensivePlayAction(scheme.value)
-        offensive_positions, defensive_positions = matchup_for_play(play)
+        _, counters = matchup_for_scheme(scheme)
+        if not counters:
+            return self._likely_offensive_play_score(state, scheme)
+        play = max(
+            counters,
+            key=lambda action: self._situational_play_score(state, action),
+        )
+        offensive_positions = OFFENSIVE_PLAY_CATALOG[play.value].contributors
+        defensive_positions = DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors
         offense_power = sum(offense.players[position].power for position in offensive_positions)
         defense_power = sum(defense.players[position].power for position in defensive_positions)
         matchup_edge = (offense_power - defense_power) / max(

@@ -8,7 +8,20 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
 
-from src.engine.football import FootballPlayer, FootballPosition, FootballRoster
+from src.engine.football import (
+    FootballCardCopy,
+    FootballPlayer,
+    FootballPosition,
+    FootballRoster,
+)
+from src.engine.football_decks import (
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+    FootballPlayDefinition,
+    FootballSchemeDefinition,
+    starting_defensive_deck,
+    starting_offensive_deck,
+)
 
 ACTION_POINT_BUDGET = 12
 TRAINING_POINT_BUDGET = ACTION_POINT_BUDGET
@@ -22,6 +35,8 @@ SHOP_OFFER_SIZE = PLAYER_UPGRADE_SLOT_COUNT
 MAX_PLAYER_UPGRADE_SLOTS = 4
 MAX_PLAY_SCHEME_SLOTS = 6
 MAX_COACH_UPGRADE_SLOTS = 2
+CARD_REMOVAL_COST = 2
+MIN_PLAYBOOK_DECK_SIZE = 4
 class FootballShopSection(str, Enum):
     PLAYER_UPGRADES = "player_upgrades"
     PLAYS_SCHEMES = "plays_schemes"
@@ -81,6 +96,8 @@ class FootballShopCard:
     eligible: FootballShopEligibility = field(compare=False, repr=False)
     effect: FootballShopEffect = field(compare=False, repr=False)
     upgrade: FootballUpgrade | None = None
+    football_card: FootballPlayDefinition | FootballSchemeDefinition | None = None
+    is_removal: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.card_id, str) or not self.card_id.strip():
@@ -97,6 +114,8 @@ class FootballShopCard:
             raise ValueError("Shop card cost must be a positive integer.")
         if not callable(self.eligible) or not callable(self.effect):
             raise ValueError("Shop cards must define eligibility and an effect.")
+        if not isinstance(self.is_removal, bool):
+            raise ValueError("Removal status must be a boolean.")
         if self.upgrade is not None and (
             self.section is not FootballShopSection.PLAYER_UPGRADES
             or not isinstance(self.upgrade, FootballUpgrade)
@@ -110,6 +129,16 @@ class FootballShopCard:
             or self.cost != self.upgrade.cost
         ):
             raise ValueError("Player card metadata must match its upgrade.")
+        if self.football_card is not None and (
+            self.section is not FootballShopSection.PLAYS_SCHEMES
+            or not isinstance(
+                self.football_card,
+                (FootballPlayDefinition, FootballSchemeDefinition),
+            )
+        ):
+            raise ValueError("Football playbook data is only valid for play/scheme cards.")
+        if self.is_removal and self.section is not FootballShopSection.PLAYS_SCHEMES:
+            raise ValueError("Removal offers are only valid in the play/scheme section.")
 
 
 @dataclass(frozen=True)
@@ -141,6 +170,11 @@ class FootballShopState:
     purchased_cards: tuple[FootballShopCard, ...]
     roster: FootballRoster
     finished: bool
+    run_purchased_upgrades: tuple[FootballUpgrade, ...]
+    offensive_deck: tuple[FootballCardCopy, ...]
+    defensive_deck: tuple[FootballCardCopy, ...]
+    pending_removal: FootballShopCard | None
+    removal_unavailable_reason: str | None
 
     @property
     def remaining_budget(self) -> int:
@@ -158,11 +192,16 @@ class FootballShopState:
 
     @property
     def purchased_upgrades(self) -> tuple[FootballUpgrade, ...]:
-        return tuple(
-            card.upgrade
-            for card in self.purchased_cards
-            if card.upgrade is not None
-        )
+        return self.run_purchased_upgrades
+
+    @property
+    def removable_cards(self) -> tuple[FootballCardCopy, ...]:
+        removable = []
+        if len(self.offensive_deck) > MIN_PLAYBOOK_DECK_SIZE:
+            removable.extend(self.offensive_deck)
+        if len(self.defensive_deck) > MIN_PLAYBOOK_DECK_SIZE:
+            removable.extend(self.defensive_deck)
+        return tuple(removable)
 
     def section(self, section: FootballShopSection) -> FootballShopSectionState:
         for state in self.sections:
@@ -231,6 +270,11 @@ class FootballShop:
         self._purchased: dict[
             tuple[FootballShopSection, str], FootballShopCard
         ] = {}
+        self._run_purchased_upgrades: list[FootballUpgrade] = []
+        self._offensive_deck = starting_offensive_deck("human")
+        self._defensive_deck = starting_defensive_deck("human")
+        self._copy_sequence = 1
+        self._pending_removal: FootballShopCard | None = None
         self._finished = False
         self._unlocked_slots = self._validated_unlocked_slots(unlocked_slots)
         self._catalogs = self._validated_catalogs(catalogs)
@@ -255,11 +299,7 @@ class FootballShop:
 
     @property
     def purchased_upgrades(self) -> tuple[FootballUpgrade, ...]:
-        return tuple(
-            card.upgrade
-            for card in self._purchased.values()
-            if card.upgrade is not None
-        )
+        return tuple(self._run_purchased_upgrades)
 
     @property
     def roster(self) -> FootballRoster:
@@ -278,6 +318,14 @@ class FootballShop:
         return MappingProxyType(dict(self._unlocked_slots))
 
     @property
+    def offensive_deck(self) -> tuple[FootballCardCopy, ...]:
+        return self._offensive_deck
+
+    @property
+    def defensive_deck(self) -> tuple[FootballCardCopy, ...]:
+        return self._defensive_deck
+
+    @property
     def state(self) -> FootballShopState:
         sections = tuple(self._section_state(section) for section in FootballShopSection)
         return FootballShopState(
@@ -288,6 +336,15 @@ class FootballShop:
             purchased_cards=tuple(self._purchased.values()),
             roster=self._roster,
             finished=self._finished,
+            run_purchased_upgrades=tuple(self._run_purchased_upgrades),
+            offensive_deck=self._offensive_deck,
+            defensive_deck=self._defensive_deck,
+            pending_removal=self._pending_removal,
+            removal_unavailable_reason=(
+                None
+                if self._removable_cards()
+                else "Both decks are at the 4-card minimum."
+            ),
         )
 
     def buy_upgrade(self, upgrade: FootballUpgrade | int) -> FootballShopState:
@@ -326,6 +383,8 @@ class FootballShop:
         card_id: str | int,
     ) -> FootballShopState:
         self._require_open()
+        if self._pending_removal is not None:
+            raise ValueError("Finish or cancel the pending card removal first.")
         if not isinstance(section, FootballShopSection):
             raise ValueError("Shop section must be a FootballShopSection.")
         if isinstance(card_id, bool):
@@ -355,14 +414,108 @@ class FootballShop:
             raise ValueError("Card cost exceeds the remaining AP.")
         if not selected.eligible(self._roster):
             raise ValueError("Card is no longer eligible for this roster.")
+        if selected.is_removal:
+            if not self._removable_cards():
+                raise ValueError("Both decks are at the 4-card minimum.")
+            if self._pending_removal is not None:
+                raise ValueError("A card removal is already pending.")
+            self._pending_removal = selected
+            return self.state
 
         updated_roster = selected.effect(self._roster)
         if not isinstance(updated_roster, FootballRoster):
             raise ValueError("Shop card effect must return a FootballRoster.")
+        new_copy = None
+        if selected.football_card is not None:
+            new_copy = FootballCardCopy(
+                f"human:purchased:{self._copy_sequence}",
+                selected.football_card.card_id,
+            )
         self._remaining_ap -= selected.cost
         self._roster = updated_roster
         self._purchased[purchase_key] = selected
+        if selected.upgrade is not None:
+            self._run_purchased_upgrades.append(selected.upgrade)
+        if new_copy is not None:
+            if isinstance(selected.football_card, FootballPlayDefinition):
+                self._offensive_deck += (new_copy,)
+            else:
+                self._defensive_deck += (new_copy,)
+            self._copy_sequence += 1
         return self.state
+
+    def remove_owned_card(self, copy_id: str) -> FootballShopState:
+        self._require_open()
+        pending = self._pending_removal
+        if pending is None:
+            raise ValueError("Buy the removal offer before selecting a card.")
+        if not isinstance(copy_id, str) or not copy_id.strip():
+            raise ValueError("Card copy identifier must be a non-empty string.")
+        if pending.cost > self._remaining_ap:
+            raise ValueError("Card removal cost exceeds the remaining AP.")
+
+        offense_index = next(
+            (
+                index
+                for index, card in enumerate(self._offensive_deck)
+                if card.copy_id == copy_id
+            ),
+            None,
+        )
+        defense_index = next(
+            (
+                index
+                for index, card in enumerate(self._defensive_deck)
+                if card.copy_id == copy_id
+            ),
+            None,
+        )
+        if (
+            offense_index is not None
+            and len(self._offensive_deck) <= MIN_PLAYBOOK_DECK_SIZE
+        ):
+            raise ValueError("The offensive deck cannot drop below four cards.")
+        if (
+            defense_index is not None
+            and len(self._defensive_deck) <= MIN_PLAYBOOK_DECK_SIZE
+        ):
+            raise ValueError("The defensive deck cannot drop below four cards.")
+        if offense_index is None and defense_index is None:
+            raise ValueError("Card copy is not owned by either deck.")
+
+        if offense_index is not None:
+            self._offensive_deck = (
+                self._offensive_deck[:offense_index]
+                + self._offensive_deck[offense_index + 1 :]
+            )
+        else:
+            self._defensive_deck = (
+                self._defensive_deck[:defense_index]
+                + self._defensive_deck[defense_index + 1 :]
+            )
+        self._remaining_ap -= pending.cost
+        self._purchased[(pending.section, pending.card_id)] = pending
+        self._pending_removal = None
+        return self.state
+
+    def cancel_card_removal(self) -> FootballShopState:
+        self._require_open()
+        if self._pending_removal is None:
+            raise ValueError("There is no card removal to cancel.")
+        self._pending_removal = None
+        return self.state
+
+    def _removable_cards(self) -> tuple[FootballCardCopy, ...]:
+        removable = []
+        if len(self._offensive_deck) > MIN_PLAYBOOK_DECK_SIZE:
+            removable.extend(self._offensive_deck)
+        if len(self._defensive_deck) > MIN_PLAYBOOK_DECK_SIZE:
+            removable.extend(self._defensive_deck)
+        return tuple(removable)
+
+    def _require_no_pending_removal(self) -> None:
+        if self._pending_removal is not None:
+            raise ValueError("Finish or cancel the pending card removal first.")
 
     def unlock_slot(
         self,
@@ -370,6 +523,7 @@ class FootballShop:
         slot_number: int,
     ) -> FootballShopState:
         self._require_open()
+        self._require_no_pending_removal()
         if not isinstance(section, FootballShopSection):
             raise ValueError("Shop section must be a FootballShopSection.")
         if isinstance(slot_number, bool) or not isinstance(slot_number, int):
@@ -389,6 +543,7 @@ class FootballShop:
 
     def move_to_next_day(self) -> FootballShopState:
         self._require_open()
+        self._require_no_pending_removal()
         if self._remaining_ap < 1:
             raise ValueError("Moving to the next day requires 1 AP.")
         self._reset_offers()
@@ -398,6 +553,7 @@ class FootballShop:
 
     def finish(self) -> FootballShopState:
         self._require_open()
+        self._require_no_pending_removal()
         self._finished = True
         return self.state
 
@@ -440,7 +596,7 @@ class FootballShop:
                         unlock_cost=None,
                         can_unlock=False,
                         disabled_reason=(
-                            None
+                            self._card_disabled_reason(card)
                             if card is not None
                             else self._empty_slot_reason(section)
                         ),
@@ -466,6 +622,11 @@ class FootballShop:
             slots=tuple(slots),
             catalog_available=bool(self._catalogs[section]),
         )
+
+    def _card_disabled_reason(self, card: FootballShopCard) -> str | None:
+        if card.is_removal and not self._removable_cards():
+            return "Both decks are at the 4-card minimum."
+        return None
 
     def _unlock_availability(
         self,
@@ -555,6 +716,8 @@ class FootballShop:
             raise ValueError(f"Unknown shop catalog sections: {unknown!r}.")
         if FootballShopSection.PLAYER_UPGRADES not in provided:
             provided[FootballShopSection.PLAYER_UPGRADES] = _player_upgrade_catalog()
+        if FootballShopSection.PLAYS_SCHEMES not in provided:
+            provided[FootballShopSection.PLAYS_SCHEMES] = _play_scheme_catalog()
         validated: dict[FootballShopSection, tuple[FootballShopCard, ...]] = {}
         for section in FootballShopSection:
             cards = tuple(provided.get(section, ()))
@@ -592,6 +755,51 @@ class FootballShop:
     def _require_open(self) -> None:
         if self._finished:
             raise ValueError("The pre-match shop is finished.")
+
+
+def _play_scheme_catalog() -> tuple[FootballShopCard, ...]:
+    cards: list[FootballShopCard] = []
+    uncommon_ids = {"quick_out", "cover_two_shell", "fire_zone_blitz"}
+    for kind, definitions in (
+        ("play", OFFENSIVE_PLAY_CATALOG),
+        ("scheme", DEFENSIVE_SCHEME_CATALOG),
+    ):
+        for definition in definitions.values():
+            rarity = (
+                FootballShopRarity.UNCOMMON
+                if definition.card_id in uncommon_ids
+                else FootballShopRarity.COMMON
+            )
+            cards.append(
+                FootballShopCard(
+                    card_id=f"{kind}:{definition.card_id}",
+                    name=definition.name,
+                    description=definition.description,
+                    section=FootballShopSection.PLAYS_SCHEMES,
+                    rarity=rarity,
+                    cost=3 if rarity is FootballShopRarity.UNCOMMON else 2,
+                    eligible=lambda _roster: True,
+                    effect=lambda roster: roster,
+                    football_card=definition,
+                )
+            )
+    cards.append(
+        FootballShopCard(
+            card_id="remove-one-card",
+            name="Remove One Card (Provisional Cost)",
+            description=(
+                "Choose one owned play or scheme to remove permanently; "
+                "2 AP, provisional."
+            ),
+            section=FootballShopSection.PLAYS_SCHEMES,
+            rarity=FootballShopRarity.COMMON,
+            cost=CARD_REMOVAL_COST,
+            eligible=lambda _roster: True,
+            effect=lambda roster: roster,
+            is_removal=True,
+        )
+    )
+    return tuple(cards)
 
 
 def _player_upgrade_catalog() -> tuple[FootballShopCard, ...]:
