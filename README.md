@@ -22,6 +22,10 @@ The recruiting-room table is original generated artwork; the anonymous sideline
 figures are original Pygame illustrations, not portraits of real coaches.
 Individualized coach portrait art remains a future production asset. If the
 table artwork is unavailable, the screen logs a warning and draws a fallback.
+During the player draft, hover a prospect or use Tab / arrow keys to inspect
+their partnership and planned, inactive perk; activate the draft button to
+make the pick. The uniformed player figures are original, programmatically
+drawn placeholders in the saved team colors, not production player artwork.
 Coach-screen typography uses Kalam by Indian Type Foundry and Atkinson
 Hyperlegible by the Braille Institute, bundled under the SIL Open Font License
 1.1. Their full licenses are in `src/ui/assets/fonts/`; missing fonts fall back
