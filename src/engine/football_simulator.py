@@ -904,6 +904,8 @@ class FootballMatchSimulator:
             )
 
         turnover_on_downs = False
+        points_scored = 0
+        scoring_team: FootballTeamSide | None = None
         if turnover:
             return_yards = (
                 defense_perk.value
@@ -915,12 +917,24 @@ class FootballMatchSimulator:
             )
             if return_yards:
                 perk_effects.append("Ball-Hawk: +10 interception return yards")
-            next_state = _after_possession_change(
-                self.state,
-                possession=_opponent(self.state.possession),
-                field_position=min(100.0, 100.0 - new_position + return_yards),
-                clock_cost=clock_cost,
-            )
+            return_field_position = 100.0 - new_position + return_yards
+            if return_yards and return_field_position >= GOAL_LINE_YARDS:
+                scoring_team = _opponent(self.state.possession)
+                points_scored = TOUCHDOWN_POINTS
+                scored = _add_score(self.state, scoring_team, points_scored)
+                next_state = _after_possession_change(
+                    scored,
+                    possession=_opponent(scoring_team),
+                    field_position=TOUCHBACK_START_YARDS,
+                    clock_cost=clock_cost,
+                )
+            else:
+                next_state = _after_possession_change(
+                    self.state,
+                    possession=_opponent(self.state.possession),
+                    field_position=return_field_position,
+                    clock_cost=clock_cost,
+                )
         else:
             line_to_gain = min(
                 self.state.yards_to_go,
@@ -972,7 +986,7 @@ class FootballMatchSimulator:
             offensive_play=play,
             yards_gained=yards,
             clock_seconds_used=min(self.state.game_clock_seconds, clock_cost),
-            points_scored=0,
+            points_scored=points_scored,
             turnover=turnover,
             possession_changed=turnover or turnover_on_downs,
             defensive_scheme=scheme,
@@ -982,11 +996,13 @@ class FootballMatchSimulator:
             perk_effects=tuple(perk_effects),
             turnover_on_downs=turnover_on_downs,
         )
-        next_state = self._finish_action(next_state)
+        next_state = self._finish_action(next_state, points=points_scored)
         self.state = _record_event(
             next_state,
             action=play,
             play_result=result,
+            points_scored=points_scored,
+            scoring_team=scoring_team,
             clock_seconds_used=result.clock_seconds_used,
             perk_effects=result.perk_effects,
         )

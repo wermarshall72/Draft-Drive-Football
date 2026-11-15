@@ -3196,6 +3196,24 @@ class FootballRunScreen(Screen):
             )
             if result is None:
                 description = f"{offense}: {_PLAY_LABELS[event.action]}"
+            elif result.turnover and result.points_scored:
+                if event.scoring_team is FootballTeamSide.TEAM_A:
+                    scorer = team_a_name
+                elif event.scoring_team is FootballTeamSide.TEAM_B:
+                    scorer = team_b_name
+                else:
+                    raise ValueError(
+                        "A defensive touchdown event must identify its scorer."
+                    )
+                offense = (
+                    team_a_name
+                    if event.possession is FootballTeamSide.TEAM_A
+                    else team_b_name
+                )
+                description = (
+                    f"{scorer}: defensive touchdown on {offense}'s "
+                    f"{_PLAY_LABELS[event.action]} interception"
+                )
             elif result.turnover:
                 description = f"{offense}: {_PLAY_LABELS[event.action]} - turnover"
             elif result.turnover_on_downs:

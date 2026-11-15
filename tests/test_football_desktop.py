@@ -1605,6 +1605,44 @@ def test_match_history_labels_turnovers_on_downs(tmp_path: Path) -> None:
     assert "turnover on downs" in text
 
 
+def test_match_history_labels_ball_hawk_defensive_touchdown(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    result = FootballPlayResult(
+        offensive_play=OffensivePlayAction.DEEP_PASS,
+        yards_gained=0.0,
+        clock_seconds_used=18,
+        points_scored=7,
+        turnover=True,
+        possession_changed=True,
+        defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
+        perk_effects=("Ball-Hawk: +10 interception return yards",),
+    )
+    event = FootballMatchEvent(
+        sequence=1,
+        action=OffensivePlayAction.DEEP_PASS,
+        team_a_score=0,
+        team_b_score=7,
+        possession=FootballTeamSide.TEAM_A,
+        offense_field_position=25.0,
+        down=1,
+        yards_to_go=10.0,
+        game_clock_seconds=882,
+        period=1,
+        status=FootballMatchStatus.IN_PROGRESS,
+        clock_seconds_used=18,
+        play_result=result,
+        points_scored=7,
+        scoring_team=FootballTeamSide.TEAM_B,
+        perk_effects=result.perk_effects,
+    )
+
+    text = desktop.run_screen._format_event(event, "Home", "Away")
+
+    assert "Away: defensive touchdown" in text
+    assert "Home's DEEP PASS interception" in text
+    assert "Ball-Hawk: +10 interception return yards" in text
+
+
 def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(
     tmp_path: Path,
 ) -> None:

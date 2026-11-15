@@ -162,6 +162,62 @@ def _match_state(**overrides) -> FootballMatchState:
     return FootballMatchState(**values)
 
 
+def _ball_hawk_interception_simulator(
+    *,
+    offense_side: FootballTeamSide = FootballTeamSide.TEAM_A,
+    field_position: float = 25.0,
+    period: int = 1,
+    game_clock_seconds: int = 900,
+    ball_hawk: bool = True,
+    random_seed: int = 17,
+    fixed_rolls: bool = True,
+) -> tuple[FootballMatchSimulator, FootballCardCopy]:
+    interception_card = FootballCardCopy("interception:deep-pass", "deep_pass")
+    remaining_cards = (
+        FootballCardCopy("interception:rb-run", "rb_run"),
+        FootballCardCopy("interception:short-pass", "short_pass"),
+    )
+    offense_deck = FootballDeckState(
+        owned=(interception_card, *remaining_cards),
+        hand=(interception_card,),
+        draw_pile=remaining_cards,
+    )
+    team_a = _roster("Home")
+    team_b = _roster("Away")
+    defense_roster = team_b if offense_side is FootballTeamSide.TEAM_A else team_a
+    if ball_hawk:
+        defense_roster = replace(
+            defense_roster,
+            coach_assignment=FootballCoachAssignment(
+                "balanced_offense", "ball_hawk"
+            ),
+        )
+        if offense_side is FootballTeamSide.TEAM_A:
+            team_b = defense_roster
+        else:
+            team_a = defense_roster
+    state = _match_state(
+        team_a=team_a,
+        team_b=team_b,
+        possession=offense_side,
+        offense_field_position=field_position,
+        period=period,
+        game_clock_seconds=game_clock_seconds,
+        awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+        current_drive_defensive_scheme=None,
+        random_seed=random_seed,
+        **{
+            "team_a_offense_deck" if offense_side is FootballTeamSide.TEAM_A
+            else "team_b_offense_deck": offense_deck
+        },
+    )
+    simulator = FootballMatchSimulator(state)
+    if fixed_rolls:
+        simulator.rng = SequenceRNG((0.4,), (0.0,))
+    simulator.select_defensive_scheme(DefensiveSchemeAction.DEEP_PASS)
+    return simulator, interception_card
+
+
 def _sim_with_scheme(
     *,
     scheme: DefensiveSchemeAction = DefensiveSchemeAction.SHORT_PASS,
@@ -553,13 +609,18 @@ def test_goal_to_go_exact_line_gain_scores_and_updates_possession() -> None:
     assert state.possession is FootballTeamSide.TEAM_B
 
 
-@pytest.mark.parametrize("field_position", (2.0, 98.0))
 @pytest.mark.parametrize("down", (1, 4))
 @pytest.mark.parametrize("ball_hawk", (False, True))
+@pytest.mark.parametrize(
+    "offense_side",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+@pytest.mark.parametrize("field_position", (2.0, 10.0, 20.0, 98.0))
 def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
     field_position: float,
     down: int,
     ball_hawk: bool,
+    offense_side: FootballTeamSide,
 ) -> None:
     pass_card = FootballCardCopy("interception:deep-pass", "deep_pass")
     other_cards = (
@@ -571,17 +632,32 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
         hand=(pass_card,),
         draw_pile=other_cards,
     )
-    away = _roster("Away")
-    if ball_hawk:
-        away = replace(
-            away,
-            coach_assignment=FootballCoachAssignment(
-                "balanced_offense", "ball_hawk"
-            ),
-        )
+    home = _roster("Home")
+    if offense_side is FootballTeamSide.TEAM_A:
+        away = _roster("Away")
+        if ball_hawk:
+            away = replace(
+                away,
+                coach_assignment=FootballCoachAssignment(
+                    "balanced_offense", "ball_hawk"
+                ),
+            )
+        teams = {"team_a": home, "team_b": away}
+        deck_override = {"team_a_offense_deck": offense_deck}
+    else:
+        if ball_hawk:
+            home = replace(
+                home,
+                coach_assignment=FootballCoachAssignment(
+                    "balanced_offense", "ball_hawk"
+                ),
+            )
+        teams = {"team_a": home, "team_b": _roster("Away")}
+        deck_override = {"team_b_offense_deck": offense_deck}
     simulator = FootballMatchSimulator(
         _match_state(
-            team_b=away,
+            **teams,
+            possession=offense_side,
             down=down,
             yards_to_go=8.0,
             offense_field_position=field_position,
@@ -593,7 +669,7 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
             current_drive_defensive_scheme=(
                 DefensiveSchemeAction.DEEP_PASS if down == 4 else None
             ),
-            team_a_offense_deck=offense_deck,
+            **deck_override,
         )
     )
     simulator.rng = SequenceRNG((0.4,), (0.0,))
@@ -604,29 +680,160 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
 
     state = simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
     result = state.match_events[-1].play_result
+    defense_side = (
+        FootballTeamSide.TEAM_B
+        if offense_side is FootballTeamSide.TEAM_A
+        else FootballTeamSide.TEAM_A
+    )
     expected_return = 10.0 if ball_hawk else 0.0
+    defensive_touchdown = ball_hawk and field_position <= 10.0
     assert result is not None and result.turnover
     assert result.yards_gained == 0.0
-    assert result.points_scored == 0
+    assert result.points_scored == (7 if defensive_touchdown else 0)
     assert not result.turnover_on_downs
-    assert state.team_a_score == state.team_b_score == 0
-    assert state.possession is FootballTeamSide.TEAM_B
-    assert state.offense_field_position == min(
-        100.0, 100.0 - field_position + expected_return
+    expected_score_a = 7 if defensive_touchdown and defense_side is FootballTeamSide.TEAM_A else 0
+    expected_score_b = 7 if defensive_touchdown and defense_side is FootballTeamSide.TEAM_B else 0
+    assert (state.team_a_score, state.team_b_score) == (
+        expected_score_a,
+        expected_score_b,
+    )
+    assert state.possession is (
+        offense_side if defensive_touchdown else defense_side
+    )
+    assert state.offense_field_position == (
+        25.0
+        if defensive_touchdown
+        else min(100.0, 100.0 - field_position + expected_return)
     )
     assert state.game_clock_seconds == 882
     assert state.current_drive_defensive_scheme is None
-    assert state.match_events[-1].scoring_team is None
+    assert state.match_events[-1].scoring_team == (
+        defense_side if defensive_touchdown else None
+    )
+    assert state.match_events[-1].points_scored == result.points_scored
+    assert state.match_events[-1].team_a_score == state.team_a_score
+    assert state.match_events[-1].team_b_score == state.team_b_score
+    assert state.match_events[-1].status is state.status
+    assert state.status is FootballMatchStatus.IN_PROGRESS
     assert state.match_events[-1].clock_seconds_used == 18
     assert state.match_events[-1].action is OffensivePlayAction.DEEP_PASS
-    assert state.team_a_offense_deck is not None
-    assert state.team_a_offense_deck.discard_pile == (pass_card,)
-    assert pass_card not in state.team_a_offense_deck.hand
+    assert sum(
+        event.action is OffensivePlayAction.DEEP_PASS
+        for event in state.match_events
+    ) == 1
+    assert result.defensive_scheme is DefensiveSchemeAction.DEEP_PASS
+    assert any(
+        "Ball-Hawk: +10 interception return yards" in effect
+        for effect in result.perk_effects
+    ) is ball_hawk
+    deck = (
+        state.team_a_offense_deck
+        if offense_side is FootballTeamSide.TEAM_A
+        else state.team_b_offense_deck
+    )
+    assert deck is not None
+    assert deck.discard_pile == (pass_card,)
+    assert pass_card not in deck.hand
     assert set(
-        state.team_a_offense_deck.hand
-        + state.team_a_offense_deck.draw_pile
-        + state.team_a_offense_deck.discard_pile
-    ) == set(state.team_a_offense_deck.owned)
+        deck.hand + deck.draw_pile + deck.discard_pile
+    ) == set(deck.owned)
+
+
+@pytest.mark.parametrize(
+    ("period", "clock", "expected_period", "expected_clock", "status"),
+    (
+        (1, 900, 1, 882, FootballMatchStatus.IN_PROGRESS),
+        (1, 18, 2, 900, FootballMatchStatus.IN_PROGRESS),
+        (2, 18, 2, 0, FootballMatchStatus.COMPLETED),
+        (3, 300, 3, 282, FootballMatchStatus.COMPLETED),
+    ),
+)
+@pytest.mark.parametrize(
+    "offense_side",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+def test_ball_hawk_touchdown_uses_match_score_and_clock_conventions(
+    period: int,
+    clock: int,
+    expected_period: int,
+    expected_clock: int,
+    status: FootballMatchStatus,
+    offense_side: FootballTeamSide,
+) -> None:
+    simulator, _ = _ball_hawk_interception_simulator(
+        offense_side=offense_side,
+        field_position=10.0,
+        period=period,
+        game_clock_seconds=clock,
+    )
+    state = simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+    event = state.match_events[-1]
+    defense_side = (
+        FootballTeamSide.TEAM_B
+        if offense_side is FootballTeamSide.TEAM_A
+        else FootballTeamSide.TEAM_A
+    )
+    result = event.play_result
+    assert result is not None
+    assert result.turnover and result.possession_changed
+    assert result.points_scored == event.points_scored == 7
+    assert event.scoring_team is defense_side
+    assert (event.team_a_score, event.team_b_score) == (
+        (7, 0) if defense_side is FootballTeamSide.TEAM_A else (0, 7)
+    )
+    assert state.possession is offense_side
+    assert state.offense_field_position == 25.0
+    assert state.period == event.period == expected_period
+    assert state.game_clock_seconds == event.game_clock_seconds == expected_clock
+    assert state.status is event.status is status
+    assert result.clock_seconds_used == event.clock_seconds_used == 18
+    assert state.current_drive_defensive_scheme is None
+    assert state.awaited_action is (
+        FootballAwaitedAction.DEFENSIVE_SCHEME
+        if status is FootballMatchStatus.IN_PROGRESS
+        else None
+    )
+    if status is FootballMatchStatus.COMPLETED:
+        assert state.final_result is not None
+        assert state.final_result.winner is defense_side
+    assert any("Ball-Hawk" in item for item in result.perk_effects)
+    offense_deck = (
+        state.team_a_offense_deck
+        if offense_side is FootballTeamSide.TEAM_A
+        else state.team_b_offense_deck
+    )
+    assert offense_deck is not None
+    assert set(
+        offense_deck.hand + offense_deck.draw_pile + offense_deck.discard_pile
+    ) == set(offense_deck.owned)
+
+
+def test_ball_hawk_interception_touchdown_is_seeded_and_reproducible() -> None:
+    fingerprints = []
+    for _ in range(2):
+        simulator, _ = _ball_hawk_interception_simulator(
+            field_position=2.0,
+            random_seed=9,
+            fixed_rolls=False,
+        )
+        state = simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+        result = state.match_events[-1].play_result
+        assert result is not None
+        assert result.turnover and result.points_scored == 7
+        fingerprints.append(
+            (
+                state.team_a_score,
+                state.team_b_score,
+                state.possession,
+                state.offense_field_position,
+                state.game_clock_seconds,
+                state.period,
+                state.status,
+                state.match_events,
+                state.team_a_offense_deck,
+            )
+        )
+    assert fingerprints[0] == fingerprints[1]
 
 
 def test_negative_yardage_from_goal_to_go_uses_actual_line_to_gain():
