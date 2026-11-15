@@ -128,12 +128,12 @@ gameplay assumptions, not empirically calibrated balance targets.
 | Booster Club Drive | Rare | 4 AP | +1 AP to every later shop this run; does not affect the current shop |
 | Facilities Fund | Rare | 5 AP | +1 AP to every later shop this run; future-shop bonuses cap at +2 AP |
 | Bye Week | Very Rare | 6 AP | Once per run, end the shop and skip its scheduled game without a match or record change |
-| Tempo Install | Rare | 3 AP | -10% relative clock for normal offensive card plays |
-| Huddle Up | Rare | 3 AP | +10% relative clock for normal offensive card plays |
-| Vertical Threat | Rare | 3 AP | +10% Deep Pass-family result-calculation yards |
-| Pattern-Match Shell | Rare | 3 AP | -10% opposing Medium Pass-family result-calculation yards when using a Medium Pass-family scheme |
+| Tempo Install | Rare | 3 AP | -10% relative clock for normal offensive card plays; incomplete passes still use 5 seconds, conversions and special teams retain their rules |
+| Huddle Up | Rare | 3 AP | +10% relative clock for normal offensive card plays; incomplete passes still use 5 seconds, conversions and special teams retain their rules |
+| Vertical Threat | Rare | 3 AP | +10% Deep Pass-family result-calculation yards; negative gains become 10% less negative |
+| Pattern-Match Shell | Rare | 3 AP | -10% opposing Medium Pass-family result-calculation yards when using a Medium Pass-family scheme; negative gains become 10% more negative |
 | Ball-Security Clinic | Rare | 3 AP | -20% relative conditional interception chance; fumble risk is unchanged |
-| Field-Goal Lab | Rare | 4 AP | +5 percentage points to field-goal success chance, capped at 100%; block risk is unchanged |
+| Field-Goal Lab | Rare | 4 AP | +5 percentage points to conditional make probability given an unblocked kick, capped at 100%; 0.5% block risk is unchanged |
 | Clean-Pocket Protection | Uncommon | 3 AP | -25% relative punt and field-goal block chance; extra-point block chance is unchanged |
 | Punt Return Lane | Uncommon | 2 AP | +2 yards per punt return, subject to existing yardage limits |
 | Kickoff Return Lane | Uncommon | 2 AP | +2 yards per kickoff return, subject to existing yardage limits |
@@ -143,16 +143,27 @@ calculations; offense and defense upgrades use separate +20% caps. Volatility
 reductions combine additively to 30%, and stamina bonuses combine to +0.30
 while each player's effective stamina remains capped at 1.00. Family yardage
 changes combine additively after flat yardage bonuses, then apply a 0.50-1.50
-multiplier clamp before the existing -5 to 25 yard result clamp. They affect
-calculated result yards (and the shared expected-yardage estimate), not
-completion, interception, or fumble probabilities.
+multiplier clamp before the existing -5 to 25 yard result clamp. Apply the net
+offensive bonus minus matching defensive reduction in the beneficial direction:
+nonnegative raw yards use `1 + delta`, while negative raw yards use `1 - delta`;
+zero is unchanged. Thus offensive upgrades cannot worsen negative gains and
+defensive upgrades cannot improve them. Incomplete passes and interceptions
+remain zero, and play risks are unchanged; fumble probabilities are unchanged,
+but a fumble's calculated yardage uses the same multiplier when nonzero.
+Opposing offense and defense effects combine additively before the direction
+is applied. The multiplier affects calculated result yards (and the shared
+expected-yardage estimate), not completion, interception, or fumble
+probabilities.
 
 Relative offensive-clock changes combine additively and clamp to a 0.75-1.25
 multiplier. Durations round half-up to whole seconds with a one-second
-minimum; incomplete passes remain 5 seconds, and conversions and special
-teams retain their existing clock rules. Interception and kick-block
+minimum. The match hand previews this live normal-play value separately from
+the printed base duration; incomplete passes remain 5 seconds, and conversions
+and special teams retain their existing clock rules. Interception and kick-block
 reductions are relative and capped at 75%. Field-goal accuracy is an additive
-five-percentage-point bonus. Return-yard bonuses leave return, touchback, and
+five-percentage-point bonus to conditional make probability given an unblocked
+kick, capped at 100%; it does not change the 0.5% block chance or the
+probability of an overall make after accounting for a block. Return-yard bonuses leave return, touchback, and
 touchdown chances unchanged.
 
 A Bye Week preserves the current record and assets, marks one scheduled game

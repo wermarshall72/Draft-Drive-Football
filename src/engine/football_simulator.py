@@ -629,19 +629,13 @@ def calculate_play_estimate(
             FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
             family=offensive_family,
         )
-    family_yardage_multiplier = _clamp(
-        1.0 + family_yardage_delta,
-        1.0 - MAX_COACH_YARDAGE_DELTA,
-        1.0 + MAX_COACH_YARDAGE_DELTA,
-    )
     yards = (
         _BASE_YARDAGE[play]
         - PLAY_DEFENSE_BASELINE_YARDAGE_REDUCTION
         + OFFENSIVE_BASELINE_YARDAGE_BONUS
         + (
             RUN_BASELINE_YARDAGE_ADJUSTMENT
-            if OFFENSIVE_PLAY_CATALOG[play.value].family
-            is FootballCardFamily.RB_RUN
+            if offensive_family is FootballCardFamily.RB_RUN
             else PASS_BASELINE_YARDAGE_ADJUSTMENT
         )
         + (matchup.offense - matchup.defense) * POWER_YARDAGE_MULTIPLIER
@@ -653,7 +647,17 @@ def calculate_play_estimate(
         + yardage_bonus
         + completion_bonus
         + contextual_yardage_bonus
-    ) * family_yardage_multiplier
+    )
+    family_yardage_multiplier = _clamp(
+        1.0 + (
+            family_yardage_delta
+            if yards >= 0.0
+            else -family_yardage_delta
+        ),
+        1.0 - MAX_COACH_YARDAGE_DELTA,
+        1.0 + MAX_COACH_YARDAGE_DELTA,
+    )
+    yards *= family_yardage_multiplier
     yards = _clamp(yards, MIN_PLAY_YARDAGE, MAX_PLAY_YARDAGE)
     interception_risk_reduction = coach_upgrade_magnitude(
         offense_coach_upgrades,

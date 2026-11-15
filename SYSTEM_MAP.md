@@ -58,15 +58,23 @@ covers extracted interaction state.
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
   and removal validation. Coach-upgrade purchase history and descriptions are
-  shown in the Depth Chart. See [test_football_shop.py](tests/test_football_shop.py),
+  shown in the Depth Chart. [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py)
+  supplies complete duration, uniqueness, rarity, and cost details to shop
+  inspection and owned-upgrade rows; [text.py](src/ui/text.py) wraps complete
+  descriptions and fails if they cannot fit their assigned region. See
+  [test_football_shop.py](tests/test_football_shop.py),
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
   the shop/review cases in [test_football_desktop.py](tests/test_football_desktop.py).
 - **Match and results:** [football_match_field.py](src/ui/football_match_field.py),
   [football_match_status.py](src/ui/football_match_status.py), and
   [football_match_decision_view.py](src/ui/football_match_decision_view.py)
-  render the field, scoreboard/history, and hand/decision controls.
+  render the field, scoreboard/history, and hand/decision controls. Offensive
+  hand previews use the simulator's adjusted normal-play clock calculation and
+  label incomplete-pass, conversion, and special-teams exceptions.
   [football_match_interaction.py](src/ui/football_match_interaction.py)
   tracks hand scrolling, dragging, and field animation.
+  The hand distinguishes printed base card durations from the live normal-play
+  clock, with simulator clock exceptions visible.
   [football_result.py](src/ui/football_result.py) renders results and
   progression actions. Tests include
   [test_football_desktop.py](tests/test_football_desktop.py) and

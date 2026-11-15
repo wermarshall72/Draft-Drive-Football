@@ -13,9 +13,14 @@ from src.engine.football_decks import (
 from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_shop import MIN_PLAYBOOK_DECK_SIZE, FootballShopState
 from src.engine.football_simulator import calculate_standardized_play_estimate
+from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
 from src.ui.football_display import _POSITION_LABELS, _coach_perk_summary
 from src.ui.football_shop_review import ShopReviewInteraction
-from src.ui.text import fit_text as _fit_text
+from src.ui.text import (
+    draw_complete_wrapped_text,
+    fit_text as _fit_text,
+    wrap_text_lines,
+)
 from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
@@ -64,11 +69,32 @@ class FootballReviewView:
         coach_width = (body_rect.width - gap) // 2
         player_row_height = 92
         player_panel_height = 36 + 4 * player_row_height
-        upgrade_row_height = 42
-        run_upgrade_count = (
-            len(shop.purchased_upgrades) + len(shop.owned_coach_upgrades)
-        )
-        upgrade_height = 52 + max(1, run_upgrade_count) * upgrade_row_height
+        upgrade_text_width = body_rect.width - 32
+        upgrade_rows: list[tuple[str, int]] = []
+        for upgrade in shop.purchased_upgrades:
+            text = (
+                f"{upgrade.name}  /  {_POSITION_LABELS[upgrade.position]} "
+                f"{upgrade.stat.value.upper()} +{upgrade.amount:g}: "
+                f"{upgrade.description}"
+            )
+            line_count = len(
+                wrap_text_lines(text, self._small_font, upgrade_text_width)
+            )
+            upgrade_rows.append(
+                (text, max(42, line_count * (self._small_font.get_height() + 2) + 8))
+            )
+        for card in shop.owned_coach_upgrades:
+            sections = coach_upgrade_detail_sections(card)
+            text = "\n".join((f"COACH  /  {sections[0]}", *sections[1:]))
+            line_count = len(
+                wrap_text_lines(text, self._small_font, upgrade_text_width)
+            )
+            upgrade_rows.append(
+                (text, max(42, line_count * (self._small_font.get_height() + 2) + 8))
+            )
+        upgrade_height = 52 + sum(height for _, height in upgrade_rows)
+        if upgrade_rows:
+            upgrade_height += 4 * (len(upgrade_rows) - 1)
         coach_top = body_rect.top
         player_top = coach_top + coach_height + 12
         upgrade_top = player_top + player_panel_height + 12
@@ -253,41 +279,24 @@ class FootballReviewView:
             self._small_font,
             self.theme.text,
         )
-        if run_upgrade_count:
-            for index, upgrade in enumerate(shop.purchased_upgrades):
+        if upgrade_rows:
+            row_top = upgrade_rect.top + 30
+            for text, row_height in upgrade_rows:
                 row_rect = pygame.Rect(
                     upgrade_rect.left + 10,
-                    upgrade_rect.top + 30 + index * upgrade_row_height,
+                    row_top,
                     upgrade_rect.width - 20,
-                    upgrade_row_height,
+                    row_height,
                 )
-                draw_wrapped_text(
+                draw_complete_wrapped_text(
                     surface,
-                    f"{upgrade.name}  /  {_POSITION_LABELS[upgrade.position]} "
-                    f"{upgrade.stat.value.upper()} +{upgrade.amount:g}: "
-                    f"{upgrade.description}",
+                    text,
                     row_rect,
                     self._small_font,
                     self.theme.secondary_accent,
-                    line_gap=1,
+                    line_gap=2,
                 )
-            for index, card in enumerate(shop.owned_coach_upgrades):
-                row_rect = pygame.Rect(
-                    upgrade_rect.left + 10,
-                    upgrade_rect.top
-                    + 30
-                    + (len(shop.purchased_upgrades) + index) * upgrade_row_height,
-                    upgrade_rect.width - 20,
-                    upgrade_row_height,
-                )
-                draw_wrapped_text(
-                    surface,
-                    f"COACH  /  {card.name}: {card.description}",
-                    row_rect,
-                    self._small_font,
-                    self.theme.secondary_accent,
-                    line_gap=1,
-                )
+                row_top += row_height + 4
         else:
             draw_text(
                 surface,
@@ -402,7 +411,7 @@ class FootballReviewView:
                     ).expected_yards
                     detail = (
                         f"{contributors} / NEUTRAL ~{neutral_yards:.1f} YDS / "
-                        f"{definition.clock_seconds}s"
+                        f"BASE {definition.clock_seconds}s"
                     )
                 else:
                     detail = (

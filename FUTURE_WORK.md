@@ -61,6 +61,10 @@ or the design changes.
 - [x] Add the first named coach-upgrade catalog, run-unique purchase history,
   typed effects in match resolution/estimates, future-shop AP bonuses, and a
   one-time Bye Week purchase that skips a scheduled game without a match.
+- [x] Make coach-upgrade effects fully inspectable in the shop and Depth Chart,
+  preview live normal-play clock values, apply family yardage upgrades in the
+  beneficial direction for positive and negative gains, and clarify conditional
+  Field-Goal Lab probability.
 - [ ] Expand the coach-upgrade catalog and tune its provisional costs and
   effect magnitudes through balance measurement and playtesting.
 - [ ] Expand the play/scheme catalog toward 100+ named ideas without changing

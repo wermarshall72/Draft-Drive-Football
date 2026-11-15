@@ -964,7 +964,7 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "two_minute_drill",
             "Two-Minute Drill",
             "Your QB, RB, WR, and O-line gain +5% power when they contribute. "
-            "Relative bonus; stacks additively, up to +20%.",
+            "Relative bonuses stack additively, up to +20%.",
             FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
             0.05,
             uncommon,
@@ -974,7 +974,7 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "front_seven_film",
             "Front Seven Film",
             "Your D-line, linebackers, cornerbacks, and safeties gain +5% power "
-            "when they contribute. Relative bonus; stacks additively, up to +20%.",
+            "when they contribute. Relative bonuses stack additively, up to +20%.",
             FootballCoachUpgradeKind.DEFENSE_POWER_BOOST,
             0.05,
             uncommon,
@@ -984,7 +984,7 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "rhythm_install",
             "Rhythm Install",
             "Reduce volatility of your offensive contributors by 15%, narrowing "
-            "play-result spread. Additive stacking is capped at 30%.",
+            "play-result spread. Reductions stack additively, capped at 30%.",
             FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION,
             0.15,
             rare,
@@ -994,7 +994,7 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "disguise_package",
             "Disguise Package",
             "Reduce volatility of your defensive contributors by 15%, narrowing "
-            "play-result spread. Additive stacking is capped at 30%.",
+            "play-result spread. Reductions stack additively, capped at 30%.",
             FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION,
             0.15,
             rare,
@@ -1004,7 +1004,8 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "fourth_quarter_conditioning",
             "Fourth-Quarter Conditioning",
             "Your offensive contributors gain +0.10 effective stamina after "
-            "player training, capped at 1.00; stacks to +0.30.",
+            "player training. Bonuses stack to +0.30; each player's total is "
+            "capped at 1.00.",
             FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST,
             0.10,
             uncommon,
@@ -1014,7 +1015,8 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "iron_lungs",
             "Iron Lungs",
             "Your defensive contributors gain +0.10 effective stamina after "
-            "player training, capped at 1.00; stacks to +0.30.",
+            "player training. Bonuses stack to +0.30; each player's total is "
+            "capped at 1.00.",
             FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST,
             0.10,
             uncommon,
@@ -1023,8 +1025,8 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "booster_club_drive",
             "Booster Club Drive",
-            "Permanently add 1 AP to every later shop this run. Does not change "
-            "this shop; future-shop bonuses stack to +2 AP.",
+            "Add 1 AP to every later shop in this run. Does not change this "
+            "shop; future-shop bonuses stack to +2 AP.",
             FootballCoachUpgradeKind.FUTURE_SHOP_AP,
             1,
             rare,
@@ -1033,8 +1035,8 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "facilities_fund",
             "Facilities Fund",
-            "Permanently add 1 AP to every later shop this run. Does not change "
-            "this shop; future-shop bonuses stack to +2 AP.",
+            "Add 1 AP to every later shop in this run. Does not change this "
+            "shop; future-shop bonuses stack to +2 AP.",
             FootballCoachUpgradeKind.FUTURE_SHOP_AP,
             1,
             rare,
@@ -1043,8 +1045,9 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "bye_week",
             "Bye Week",
-            "Skip this scheduled game without a result. Immediately end this "
-            "shop; available once per run.",
+            "Skip this scheduled game without a match result or record change. "
+            "Immediately end this shop; this one-time event is available once "
+            "per run.",
             FootballCoachUpgradeKind.BYE_WEEK,
             0,
             FootballShopRarity.VERY_RARE,
@@ -1053,9 +1056,10 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "tempo_install",
             "Tempo Install",
-            "Your normal offensive card plays use 10% less clock (relative). "
-            "Round to nearest second, minimum 1; incomplete passes and "
-            "conversions keep their existing clock rules.",
+            "Normal offensive card plays use 10% less clock, relative to the "
+            "printed duration. Changes stack and clamp to 75%-125%; round "
+            "half-up to whole seconds, minimum 1. Incomplete passes still use "
+            "5 seconds; conversions and special teams keep their timing.",
             FootballCoachUpgradeKind.OFFENSIVE_PLAY_CLOCK_DELTA,
             -0.10,
             rare,
@@ -1064,9 +1068,10 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "huddle_up",
             "Huddle Up",
-            "Your normal offensive card plays use 10% more clock (relative). "
-            "Round to nearest second, minimum 1; incomplete passes and "
-            "conversions keep their existing clock rules.",
+            "Normal offensive card plays use 10% more clock, relative to the "
+            "printed duration. Changes stack and clamp to 75%-125%; round "
+            "half-up to whole seconds, minimum 1. Incomplete passes still use "
+            "5 seconds; conversions and special teams keep their timing.",
             FootballCoachUpgradeKind.OFFENSIVE_PLAY_CLOCK_DELTA,
             0.10,
             rare,
@@ -1075,8 +1080,11 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "vertical_threat",
             "Vertical Threat",
-            "Deep Pass-family plays multiply yards on the result calculation by "
-            "1.10 after additive perks, before the yardage cap. Risk is unchanged.",
+            "Deep Pass-family result-calculation yards improve by 10% after "
+            "additive perks and before the -5 to 25 yard cap. Negative gains "
+            "become 10% less negative; zero stays zero. Opposing family effects "
+            "combine additively before the direction is applied. Incomplete "
+            "passes and interceptions remain zero; play risks are unchanged.",
             FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
             0.10,
             rare,
@@ -1087,8 +1095,11 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "pattern_match",
             "Pattern-Match Shell",
             "When your defense selects a Medium Pass-family scheme, reduce "
-            "opposing Medium Pass-family result-calculation yards by 10% "
-            "relative, after additive perks and before the yardage cap.",
+            "opposing Medium Pass-family result-calculation yards by 10% after "
+            "additive perks and before the -5 to 25 yard cap. Negative gains "
+            "become 10% more negative; zero stays zero. Opposing family effects "
+            "combine additively before the direction is applied. Incomplete "
+            "passes and interceptions remain zero; play risks are unchanged.",
             FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
             0.10,
             rare,
@@ -1099,8 +1110,8 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "ball_security_clinic",
             "Ball-Security Clinic",
             "Reduce your offense's conditional interception chance by 20% "
-            "relative after matchup and coach adjustments; does not reduce "
-            "fumble risk.",
+            "relative after matchup and coach adjustments; fumble risk is "
+            "unchanged.",
             FootballCoachUpgradeKind.INTERCEPTION_RISK_REDUCTION,
             0.20,
             rare,
@@ -1109,8 +1120,10 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "field_goal_lab",
             "Field-Goal Lab",
-            "Add 5 percentage points to your field-goal success chance at every "
-            "distance, capped at 100%; does not change block risk.",
+            "Add 5 percentage points to conditional make probability given an "
+            "unblocked field goal, at every distance, capped at 100%. The "
+            "0.5% field-goal block chance is unchanged, so overall make chance "
+            "still accounts for the possibility of a block.",
             FootballCoachUpgradeKind.FIELD_GOAL_ACCURACY_BONUS,
             0.05,
             rare,
@@ -1120,7 +1133,7 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "clean_pocket_protection",
             "Clean-Pocket Protection",
             "Reduce your punt and field-goal block chance by 25% relative. "
-            "Extra-point block chance is unchanged.",
+            "Reductions stack to a 75% cap. Extra-point block chance is unchanged.",
             FootballCoachUpgradeKind.BLOCKED_KICK_RISK_REDUCTION,
             0.25,
             uncommon,
@@ -1140,7 +1153,8 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "kickoff_return_lane",
             "Kickoff Return Lane",
             "Add 2 yards to each kickoff return your team makes; existing return "
-            "yardage limits still apply. Touchback and touchdown chances are unchanged.",
+            "yardage limits still apply. Touchback and touchdown chances are "
+            "unchanged.",
             FootballCoachUpgradeKind.KICKOFF_RETURN_YARDS_BONUS,
             2,
             uncommon,

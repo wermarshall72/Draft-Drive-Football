@@ -251,6 +251,8 @@ class FootballRunScreen(Screen):
                         content,
                         state.shop,
                         state.transition_message,
+                        focus_index=self.focus_index,
+                        hover_index=self.hover_index,
                     )
                 )
                 self._draw_buttons(surface)

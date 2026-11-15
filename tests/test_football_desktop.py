@@ -12,6 +12,8 @@ from src.application import ApplicationController
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballCardCopy,
+    FootballAwaitedAction,
+    FootballCardFamily,
     FootballConversionAction,
     FootballDeckState,
     FootballFourthDownAction,
@@ -68,6 +70,9 @@ from src.ui import football_player_draft_view as football_player_draft_module
 from src.ui.football_match_status import FootballMatchStatusView
 from src.ui import player_art
 from src.ui.layout import LOGICAL_SIZE
+from src.ui.layout import Layout
+from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
+from src.ui.text import wrap_text_lines
 from src.ui.widgets import Button
 from src.ui.theme import readable_ink
 
@@ -1573,6 +1578,8 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     original_draw_text = football_run_screen_module.draw_text
     wrapped: list[str] = []
     original_draw_wrapped = football_run_screen_module.draw_wrapped_text
+    complete_lines: list[tuple[str, ...]] = []
+    original_complete_wrapped = football_review_module.draw_complete_wrapped_text
 
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
@@ -1584,12 +1591,28 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
             surface, text, rect, font, color, line_gap=line_gap
         )
 
+    def capture_complete_wrapped(
+        surface, text, rect, font, color, *, line_gap=2
+    ):
+        lines = wrap_text_lines(text, font, rect.width)
+        assert all(font.size(line)[0] <= rect.width for line in lines)
+        assert len(lines) * (font.get_height() + line_gap) - line_gap <= rect.height
+        complete_lines.append(lines)
+        return original_complete_wrapped(
+            surface, text, rect, font, color, line_gap=line_gap
+        )
+
     monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
     monkeypatch.setattr(
         football_run_screen_module, "draw_wrapped_text", capture_wrapped
     )
     monkeypatch.setattr(football_review_module, "draw_text", capture_text)
     monkeypatch.setattr(football_review_module, "draw_wrapped_text", capture_wrapped)
+    monkeypatch.setattr(
+        football_review_module,
+        "draw_complete_wrapped_text",
+        capture_complete_wrapped,
+    )
     _activate(desktop, "DEPTH CHART")
     desktop.router.draw(_surface())
     assert "CURRENT RUN SNAPSHOT" in " ".join(displayed)
@@ -1597,8 +1620,9 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     assert "DEFENSE" in " ".join(displayed)
     assert "PURCHASED RUN UPGRADES" in " ".join(displayed)
     assert any("PLANNED / INACTIVE" in text for text in wrapped)
-    assert any(shop.purchased_upgrades[0].name in text for text in wrapped)
-    assert any(shop.purchased_upgrades[0].description in text for text in wrapped)
+    complete_text = " ".join(line for lines in complete_lines for line in lines)
+    assert shop.purchased_upgrades[0].name in complete_text
+    assert shop.purchased_upgrades[0].description in complete_text
     for coach in football_review_module.coaches_for_assignment(
         shop.roster.coach_assignment
     ):
@@ -1696,14 +1720,32 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     monkeypatch.setattr(
         football_review_module, "draw_wrapped_text", capture_review_wrapped
     )
-    screen._shop_view().draw(
+    view = screen._shop_view()
+    buttons = view.draw(
         _surface(), area, shop.state, "Bye Week skipped scheduled game 3."
     )
-    assert card.description in " ".join(wrapped)
+    details_index = next(
+        index for index, button in enumerate(buttons) if button.label == "DETAILS"
+    )
+    view.draw(
+        _surface(),
+        area,
+        shop.state,
+        "Bye Week skipped scheduled game 3.",
+        focus_index=details_index,
+    )
+    assert view._coach_detail_sections == coach_upgrade_detail_sections(card)
     assert "Bye Week skipped scheduled game 3." in " ".join(shop_labels)
 
     shop.buy_card(FootballShopSection.COACH_UPGRADES, card.card_id)
-    state = replace(controller.state, shop=shop.state, game_number=4)
+    state = replace(
+        controller.state,
+        shop=replace(
+            shop.state,
+            owned_coach_upgrades=COACH_UPGRADE_CATALOG,
+        ),
+        game_number=4,
+    )
     review = football_review_module.FootballReviewView(
         screen.theme,
         screen._small_font,
@@ -1712,9 +1754,19 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
         lambda: None,
         lambda _copy_id: None,
     )
-    wrapped.clear()
     review.draw_depth_chart(_surface(), area, state)
-    assert any(card.name in text and card.description in text for text in wrapped)
+    assert review.interaction.depth_max_scroll > 0
+    for owned_card in COACH_UPGRADE_CATALOG:
+        sections = coach_upgrade_detail_sections(owned_card)
+        details = "\n".join((f"COACH  /  {sections[0]}", *sections[1:]))
+        lines = wrap_text_lines(details, screen._small_font, area.width - 32)
+        assert all(
+            screen._small_font.size(line)[0] <= area.width - 32
+            for line in lines
+        )
+    review.interaction.depth_scroll = review.interaction.depth_max_scroll
+    review.draw_depth_chart(_surface(), area, state)
+    assert review.interaction.depth_scroll == review.interaction.depth_max_scroll
 
     marker = replace(
         state,
@@ -1742,6 +1794,290 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     assert any("SCHEDULED GAME 10 SKIPPED" in text for text in displayed)
     assert any("9 actual regular-season games played." in text for text in displayed)
     assert "RETURN TO MAIN MENU" == buttons[0].label
+
+
+@pytest.mark.parametrize(
+    "window_size",
+    ((1280, 720), (960, 540), (1000, 800)),
+)
+def test_all_coach_upgrade_details_are_keyboard_and_mouse_accessible(
+    tmp_path: Path,
+    window_size: tuple[int, int],
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    assert controller is not None and controller.state.shop is not None
+    desktop.window_size = window_size
+    surface = _surface()
+    content = Layout.from_surface(surface).content
+
+    for card in COACH_UPGRADE_CATALOG:
+        shop = FootballShop(
+            controller.state.shop.roster,
+            51,
+            game_number=4,
+            catalogs={FootballShopSection.COACH_UPGRADES: (card,)},
+        )
+        shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
+        view = screen._shop_view()
+        buttons = view.draw(surface, content, shop.state)
+        details_index = next(
+            index for index, button in enumerate(buttons)
+            if button.label == "DETAILS"
+        )
+
+        screen.focus_index = 0
+        screen._set_buttons(buttons)
+        for _ in range(len(buttons)):
+            if screen.focus_index == details_index:
+                break
+            screen.handle_event(
+                pygame.event.Event(
+                    pygame.KEYDOWN,
+                    {"key": pygame.K_TAB, "mod": 0, "unicode": ""},
+                )
+            )
+        assert screen.focus_index == details_index
+        view.draw(
+            surface,
+            content,
+            shop.state,
+            focus_index=screen.focus_index,
+        )
+        assert view._coach_detail_sections == coach_upgrade_detail_sections(card)
+        detail_rect = view._coach_detail_rect
+        assert detail_rect is not None
+        assert content.contains(detail_rect)
+        inner_width = min(content.width - 24, 2 * ((content.width - 20) // 3) + 10) - 24
+        title_lines = wrap_text_lines(
+            view._coach_detail_sections[0],
+            screen._label_font,
+            inner_width,
+        )
+        body_lines = tuple(
+            line
+            for section in view._coach_detail_sections[1:]
+            for line in wrap_text_lines(section, screen._small_font, inner_width)
+        )
+        assert all(screen._label_font.size(line)[0] <= inner_width for line in title_lines)
+        assert all(screen._small_font.size(line)[0] <= inner_width for line in body_lines)
+        expected_height = (
+            len(title_lines) * (screen._label_font.get_height() + 2)
+            + len(body_lines) * (screen._small_font.get_height() + 2)
+            + 28
+        )
+        assert detail_rect.height >= expected_height
+
+    mouse_card = next(
+        card for card in COACH_UPGRADE_CATALOG
+        if card.card_id == "pattern_match"
+    )
+    shop = FootballShop(
+        controller.state.shop.roster,
+        51,
+        game_number=4,
+        catalogs={FootballShopSection.COACH_UPGRADES: (mouse_card,)},
+    )
+    shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
+    view = screen._shop_view()
+    buttons = view.draw(surface, content, shop.state)
+    details_index = next(
+        index for index, button in enumerate(buttons)
+        if button.label == "DETAILS"
+    )
+    screen._set_buttons(buttons)
+    logical_x, logical_y = buttons[details_index].rect.center
+    scale = min(
+        window_size[0] / LOGICAL_SIZE[0],
+        window_size[1] / LOGICAL_SIZE[1],
+    )
+    rendered_width = round(LOGICAL_SIZE[0] * scale)
+    rendered_height = round(LOGICAL_SIZE[1] * scale)
+    offset_x = (window_size[0] - rendered_width) // 2
+    offset_y = (window_size[1] - rendered_height) // 2
+    physical_position = (
+        round(logical_x * scale + offset_x),
+        round(logical_y * scale + offset_y),
+    )
+    mouse_event = desktop._logical_event(
+        pygame.event.Event(
+            pygame.MOUSEMOTION,
+            {"pos": physical_position, "rel": (0, 0), "buttons": (0, 0, 0)},
+        )
+    )
+    screen.handle_event(mouse_event)
+    assert screen.hover_index == details_index
+    view.draw(
+        surface,
+        content,
+        shop.state,
+        focus_index=screen.focus_index,
+        hover_index=screen.hover_index,
+    )
+    assert view._coach_detail_sections == coach_upgrade_detail_sections(mouse_card)
+
+
+def test_match_hand_clock_preview_matches_resolved_play_and_incomplete_rule(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    _activate(desktop, "FINISH SHOP / START MATCH")
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    assert controller is not None
+    base_state = controller.state
+    assert base_state.match is not None
+    match = base_state.match
+    assert match.team_a_offense_deck is not None
+
+    drawn_text: list[str] = []
+    original_draw_text = football_match_decision_module.draw_text
+
+    def capture_text(surface, text, position, font, color):
+        drawn_text.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(
+        football_match_decision_module, "draw_text", capture_text
+    )
+    view = football_match_decision_module.FootballMatchDecisionView(
+        screen._small_font,
+        screen._label_font,
+        screen.match_interaction,
+        0,
+        None,
+        None,
+        lambda _copy_id: None,
+        lambda _action: None,
+        lambda _action, _copy_id: None,
+        lambda _offensive: None,
+    )
+    surface = _surface()
+    hand_rect = pygame.Rect(30, 40, LOGICAL_SIZE[0] - 60, 320)
+    upgrade_sets = (
+        (),
+        (_coach_card_effect("tempo_install"),),
+        (_coach_card_effect("huddle_up"),),
+        (
+            _coach_card_effect("tempo_install"),
+            _coach_card_effect("huddle_up"),
+        ),
+    )
+    for upgrades in upgrade_sets:
+        play = FootballCardCopy("preview:rb_run", OffensivePlayAction.RB_RUN.value)
+        other_cards = (
+            FootballCardCopy(
+                "preview:short_pass",
+                OffensivePlayAction.SHORT_PASS.value,
+            ),
+            FootballCardCopy(
+                "preview:medium_pass",
+                OffensivePlayAction.MEDIUM_PASS.value,
+            ),
+        )
+        hand = (play, *other_cards)
+        match_with_upgrades = replace(
+            match,
+            possession=FootballTeamSide.TEAM_A,
+            awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+            current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+            team_a_offense_deck=replace(
+                match.team_a_offense_deck,
+                owned=hand,
+                draw_pile=(),
+                hand=hand,
+                discard_pile=(),
+            ),
+            team_a_coach_upgrades=upgrades,
+        )
+        state = replace(
+            base_state,
+            match=match_with_upgrades,
+            human_decision=FootballHumanDecision.OFFENSIVE_PLAY,
+        )
+        simulator = FootballMatchSimulator(match_with_upgrades)
+        simulator.rng.random = lambda: 0.99
+        simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+        result = simulator.state.match_events[-1].play_result
+        assert result is not None and not result.incomplete
+
+        drawn_text.clear()
+        view.draw(surface, hand_rect, state)
+        preview = next(text for text in drawn_text if text.startswith("LIVE ~"))
+        assert f"LIVE NORMAL CLOCK {result.clock_seconds_used}s" in preview
+        card_rect = screen.match_interaction.card_rects[play.copy_id]
+        assert screen._small_font.size(preview)[0] <= card_rect.width - 12
+
+    tempo = _coach_card_effect("tempo_install")
+    deep_pass = FootballCardCopy(
+        "preview:deep_pass",
+        OffensivePlayAction.DEEP_PASS.value,
+    )
+    incomplete_hand = (
+        deep_pass,
+        FootballCardCopy(
+            "preview:deep_short",
+            OffensivePlayAction.SHORT_PASS.value,
+        ),
+        FootballCardCopy(
+            "preview:deep_medium",
+            OffensivePlayAction.MEDIUM_PASS.value,
+        ),
+    )
+    incomplete_match = replace(
+        match,
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        team_a_offense_deck=replace(
+            match.team_a_offense_deck,
+            owned=incomplete_hand,
+            draw_pile=(),
+            hand=incomplete_hand,
+            discard_pile=(),
+        ),
+        team_a_coach_upgrades=(tempo,),
+    )
+    incomplete_state = replace(
+        base_state,
+        match=incomplete_match,
+        human_decision=FootballHumanDecision.OFFENSIVE_PLAY,
+    )
+    simulator = FootballMatchSimulator(incomplete_match)
+    rolls = iter((0.99, 0.0))
+    simulator.rng.random = lambda: next(rolls)
+    simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+    incomplete_result = simulator.state.match_events[-1].play_result
+    assert incomplete_result is not None and incomplete_result.incomplete
+    assert incomplete_result.clock_seconds_used == 5
+
+    drawn_text.clear()
+    view.draw(surface, hand_rect, incomplete_state)
+    preview = next(text for text in drawn_text if text.startswith("LIVE ~"))
+    live_normal_seconds = football_match_decision_module.adjusted_offensive_play_clock_seconds(
+        OFFENSIVE_PLAY_CATALOG[OffensivePlayAction.DEEP_PASS.value].clock_seconds,
+        (tempo,),
+    )
+    assert f"LIVE NORMAL CLOCK {live_normal_seconds}s" in preview
+    incomplete_card_rect = screen.match_interaction.card_rects[deep_pass.copy_id]
+    assert screen._small_font.size(preview)[0] <= incomplete_card_rect.width - 12
+    assert any(
+        "INCOMPLETE PASSES USE SEPARATE 5s RULE" in text
+        and "CONVERSIONS & SPECIAL TEAMS UNCHANGED" in text
+        for text in drawn_text
+    )
+
+
+def _coach_card_effect(card_id: str):
+    card = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == card_id)
+    assert card.coach_upgrade_effect is not None
+    return card.coach_upgrade_effect
 
 
 def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
@@ -1804,7 +2140,7 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     assert play.name in shop_copy and scheme.name in shop_copy
     assert "COMMON" in shop_copy
     assert "SHORT PASS" in shop_copy
-    assert "NEUTRAL ~7.3 YDS / 22s" in shop_copy
+    assert "NEUTRAL ~7.3 / BASE 22s" in shop_copy
     assert "COUNTERS: DEEP PASS" in shop_copy
 
     desktop.router.draw(_surface())
@@ -1826,7 +2162,7 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     playbook_copy = " ".join(displayed)
     assert "Slot Slant" in playbook_copy
     assert "SHORT PASS" in playbook_copy
-    assert "NEUTRAL ~7.3 YDS / 22s" in playbook_copy
+    assert "NEUTRAL ~7.3 YDS / BASE 22s" in playbook_copy
     assert "Quarters Coverage" in playbook_copy
     assert "COUNTERS DEEP PASS" in playbook_copy
 

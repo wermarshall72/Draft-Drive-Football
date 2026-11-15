@@ -4,10 +4,17 @@ from collections.abc import Callable
 
 import pygame
 
-from src.engine.football import FootballConversionAction, FootballFourthDownAction
+from src.engine.football import (
+    FootballConversionAction,
+    FootballFourthDownAction,
+    FootballTeamSide,
+)
 from src.engine.football_controller import FootballGameControllerState, FootballHumanDecision
 from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG
-from src.engine.football_simulator import calculate_match_play_estimate
+from src.engine.football_simulator import (
+    adjusted_offensive_play_clock_seconds,
+    calculate_match_play_estimate,
+)
 from src.ui.football_display import _POSITION_LABELS
 from src.ui.football_match_interaction import MatchInteraction
 from src.ui.football_match_palette import (
@@ -190,7 +197,13 @@ class FootballMatchDecisionView:
         )
         draw_text(
             surface,
-            "DROP PLAY HERE" if offensive else "DROP SCHEME HERE",
+            (
+                "DROP PLAY HERE  /  NORMAL CLOCK USES LIVE VALUE; "
+                "INCOMPLETE PASSES USE SEPARATE 5s RULE; "
+                "CONVERSIONS & SPECIAL TEAMS UNCHANGED"
+                if offensive
+                else "DROP SCHEME HERE"
+            ),
             (self.match_interaction.play_area.left + 10, self.match_interaction.play_area.top + 8),
             self._small_font,
             _MATCH_CHALK,
@@ -287,10 +300,19 @@ class FootballMatchDecisionView:
                         match,
                         definition.action,
                     )
+                    upgrades = (
+                        match.team_a_coach_upgrades
+                        if match.possession is FootballTeamSide.TEAM_A
+                        else match.team_b_coach_upgrades
+                    )
+                    live_clock_seconds = adjusted_offensive_play_clock_seconds(
+                        definition.clock_seconds,
+                        upgrades,
+                    )
                     preview = (
                         f"LIVE ~{estimate.expected_yards:.1f} YDS"
                         f" / 1ST {estimate.first_down_probability(match.yards_to_go):.0%}"
-                        f" / {definition.clock_seconds}s"
+                        f" / LIVE NORMAL CLOCK {live_clock_seconds}s"
                     )
                     draw_text(
                         surface,

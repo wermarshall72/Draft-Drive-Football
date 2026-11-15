@@ -6,11 +6,20 @@ import pygame
 
 from src.engine.football_decks import FootballPlayDefinition, FootballSchemeDefinition
 from src.engine.football_shop import (
-    FootballShopRarity, FootballShopSection, FootballShopSlotState, FootballShopState,
+    FootballShopCard,
+    FootballShopRarity,
+    FootballShopSection,
+    FootballShopSlotState,
+    FootballShopState,
 )
 from src.engine.football_simulator import calculate_standardized_play_estimate
+from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
 from src.ui.football_display import _POSITION_LABELS
-from src.ui.text import fit_text as _fit_text
+from src.ui.text import (
+    draw_complete_wrapped_text,
+    fit_text as _fit_text,
+    wrap_text_lines,
+)
 from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
@@ -39,6 +48,9 @@ class FootballShopView:
         self.finish = finish
         self.unlock = unlock
         self.purchase = purchase
+        self._selected_coach_card: FootballShopCard | None = None
+        self._coach_detail_rect: pygame.Rect | None = None
+        self._coach_detail_sections: tuple[str, ...] = ()
 
     def draw(
         self,
@@ -46,9 +58,15 @@ class FootballShopView:
         content: pygame.Rect,
         shop: FootballShopState | None,
         transition_message: str | None = None,
+        *,
+        focus_index: int | None = None,
+        hover_index: int | None = None,
     ) -> list[Button]:
         if shop is None:
             raise RuntimeError("The controller did not provide the active shop state.")
+        self._selected_coach_card = None
+        self._coach_detail_rect = None
+        self._coach_detail_sections = ()
         draw_text(
             surface,
             "THREE SHOPS  /  ONE SHARED AP BUDGET",
@@ -92,6 +110,8 @@ class FootballShopView:
         panel_width = (content.width - gap * 2) // 3
         panel_height = max(1, panel_bottom - panel_top)
         buttons: list[Button] = []
+        selected_coach_card = None
+        coach_panel: pygame.Rect | None = None
         for section_index, section_id in enumerate(FootballShopSection):
             section = shop.section(section_id)
             panel = pygame.Rect(
@@ -101,6 +121,8 @@ class FootballShopView:
                 panel_height,
             )
             draw_panel(surface, panel, self.theme, fill=self.theme.panel)
+            if section_id is FootballShopSection.COACH_UPGRADES:
+                coach_panel = panel
             draw_text(
                 surface,
                 section.title,
@@ -134,8 +156,24 @@ class FootballShopView:
                     max(1, row_height - 5),
                 )
                 self.draw_slot(
-                    surface, row, slot, buttons, shop
+                    surface,
+                    row,
+                    slot,
+                    buttons,
+                    shop,
+                    focus_index=focus_index,
+                    hover_index=hover_index,
                 )
+                if self._selected_coach_card is not None:
+                    selected_coach_card = self._selected_coach_card
+
+        if selected_coach_card is not None and coach_panel is not None:
+            self._draw_coach_details(
+                surface,
+                content,
+                coach_panel,
+                selected_coach_card,
+            )
 
         footer_top = content.bottom - 44
         reroll_rect = pygame.Rect(
@@ -200,6 +238,9 @@ class FootballShopView:
         slot: FootballShopSlotState,
         buttons: list[Button],
         shop: FootballShopState,
+        *,
+        focus_index: int | None = None,
+        hover_index: int | None = None,
     ) -> None:
         remaining_ap = shop.remaining_ap
         card = slot.card
@@ -208,14 +249,25 @@ class FootballShopView:
         pygame.draw.rect(surface, fill, rect, border_radius=6)
         pygame.draw.rect(surface, self.theme.border_soft, rect, width=1, border_radius=6)
         text_left = rect.left + 8
-        button_width = min(94, max(68, rect.width // 4))
+        is_coach_upgrade = (
+            card is not None and card.coach_upgrade_effect is not None
+        )
+        button_width = 62 if is_coach_upgrade else min(94, max(68, rect.width // 4))
         button_rect = pygame.Rect(
             rect.right - button_width - 5,
             rect.centery - 14,
             button_width,
             28,
         )
+        detail_rect = pygame.Rect(
+            button_rect.left - 78,
+            button_rect.top,
+            72,
+            button_rect.height,
+        )
         text_width = max(1, button_rect.left - text_left - 8)
+        if is_coach_upgrade:
+            text_width = max(1, detail_rect.left - text_left - 8)
 
         if not slot.unlocked:
             cost = slot.unlock_cost
@@ -325,12 +377,12 @@ class FootballShopView:
             if compact and neutral_yards is not None:
                 reason = (
                     f"{contributors.replace(', ', '/')} / "
-                    f"NEUTRAL ~{neutral_yards:.1f} YDS / "
-                    f"{football_card.clock_seconds}s"
+                    f"NEUTRAL ~{neutral_yards:.1f} / "
+                    f"BASE {football_card.clock_seconds}s"
                     if not tiny
                     else f"{football_card.family.label.upper()} / "
-                    f"NEUTRAL ~{neutral_yards:.1f} YDS / "
-                    f"{football_card.clock_seconds}s"
+                    f"NEUTRAL ~{neutral_yards:.1f} / "
+                    f"BASE {football_card.clock_seconds}s"
                 )
             else:
                 reason = f"{football_card.family.label.upper()} / {contributors}"
@@ -351,7 +403,7 @@ class FootballShopView:
             reason = _fit_text(card.description, self._small_font, text_width)
         if rect.height >= (34 if tiny else 42 if compact else 58):
             reason_top = rect.top + (18 if tiny else 30 if compact else 41)
-            if card.coach_upgrade_effect is not None and not compact:
+            if is_coach_upgrade:
                 status = (
                     "PURCHASED"
                     if purchased
@@ -369,18 +421,12 @@ class FootballShopView:
                     self._small_font,
                     self.theme.muted if purchased else self.theme.secondary_accent,
                 )
-                draw_wrapped_text(
+                draw_text(
                     surface,
-                    card.description,
-                    pygame.Rect(
-                        text_left,
-                        reason_top + 17,
-                        text_width,
-                        rect.bottom - reason_top - 22,
-                    ),
+                    "FOCUS DETAILS",
+                    (text_left, reason_top + 17),
                     self._small_font,
                     self.theme.muted if purchased else self.theme.text,
-                    line_gap=2,
                 )
             else:
                 draw_text(
@@ -399,7 +445,7 @@ class FootballShopView:
                 surface,
                 _fit_text(
                     f"NEUTRAL ~{neutral_yards:.1f} YDS / "
-                    f"{football_card.clock_seconds}s",
+                    f"BASE {football_card.clock_seconds}s",
                     self._small_font,
                     text_width,
                 ),
@@ -457,6 +503,23 @@ class FootballShopView:
             else "BUY"
         )
 
+        if is_coach_upgrade:
+            detail_index = len(buttons)
+            buttons.append(
+                Button(
+                    "DETAILS",
+                    lambda: None,
+                    detail_rect,
+                    enabled=True,
+                    variant="quiet",
+                )
+            )
+            if focus_index in (detail_index, detail_index + 1) or hover_index in (
+                detail_index,
+                detail_index + 1,
+            ):
+                self._selected_coach_card = card
+
         buttons.append(
             Button(
                 button_label,
@@ -471,4 +534,60 @@ class FootballShopView:
                 ),
                 variant="primary" if not purchased else "quiet",
             )
+        )
+
+    def _draw_coach_details(
+        self,
+        surface: pygame.Surface,
+        content: pygame.Rect,
+        coach_panel: pygame.Rect,
+        card: FootballShopCard,
+    ) -> None:
+        sections = coach_upgrade_detail_sections(card)
+        panel_width = min(
+            content.width - 24,
+            coach_panel.width * 2 + 10,
+        )
+        inner_width = panel_width - 24
+        title_lines = wrap_text_lines(sections[0], self._label_font, inner_width)
+        body_lines = tuple(
+            line
+            for section in sections[1:]
+            for line in wrap_text_lines(section, self._small_font, inner_width)
+        )
+        title_height = len(title_lines) * (self._label_font.get_height() + 2)
+        body_height = len(body_lines) * (self._small_font.get_height() + 2)
+        panel_height = title_height + body_height + 28
+        panel_rect = pygame.Rect(
+            content.left + 12,
+            coach_panel.centery - panel_height // 2,
+            panel_width,
+            panel_height,
+        )
+        panel_rect.clamp_ip(content)
+        self._coach_detail_rect = panel_rect
+        self._coach_detail_sections = sections
+        draw_panel(surface, panel_rect, self.theme, fill=self.theme.panel_alt)
+        y = panel_rect.top + 10
+        draw_complete_wrapped_text(
+            surface,
+            sections[0],
+            pygame.Rect(panel_rect.left + 12, y, inner_width, title_height),
+            self._label_font,
+            self.theme.text,
+            line_gap=2,
+        )
+        y += title_height + 4
+        draw_complete_wrapped_text(
+            surface,
+            "\n".join(sections[1:]),
+            pygame.Rect(
+                panel_rect.left + 12,
+                y,
+                inner_width,
+                body_height,
+            ),
+            self._small_font,
+            self.theme.text,
+            line_gap=2,
         )

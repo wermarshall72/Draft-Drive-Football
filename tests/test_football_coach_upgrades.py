@@ -40,6 +40,7 @@ from src.engine.football_shop import (
     FootballUpgradeStat,
 )
 from src.engine.football_simulator import (
+    FIELD_GOAL_BLOCK_CHANCE,
     FootballMatchSimulator,
     adjusted_offensive_play_clock_seconds,
     blocked_kick_probability,
@@ -47,6 +48,7 @@ from src.engine.football_simulator import (
     calculate_matchup_power,
     calculate_play_estimate,
     field_goal_distance_for_position,
+    field_goal_success_probability,
     field_goal_success_probability_for_team,
 )
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
@@ -441,6 +443,13 @@ def test_family_yardage_effects_modify_calculation_after_additive_bonuses() -> N
     assert boosted.incomplete_probability == deep_pass.incomplete_probability
 
     negative_bonus = -deep_pass.yards_on_success
+    negative_baseline = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.DEEP_PASS,
+        DefensiveSchemeAction.RB_RUN,
+        yardage_bonus=negative_bonus,
+    )
     negative = calculate_play_estimate(
         offense,
         defense,
@@ -449,7 +458,46 @@ def test_family_yardage_effects_modify_calculation_after_additive_bonuses() -> N
         yardage_bonus=negative_bonus,
         offense_coach_upgrades=(vertical,),
     )
-    assert negative.yards_on_success == pytest.approx(-2.2)
+    assert negative_baseline.yards_on_success == pytest.approx(-2.0)
+    assert negative.yards_on_success == pytest.approx(-1.8)
+    assert negative.expected_yards > negative_baseline.expected_yards
+    zero_baseline = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.DEEP_PASS,
+        DefensiveSchemeAction.RB_RUN,
+    )
+    zero = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.DEEP_PASS,
+        DefensiveSchemeAction.RB_RUN,
+        yardage_bonus=-zero_baseline.yards_on_success,
+        offense_coach_upgrades=(vertical,),
+    )
+    assert zero.yards_on_success == pytest.approx(0.0)
+
+    capped_bonus = _effect(
+        "large_deep_bonus",
+        FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+        0.90,
+        FootballCardFamily.DEEP_PASS,
+    )
+    uncapped_positive = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.DEEP_PASS,
+        DefensiveSchemeAction.RB_RUN,
+    )
+    capped_positive = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.DEEP_PASS,
+        DefensiveSchemeAction.RB_RUN,
+        yardage_bonus=20.0 - uncapped_positive.yards_on_success,
+        offense_coach_upgrades=(capped_bonus,),
+    )
+    assert capped_positive.yards_on_success == 25.0
 
     medium = _effect(
         "medium_defense",
@@ -487,6 +535,58 @@ def test_family_yardage_effects_modify_calculation_after_additive_bonuses() -> N
         DefensiveSchemeAction.DEEP_PASS,
     )
     assert unaffected.yards_on_success == deep_baseline.yards_on_success
+
+    negative_medium_baseline = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.MEDIUM_PASS,
+        DefensiveSchemeAction.MEDIUM_PASS,
+        yardage_bonus=-unmodified.yards_on_success - 1.0,
+    )
+    negative_medium_reduced = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.MEDIUM_PASS,
+        DefensiveSchemeAction.MEDIUM_PASS,
+        yardage_bonus=-unmodified.yards_on_success - 1.0,
+        defense_coach_upgrades=(medium,),
+    )
+    assert negative_medium_baseline.yards_on_success == pytest.approx(-1.0)
+    assert negative_medium_reduced.yards_on_success == pytest.approx(-1.1)
+    assert negative_medium_reduced.expected_yards < negative_medium_baseline.expected_yards
+    large_defense = _effect(
+        "large_medium_defense",
+        FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
+        0.90,
+        FootballCardFamily.MEDIUM_PASS,
+    )
+    capped_negative = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.MEDIUM_PASS,
+        DefensiveSchemeAction.MEDIUM_PASS,
+        yardage_bonus=-4.0 - unmodified.yards_on_success,
+        defense_coach_upgrades=(large_defense,),
+    )
+    assert capped_negative.yards_on_success == -5.0
+
+    opposed = calculate_play_estimate(
+        offense,
+        defense,
+        OffensivePlayAction.MEDIUM_PASS,
+        DefensiveSchemeAction.MEDIUM_PASS,
+        yardage_bonus=-unmodified.yards_on_success - 1.0,
+        offense_coach_upgrades=(
+            _effect(
+                "medium_offense",
+                FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+                0.10,
+                FootballCardFamily.MEDIUM_PASS,
+            ),
+        ),
+        defense_coach_upgrades=(medium,),
+    )
+    assert opposed.yards_on_success == pytest.approx(-1.0)
 
 
 def test_interception_reduction_is_relative_and_human_side_specific() -> None:
@@ -574,7 +674,15 @@ def test_play_clock_modifiers_round_and_preserve_incomplete_turnover_and_convers
 
     deep_copy = FootballCardCopy("human:play:deep", OffensivePlayAction.DEEP_PASS.value)
     incomplete_state = _match_state(
-        team_a_coach_upgrades=(faster,),
+        team_a_coach_upgrades=(
+            faster,
+            _effect(
+                "vertical",
+                FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+                0.10,
+                FootballCardFamily.DEEP_PASS,
+            ),
+        ),
         current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
         awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
         team_a_offense_deck=FootballDeckState((deep_copy,), hand=(deep_copy,)),
@@ -586,6 +694,37 @@ def test_play_clock_modifiers_round_and_preserve_incomplete_turnover_and_convers
     incomplete_result = incomplete.state.match_events[-1].play_result
     assert incomplete_result is not None and incomplete_result.incomplete
     assert incomplete_result.clock_seconds_used == 5
+    assert incomplete_result.yards_gained == 0.0
+
+    interception_state = _match_state(
+        team_a_coach_upgrades=(
+            _effect(
+                "vertical",
+                FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+                0.10,
+                FootballCardFamily.DEEP_PASS,
+            ),
+        ),
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        team_a_offense_deck=FootballDeckState((deep_copy,), hand=(deep_copy,)),
+    )
+    interception_estimate = calculate_match_play_estimate(
+        interception_state, OffensivePlayAction.DEEP_PASS
+    )
+    interception_threshold = interception_estimate.incomplete_probability + (
+        1.0 - interception_estimate.incomplete_probability
+    ) * interception_estimate.turnover_probability
+    interception = FootballMatchSimulator(interception_state)
+    interception.rng.uniform = lambda _lower, _upper: 0.0
+    interception.rng.random = lambda: (
+        interception_estimate.incomplete_probability + interception_threshold
+    ) / 2
+    interception.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+    interception_result = interception.state.match_events[-1].play_result
+    assert interception_result is not None and interception_result.turnover
+    assert interception_result.turnover_type is not None
+    assert interception_result.yards_gained == 0.0
 
     conversion_state = _match_state(
         possession=FootballTeamSide.TEAM_A,
@@ -610,6 +749,55 @@ def test_play_clock_modifiers_round_and_preserve_incomplete_turnover_and_convers
         if event.description is not None and "Two-point" in event.description
     )
     assert conversion_event.clock_seconds_used == 0
+
+
+@pytest.mark.parametrize(
+    "upgrade_ids",
+    (
+        (),
+        ("tempo_install",),
+        ("huddle_up",),
+        ("tempo_install", "huddle_up"),
+    ),
+)
+def test_normal_play_clock_matches_live_upgrade_calculation(
+    upgrade_ids: tuple[str, ...],
+) -> None:
+    upgrades = tuple(_coach_card(upgrade_id).coach_upgrade_effect for upgrade_id in upgrade_ids)
+    simulator = _simulator_for_play(OffensivePlayAction.RB_RUN, upgrades)
+    simulator.rng.random = lambda: 0.99
+    simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    result = simulator.state.match_events[-1].play_result
+    assert result is not None
+    assert result.clock_seconds_used == adjusted_offensive_play_clock_seconds(
+        OFFENSIVE_PLAY_CATALOG[OffensivePlayAction.RB_RUN.value].clock_seconds,
+        upgrades,
+    )
+
+
+def test_field_goal_lab_is_conditional_on_an_unblocked_kick() -> None:
+    upgrade = _coach_card("field_goal_lab").coach_upgrade_effect
+    assert upgrade is not None
+    state = _match_state(team_a_coach_upgrades=(upgrade,))
+    distance = 42.0
+    base_conditional = field_goal_success_probability(distance)
+    upgraded_conditional = field_goal_success_probability(
+        distance, upgrade.magnitude
+    )
+    base_overall = (1.0 - FIELD_GOAL_BLOCK_CHANCE) * base_conditional
+    upgraded_overall = (1.0 - FIELD_GOAL_BLOCK_CHANCE) * upgraded_conditional
+    assert upgraded_conditional == pytest.approx(base_conditional + 0.05)
+    assert upgraded_overall == pytest.approx(
+        (1.0 - FIELD_GOAL_BLOCK_CHANCE) * (base_conditional + 0.05)
+    )
+    assert upgraded_overall - base_overall == pytest.approx(
+        (1.0 - FIELD_GOAL_BLOCK_CHANCE) * 0.05
+    )
+    assert upgraded_overall - base_overall != pytest.approx(0.05)
+    assert blocked_kick_probability(
+        state, FootballTeamSide.TEAM_A, FIELD_GOAL_BLOCK_CHANCE
+    ) == FIELD_GOAL_BLOCK_CHANCE
+    assert field_goal_success_probability(17.0, upgrade.magnitude) == 1.0
 
 
 def test_simulation_and_estimate_share_family_effects_and_field_goal_probability() -> None:
