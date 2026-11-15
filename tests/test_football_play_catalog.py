@@ -167,6 +167,33 @@ def test_migrated_ids_keep_ownership_identity_and_receive_single_family_rules() 
     )
 
 
+def test_bootleg_keeper_description_is_a_pass_without_changing_card_mechanics() -> None:
+    definition = OFFENSIVE_PLAY_CATALOG["bootleg_keeper"]
+    estimate = calculate_standardized_play_estimate(
+        OffensivePlayAction.BOOTLEG_KEEPER
+    )
+    play_action_estimate = calculate_standardized_play_estimate(
+        OffensivePlayAction.PA_PASS
+    )
+
+    assert definition.card_id == "bootleg_keeper"
+    assert definition.name == "Bootleg Keeper"
+    assert "throws" in definition.description.lower()
+    assert definition.family is FootballCardFamily.PA_PASS
+    assert definition.contributors == matchup_for_play(
+        OffensivePlayAction.PA_PASS
+    )[0]
+    assert definition.base_yards == 6.0
+    assert definition.clock_seconds == 30
+    assert estimate.family is FootballCardFamily.PA_PASS
+    assert estimate.matchup == play_action_estimate.matchup
+    assert estimate.incomplete_probability == play_action_estimate.incomplete_probability
+    assert estimate.turnover_probability == play_action_estimate.turnover_probability
+    assert estimate.expected_yards > play_action_estimate.expected_yards
+    assert estimate.incomplete_probability > 0
+    assert estimate.turnover_probability > 0
+
+
 def test_all_play_and_scheme_catalog_offers_are_common_without_changing_player_rarity() -> None:
     shop = FootballShop(_roster("Catalog"), seed=23)
     playbook_cards = tuple(

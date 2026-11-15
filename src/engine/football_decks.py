@@ -220,7 +220,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
             _play(
                 OffensivePlayAction.BOOTLEG_KEEPER,
                 "Bootleg Keeper",
-                "The quarterback rolls out after the run fake and keeps the ball.",
+                "The quarterback sells the run fake, rolls out, and throws on the move.",
                 6.0,
                 30,
             ),

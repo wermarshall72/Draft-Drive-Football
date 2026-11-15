@@ -2775,6 +2775,13 @@ class FootballRunScreen(Screen):
         football_card = card.football_card
         compact = rect.height < 75
         tiny = rect.height < 50
+        neutral_yards = (
+            calculate_standardized_play_estimate(
+                football_card.action
+            ).expected_yards
+            if isinstance(football_card, FootballPlayDefinition)
+            else None
+        )
         card_label = card.name
         if isinstance(football_card, FootballPlayDefinition):
             if tiny:
@@ -2811,21 +2818,7 @@ class FootballRunScreen(Screen):
                 self._small_font,
                 _RARITY_COLORS[card.rarity],
             )
-        if tiny and isinstance(football_card, FootballPlayDefinition):
-            neutral_yards = calculate_standardized_play_estimate(
-                football_card.action
-            ).expected_yards
-            reason = (
-                f"{football_card.family.label.upper()} / "
-                f"NEUTRAL ~{neutral_yards:.1f} YDS / "
-                f"{football_card.clock_seconds}s"
-            )
-        elif tiny and isinstance(football_card, FootballSchemeDefinition):
-            reason = (
-                f"{football_card.family.label.upper()} / COUNTERS: "
-                f"{football_card.family.label.upper()}"
-            )
-        elif purchased:
+        if purchased:
             reason = "PURCHASED"
         elif card.cost > remaining_ap:
             reason = f"NEED {card.cost - remaining_ap} MORE AP"
@@ -2837,13 +2830,18 @@ class FootballRunScreen(Screen):
             contributors = ", ".join(
                 _POSITION_LABELS[position] for position in football_card.contributors
             )
-            reason = (
-                f"{contributors.replace(', ', '/')} / "
-                f"NEUTRAL ~{neutral_yards:.1f} YDS / "
-                f"{football_card.clock_seconds}s"
-                if compact and neutral_yards is not None
-                else f"{football_card.family.label.upper()} / {contributors}"
-            )
+            if compact and neutral_yards is not None:
+                reason = (
+                    f"{contributors.replace(', ', '/')} / "
+                    f"NEUTRAL ~{neutral_yards:.1f} YDS / "
+                    f"{football_card.clock_seconds}s"
+                    if not tiny
+                    else f"{football_card.family.label.upper()} / "
+                    f"NEUTRAL ~{neutral_yards:.1f} YDS / "
+                    f"{football_card.clock_seconds}s"
+                )
+            else:
+                reason = f"{football_card.family.label.upper()} / {contributors}"
         elif isinstance(football_card, FootballSchemeDefinition):
             contributors = ", ".join(
                 _POSITION_LABELS[position] for position in football_card.contributors
@@ -2851,7 +2849,10 @@ class FootballRunScreen(Screen):
             reason = (
                 f"{contributors.replace(', ', '/')} / COUNTERS: "
                 f"{football_card.family.label.upper()}"
-                if compact
+                if compact and not tiny
+                else f"{football_card.family.label.upper()} / COUNTERS: "
+                f"{football_card.family.label.upper()}"
+                if tiny
                 else f"{football_card.family.label.upper()} / {contributors}"
             )
         else:
@@ -2864,10 +2865,11 @@ class FootballRunScreen(Screen):
                 self._small_font,
                 self.theme.secondary_accent if not purchased else self.theme.muted,
             )
-        if rect.height >= 75 and isinstance(football_card, FootballPlayDefinition):
-            neutral_yards = calculate_standardized_play_estimate(
-                football_card.action
-            ).expected_yards
+        if (
+            rect.height >= 75
+            and isinstance(football_card, FootballPlayDefinition)
+            and neutral_yards is not None
+        ):
             draw_text(
                 surface,
                 _fit_text(

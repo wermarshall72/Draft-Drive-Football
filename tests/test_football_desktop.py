@@ -48,6 +48,7 @@ from src.engine.football_shop import (
     FootballShopCard,
     FootballShopRarity,
     FootballShopSection,
+    FootballShopSlotState,
 )
 from src.profile import COLOR_CHOICES
 from src.ui.application import DesktopApplication
@@ -1663,6 +1664,109 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     assert "NEUTRAL ~7.3 YDS / 22s" in playbook_copy
     assert "Quarters Coverage" in playbook_copy
     assert "COUNTERS DEEP PASS" in playbook_copy
+
+
+@pytest.mark.parametrize("height", (49, 50, 60, 74, 75, 92))
+def test_shop_slot_rendering_handles_card_kinds_and_layout_boundaries(
+    tmp_path: Path,
+    monkeypatch,
+    height: int,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    shop = controller.state.shop
+    assert shop is not None
+
+    play = OFFENSIVE_PLAY_CATALOG["slot_slant"]
+    scheme = DEFENSIVE_SCHEME_CATALOG["quarters_coverage"]
+    play_card = FootballShopCard(
+        card_id=f"play:{play.card_id}",
+        name=play.name,
+        description=play.description,
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=2,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        football_card=play,
+    )
+    scheme_card = FootballShopCard(
+        card_id=f"scheme:{scheme.card_id}",
+        name=scheme.name,
+        description=scheme.description,
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.COMMON,
+        cost=2,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        football_card=scheme,
+    )
+    other_card = FootballShopCard(
+        card_id="test-player-card",
+        name="Test Player Card",
+        description="A non-football shop card.",
+        section=FootballShopSection.PLAYER_UPGRADES,
+        rarity=FootballShopRarity.COMMON,
+        cost=2,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+    )
+    cases = (
+        ("affordable play", play_card, False, 2, "BUY", "NEUTRAL"),
+        ("purchased play", play_card, True, 2, "PURCHASED", "PURCHASED"),
+        ("unaffordable play", play_card, False, 1, "NEED 1 AP", "NEED"),
+        ("defensive scheme", scheme_card, False, 2, "BUY", "COUNTERS"),
+        ("non-football card", other_card, False, 2, "BUY", "non-football"),
+    )
+    displayed: list[str] = []
+    original_draw_text = football_run_screen_module.draw_text
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
+    for label, card, purchased, remaining_ap, expected_button, expected_text in cases:
+        displayed.clear()
+        slot = FootballShopSlotState(
+            section=card.section,
+            slot_number=1,
+            unlocked=True,
+            card=card,
+            purchased=purchased,
+            unlock_cost=None,
+            can_unlock=False,
+            disabled_reason=None,
+        )
+        buttons: list[Button] = []
+        desktop.run_screen._draw_shop_slot(
+            _surface(),
+            pygame.Rect(10, 10, 700, height),
+            slot,
+            buttons,
+            replace(shop, remaining_ap=remaining_ap),
+        )
+
+        assert buttons[0].label == expected_button, (label, height)
+        assert expected_text.upper() in " ".join(displayed).upper(), (
+            label,
+            height,
+            displayed,
+        )
+
+
+def test_supported_desktop_layout_renders_the_actual_shop(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+
+    desktop.router.draw(_surface())
+
+    assert desktop.run_screen._current_state().shop is not None
+    assert any(button.label == "BUY" for button in desktop.run_screen.buttons)
 
 
 def test_match_history_labels_turnovers_on_downs(tmp_path: Path) -> None:
