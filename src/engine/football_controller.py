@@ -11,6 +11,7 @@ from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
     FootballDeckState,
+    FootballConversionAction,
     FootballFourthDownAction,
     FootballMatchState,
     FootballMatchStatus,
@@ -27,7 +28,10 @@ from src.engine.football_shop import (
     FootballShopState,
     FootballUpgrade,
 )
-from src.engine.football_simulator import FootballMatchSimulator
+from src.engine.football_simulator import (
+    FootballMatchSimulator,
+    REGULATION_PERIOD_SECONDS,
+)
 from src.engine.football_team_builder import (
     FootballPlayerCandidate,
     FootballTeamBuilder,
@@ -54,6 +58,7 @@ class FootballHumanDecision(str, Enum):
     OFFENSIVE_PLAY = "offensive_play"
     DEFENSIVE_SCHEME = "defensive_scheme"
     FOURTH_DOWN = "fourth_down"
+    CONVERSION = "conversion"
 
 
 @dataclass(frozen=True)
@@ -276,6 +281,16 @@ class FootballGameController:
         self._advance_match()
         return self.state
 
+    def choose_conversion(
+        self, action: FootballConversionAction
+    ) -> FootballGameControllerState:
+        if not isinstance(action, FootballConversionAction):
+            raise ValueError("Action must be a FootballConversionAction.")
+        self._require_decision(FootballHumanDecision.CONVERSION)
+        self._require_simulator().resolve_conversion(action)
+        self._advance_match()
+        return self.state
+
     def _start_match(self) -> None:
         if (
             self._shop is None
@@ -299,7 +314,7 @@ class FootballGameController:
             down=1,
             yards_to_go=10.0,
             offense_field_position=25.0,
-            game_clock_seconds=900,
+            game_clock_seconds=REGULATION_PERIOD_SECONDS,
             period=1,
             awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
             team_a_offense_deck=FootballDeckState(self._require_shop().offensive_deck),
@@ -331,6 +346,10 @@ class FootballGameController:
                 if not isinstance(action, FootballFourthDownAction):
                     raise RuntimeError("AI returned an invalid fourth-down action.")
                 simulator.resolve_fourth_down(action)
+            elif awaited is FootballAwaitedAction.CONVERSION:
+                if not isinstance(action, FootballConversionAction):
+                    raise RuntimeError("AI returned an invalid conversion action.")
+                simulator.resolve_conversion(action)
             else:
                 raise RuntimeError(
                     f"AI cannot act while awaiting {simulator.state.awaited_action!r}."
@@ -379,6 +398,9 @@ class FootballGameController:
         elif match.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
             if match.possession is FootballTeamSide.TEAM_A:
                 return FootballHumanDecision.FOURTH_DOWN
+        elif match.awaited_action is FootballAwaitedAction.CONVERSION:
+            if match.possession is FootballTeamSide.TEAM_A:
+                return FootballHumanDecision.CONVERSION
         return None
 
     def _require_phase(self, expected: FootballRunPhase) -> None:

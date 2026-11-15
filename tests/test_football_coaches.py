@@ -31,7 +31,10 @@ from src.engine.football_coaches import (
     OFFENSIVE_POSITIONS,
     FootballCoachPerkKind,
 )
-from src.engine.football_simulator import FootballMatchSimulator
+from src.engine.football_simulator import (
+    FootballMatchSimulator,
+    calculate_play_estimate,
+)
 
 
 class FixedRNG(random.Random):
@@ -395,7 +398,7 @@ def test_pro_style_first_down_pass_and_option_spread_fourth_down_perk() -> None:
         offense_assignment=_assignment("option_spread"),
         down=4,
         yards_to_go=15.0,
-        uniforms=(9.0,),
+        uniforms=(10.0,),
     )
     option_state = option.resolve_fourth_down(
         FootballFourthDownAction.GO_FOR_IT
@@ -407,7 +410,18 @@ def test_pro_style_first_down_pass_and_option_spread_fourth_down_perk() -> None:
     assert played.match_events[-1].play_result is not None
     result = played.match_events[-1].play_result
     assert result is not None
-    assert result.yards_gained == pytest.approx(15.0)
+    state = option_state
+    scheme = state.current_drive_defensive_scheme
+    assert scheme is not None
+    estimate = calculate_play_estimate(
+        state.team_a,
+        state.team_b,
+        OffensivePlayAction.RB_RUN,
+        scheme,
+    )
+    assert result.yards_gained == pytest.approx(
+        estimate.yards_on_success + 10.0 + 1.0
+    )
     assert result.perk_effects == (
         "Option / Spread: +1 yard on a fourth-down play",
     )
@@ -420,7 +434,7 @@ def test_pro_style_first_down_pass_and_option_spread_fourth_down_perk() -> None:
         (OffensivePlayAction.RB_RUN, (0.99,), (9.0,), 15.0, True),
         (OffensivePlayAction.SHORT_PASS, (0.99,), (7.0,), 15.0, True),
         (OffensivePlayAction.SHORT_PASS, (0.0,), (7.0,), 0.0, False),
-        (OffensivePlayAction.DEEP_PASS, (0.4,), (9.0,), 0.0, False),
+        (OffensivePlayAction.DEEP_PASS, (0.35,), (9.0,), 0.0, False),
         (OffensivePlayAction.RB_RUN, (0.0,), (9.0,), 0.0, False),
     ],
 )
@@ -440,10 +454,25 @@ def test_option_spread_bonus_only_applies_to_non_turnover_fourth_down_plays(
         uniforms=uniforms,
     )
     simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+    before_play = simulator.state
     result_state = simulator.resolve_offensive_play(play)
     result = result_state.match_events[-1].play_result
     assert result is not None
-    assert result.yards_gained == pytest.approx(expected_yards)
+    if eligible:
+        state = before_play
+        scheme = state.current_drive_defensive_scheme
+        assert scheme is not None
+        estimate = calculate_play_estimate(
+            state.team_a,
+            state.team_b,
+            play,
+            scheme,
+        )
+        assert result.yards_gained == pytest.approx(
+            estimate.yards_on_success + uniforms[0] + 1.0
+        )
+    else:
+        assert result.yards_gained == pytest.approx(expected_yards)
     assert bool(result.perk_effects) is eligible
 
 
@@ -459,7 +488,8 @@ def test_option_spread_fourth_down_bonus_applies_for_either_team_and_can_score()
     )
     away.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
     scored = away.resolve_offensive_play(OffensivePlayAction.RB_RUN)
-    assert scored.team_b_score == 7
+    assert scored.team_b_score == 6
+    assert scored.awaited_action is FootballAwaitedAction.CONVERSION
     assert scored.match_events[-1].play_result is not None
     assert scored.match_events[-1].play_result.perk_effects
 
@@ -467,12 +497,12 @@ def test_option_spread_fourth_down_bonus_applies_for_either_team_and_can_score()
         down=4,
         yards_to_go=15.0,
         scheme=DefensiveSchemeAction.DEEP_PASS,
-        uniforms=(10.0,),
+        uniforms=(7.0,),
     )
     no_perk.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
     failed = no_perk.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     assert failed.match_events[-1].play_result is not None
-    assert failed.match_events[-1].play_result.yards_gained == pytest.approx(14.0)
+    assert failed.match_events[-1].play_result.yards_gained == pytest.approx(14.5)
     assert failed.match_events[-1].play_result.turnover_on_downs
 
 
@@ -504,7 +534,7 @@ def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers()
     pressure = _simulator(
         defense_assignment=_assignment("balanced_offense", "pressure_blitz"),
         scheme=DefensiveSchemeAction.DEEP_PASS,
-        rolls=(0.48,),
+        rolls=(0.35,),
     )
     intercepted = pressure.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
     assert intercepted.match_events[-1].play_result is not None
@@ -524,7 +554,7 @@ def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers()
     ball_hawk = _simulator(
         defense_assignment=_assignment("balanced_offense", "ball_hawk"),
         scheme=DefensiveSchemeAction.DEEP_PASS,
-        rolls=(0.45,),
+        rolls=(0.35,),
     )
     returned = ball_hawk.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
     assert returned.possession is FootballTeamSide.TEAM_B

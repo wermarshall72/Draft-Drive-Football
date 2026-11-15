@@ -2,7 +2,7 @@
 
 All randomness belongs to one ``FootballMatchSimulator`` instance for the
 entire match. Yardage, clock, fatigue, and probability constants are prototype
-values, not real-world statistical data.
+values informed by available historical FBS summaries and arcade tuning.
 """
 
 from __future__ import annotations
@@ -25,7 +25,10 @@ from src.engine.football import (
     FootballPlayer,
     FootballPlayResult,
     FootballRoster,
+    FootballAutomaticAction,
+    FootballConversionAction,
     FootballTeamSide,
+    FootballTurnoverType,
     OffensivePlayAction,
     matchup_for_scheme,
     matchup_for_play,
@@ -44,26 +47,40 @@ from src.engine.football_decks import (
     starting_offensive_deck,
 )
 
-REGULATION_PERIOD_SECONDS = 900
+REGULATION_PERIOD_SECONDS = 650
 OVERTIME_PERIOD_SECONDS = 300
 FIRST_DOWN_YARDS = 10.0
 GOAL_LINE_YARDS = 100.0
 FIELD_GOAL_DISTANCE_BUFFER = 10.0
 
-# Prototype drive-resolution values; these are not real-world statistics.
-FIELD_GOAL_SUCCESS_BASE = 0.86
-FIELD_GOAL_SUCCESS_DROP_PER_TEN_YARDS = 0.065
-FIELD_GOAL_SUCCESS_FLOOR = 0.18
+# Broad historical distance bands shape this provisional curve; it is not a
+# verified 2022-2024 FBS distance-stratified aggregate.
 FIELD_GOAL_POINTS = 3
-TOUCHDOWN_POINTS = 7
+TOUCHDOWN_POINTS = 6
 SAFETY_POINTS = 2
 RUN_PLAY_CLOCK_SECONDS = 18
 COMPLETED_PASS_CLOCK_SECONDS = 18
 INCOMPLETE_PASS_CLOCK_SECONDS = 5
 TURNOVER_PLAY_CLOCK_SECONDS = 18
-PUNT_CLOCK_SECONDS = 18
+PUNT_CLOCK_SECONDS = 10
 FIELD_GOAL_CLOCK_SECONDS = 5
-PUNT_NET_YARDS = 40.0
+KICKOFF_CLOCK_SECONDS = 10
+KICKOFF_GROSS_YARDS = 65.0
+DEFAULT_EVENT_CLOCK_SECONDS = 10
+PUNT_GROSS_MEAN_YARDS = 43.0
+PUNT_GROSS_STANDARD_DEVIATION = 5.0
+PUNT_RETURN_CHANCE = 0.48
+PUNT_RETURN_MEAN_YARDS = 8.0
+PUNT_RETURN_STANDARD_DEVIATION = 4.0
+PUNT_BLOCK_CHANCE = 0.007
+FIELD_GOAL_BLOCK_CHANCE = 0.005
+EXTRA_POINT_BLOCK_CHANCE = 0.003
+KICKOFF_TOUCHBACK_CHANCE = 0.58
+KICKOFF_RETURN_MEAN_YARDS = 25.0
+KICKOFF_RETURN_STANDARD_DEVIATION = 6.0
+KICKOFF_RETURN_TOUCHDOWN_CHANCE = 0.002
+EXTRA_POINT_SUCCESS_CHANCE = 0.94
+TWO_POINT_RETURN_TOUCHDOWN_CHANCE = 0.01
 TOUCHBACK_START_YARDS = 25.0
 MIN_PLAY_YARDAGE_SPREAD = 1.0
 VOLATILITY_SPREAD_MULTIPLIER = 6.0
@@ -71,11 +88,30 @@ FATIGUE_RAMP_PLAYS = 30
 MAX_FATIGUE_POWER_REDUCTION = 0.10
 MATCHED_SCHEME_DEFENSE_MULTIPLIER = 1.12
 MATCHED_SCHEME_OFFENSE_MULTIPLIER = 0.96
-TURNOVER_BASE_PROBABILITY = 0.08
-MATCHED_SCHEME_TURNOVER_BONUS = 0.06
-PASS_INCOMPLETE_BASE_PROBABILITY = 0.22
-MATCHED_SCHEME_INCOMPLETE_BONUS = 0.12
-PASS_INTERCEPTION_PROBABILITY = 0.12
+MATCHED_SCHEME_YARDAGE_PENALTY = 1.5
+PLAY_DEFENSE_BASELINE_YARDAGE_REDUCTION = 0.0
+OFFENSIVE_BASELINE_YARDAGE_BONUS = 3.5
+POWER_YARDAGE_MULTIPLIER = 0.16
+PASS_INCOMPLETE_BASE_PROBABILITY = 0.29
+MATCHED_SCHEME_INCOMPLETE_BONUS = 0.04
+MATCHUP_INCOMPLETE_SENSITIVITY = 0.16
+MATCHUP_TURNOVER_SENSITIVITY = 0.04
+MATCHED_SCHEME_TURNOVER_BONUS = 0.005
+MIN_PLAY_YARDAGE = -5.0
+MAX_PLAY_YARDAGE = 25.0
+PASS_INTERCEPTION_PROBABILITIES = {
+    OffensivePlayAction.SCREEN_PASS: 0.015,
+    OffensivePlayAction.PA_PASS: 0.025,
+    OffensivePlayAction.SHORT_PASS: 0.015,
+    OffensivePlayAction.MEDIUM_PASS: 0.025,
+    OffensivePlayAction.DEEP_PASS: 0.04,
+    OffensivePlayAction.QUICK_OUT: 0.015,
+}
+RUN_FUMBLE_PROBABILITIES = {
+    OffensivePlayAction.RB_RUN: 0.012,
+    OffensivePlayAction.QB_SNEAK: 0.008,
+    OffensivePlayAction.JET_SWEEP: 0.015,
+}
 
 _PASS_PLAYS = frozenset(
     definition.action
@@ -86,6 +122,19 @@ _BASE_YARDAGE = {
     definition.action: definition.base_yards
     for definition in OFFENSIVE_PLAY_CATALOG.values()
 }
+_FIELD_GOAL_DISTANCE_RATES = (
+    (17.0, 0.950),
+    (22.0, 0.936),
+    (27.0, 0.880),
+    (32.0, 0.813),
+    (37.0, 0.744),
+    (42.0, 0.652),
+    (47.0, 0.588),
+    (52.0, 0.486),
+    (57.0, 0.387),
+    (62.0, 0.385),
+    (67.0, 0.10),
+)
 
 
 def field_goal_distance_for_position(field_position: float) -> float:
@@ -108,11 +157,18 @@ def field_goal_success_probability(distance: float) -> float:
         or distance < 0
     ):
         raise ValueError("Field-goal distance must be a non-negative number.")
-    return max(
-        FIELD_GOAL_SUCCESS_FLOOR,
-        FIELD_GOAL_SUCCESS_BASE
-        - (distance / 10.0) * FIELD_GOAL_SUCCESS_DROP_PER_TEN_YARDS,
-    )
+    if distance <= _FIELD_GOAL_DISTANCE_RATES[0][0]:
+        return 0.97
+    for (lower_distance, lower_rate), (upper_distance, upper_rate) in zip(
+        _FIELD_GOAL_DISTANCE_RATES,
+        _FIELD_GOAL_DISTANCE_RATES[1:],
+    ):
+        if distance <= upper_distance:
+            fraction = (distance - lower_distance) / (
+                upper_distance - lower_distance
+            )
+            return lower_rate + fraction * (upper_rate - lower_rate)
+    return _FIELD_GOAL_DISTANCE_RATES[-1][1]
 
 
 def _opponent(side: FootballTeamSide) -> FootballTeamSide:
@@ -142,6 +198,137 @@ class FootballMatchupPower:
     offense: float
     defense: float
     scheme_matches_play: bool
+
+
+@dataclass(frozen=True)
+class FootballPlayEstimate:
+    """Expected play result from the same matchup and risk model as resolution."""
+
+    matchup: FootballMatchupPower
+    yards_on_success: float
+    yardage_spread: float
+    incomplete_probability: float
+    turnover_probability: float
+
+    @property
+    def expected_yards(self) -> float:
+        return (
+            self.yards_on_success
+            * (1.0 - self.incomplete_probability)
+            * (1.0 - self.turnover_probability)
+        )
+
+    def first_down_probability(self, yards_to_go: float) -> float:
+        if yards_to_go <= 0:
+            raise ValueError("First-down distance must be positive.")
+        if yards_to_go <= self.yards_on_success - self.yardage_spread:
+            yardage_probability = 1.0
+        elif yards_to_go >= self.yards_on_success + self.yardage_spread:
+            yardage_probability = 0.0
+        else:
+            yardage_probability = (
+                self.yards_on_success + self.yardage_spread - yards_to_go
+            ) / (2 * self.yardage_spread)
+        return yardage_probability * (
+            1.0
+            - self.incomplete_probability
+            - (1.0 - self.incomplete_probability) * self.turnover_probability
+        )
+
+
+def _play_risk_probabilities(
+    play: OffensivePlayAction,
+    matchup: FootballMatchupPower,
+) -> tuple[float, float]:
+    power_total = max(1.0, matchup.offense + matchup.defense)
+    defensive_edge = (matchup.defense - matchup.offense) / power_total
+    if play in _PASS_PLAYS:
+        incomplete = (
+            PASS_INCOMPLETE_BASE_PROBABILITY
+            + defensive_edge * MATCHUP_INCOMPLETE_SENSITIVITY
+            + (
+                MATCHED_SCHEME_INCOMPLETE_BONUS
+                if matchup.scheme_matches_play
+                else 0.0
+            )
+        )
+        interception = (
+            PASS_INTERCEPTION_PROBABILITIES[play]
+            + defensive_edge * MATCHUP_TURNOVER_SENSITIVITY
+            + (
+                MATCHED_SCHEME_TURNOVER_BONUS
+                if matchup.scheme_matches_play
+                else 0.0
+            )
+        )
+        incomplete = _clamp(incomplete, 0.12, 0.52)
+        interception = _clamp(interception, 0.005, 0.10)
+        return incomplete, interception
+    fumble = (
+        RUN_FUMBLE_PROBABILITIES[play]
+        + defensive_edge * MATCHUP_TURNOVER_SENSITIVITY
+        + (
+            MATCHED_SCHEME_TURNOVER_BONUS
+            if matchup.scheme_matches_play
+            else 0.0
+        )
+    )
+    return 0.0, _clamp(fumble, 0.003, 0.08)
+
+
+def calculate_play_estimate(
+    offense_roster: FootballRoster,
+    defense_roster: FootballRoster,
+    play: OffensivePlayAction,
+    scheme: DefensiveSchemeAction,
+    *,
+    prior_plays: int = 0,
+    yardage_bonus: float = 0.0,
+    completion_bonus: float = 0.0,
+) -> FootballPlayEstimate:
+    if not isfinite(yardage_bonus) or not isfinite(completion_bonus):
+        raise ValueError("Play bonuses must be finite numbers.")
+    matchup = calculate_matchup_power(
+        offense_roster,
+        defense_roster,
+        play,
+        scheme,
+        prior_plays=prior_plays,
+    )
+    offense_players = tuple(
+        offense_roster.players[position]
+        for position in OFFENSIVE_PLAY_CATALOG[play.value].contributors
+    )
+    defense_players = tuple(
+        defense_roster.players[position]
+        for position in DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors
+    )
+    spread = max(
+        MIN_PLAY_YARDAGE_SPREAD,
+        (
+            sum(player.volatility for player in offense_players)
+            / len(offense_players)
+            + sum(player.volatility for player in defense_players)
+            / len(defense_players)
+        )
+        * VOLATILITY_SPREAD_MULTIPLIER,
+    )
+    yards = (
+        _BASE_YARDAGE[play]
+        - PLAY_DEFENSE_BASELINE_YARDAGE_REDUCTION
+        + OFFENSIVE_BASELINE_YARDAGE_BONUS
+        + (matchup.offense - matchup.defense) * POWER_YARDAGE_MULTIPLIER
+        - (
+            MATCHED_SCHEME_YARDAGE_PENALTY
+            if matchup.scheme_matches_play
+            else 0.0
+        )
+        + yardage_bonus
+        + completion_bonus
+    )
+    yards = _clamp(yards, MIN_PLAY_YARDAGE, MAX_PLAY_YARDAGE)
+    incomplete, conditional_turnover = _play_risk_probabilities(play, matchup)
+    return FootballPlayEstimate(matchup, yards, spread, incomplete, conditional_turnover)
 
 
 def _adjusted_player_power(player: FootballPlayer, prior_plays: int) -> float:
@@ -233,7 +420,11 @@ def _complete_match(state: FootballMatchState) -> FootballMatchState:
 def _advance_period_if_expired(
     state: FootballMatchState, rng: random.Random
 ) -> FootballMatchState:
-    if state.status is FootballMatchStatus.COMPLETED or state.game_clock_seconds > 0:
+    if (
+        state.status is FootballMatchStatus.COMPLETED
+        or state.game_clock_seconds > 0
+        or state.awaited_action is FootballAwaitedAction.CONVERSION
+    ):
         return state
     if state.period == 1:
         return replace(
@@ -280,13 +471,23 @@ def _after_possession_change(
 def _record_event(
     state: FootballMatchState,
     *,
-    action: OffensivePlayAction | DefensiveSchemeAction | FootballFourthDownAction,
+    action: (
+        OffensivePlayAction
+        | DefensiveSchemeAction
+        | FootballFourthDownAction
+        | FootballConversionAction
+        | FootballAutomaticAction
+    ),
     play_result: FootballPlayResult | None = None,
     points_scored: int = 0,
     scoring_team: FootballTeamSide | None = None,
     field_goal_distance: float | None = None,
     clock_seconds_used: int = 0,
     perk_effects: tuple[str, ...] = (),
+    description: str | None = None,
+    gross_yards: float | None = None,
+    return_yards: float | None = None,
+    blocked: bool = False,
 ) -> FootballMatchState:
     event = FootballMatchEvent(
         sequence=len(state.match_events) + 1,
@@ -306,6 +507,10 @@ def _record_event(
         scoring_team=scoring_team,
         field_goal_distance=field_goal_distance,
         perk_effects=perk_effects,
+        description=description,
+        gross_yards=gross_yards,
+        return_yards=return_yards,
+        blocked=blocked,
     )
     events = state.match_events + (event,)
     first = events[0]
@@ -592,7 +797,10 @@ class FootballMatchSimulator:
             raise ValueError("A completed match cannot accept new actions.")
         if self.state.awaited_action is not expected:
             raise ValueError(f"Action is not legal while awaiting {self.state.awaited_action!r}.")
-        if self.state.game_clock_seconds == 0:
+        if (
+            self.state.game_clock_seconds == 0
+            and expected is not FootballAwaitedAction.CONVERSION
+        ):
             raise ValueError("No action is legal after the period clock has expired.")
 
     def select_defensive_scheme(
@@ -654,93 +862,79 @@ class FootballMatchSimulator:
             else self.state.team_a
         )
         play_definition = OFFENSIVE_PLAY_CATALOG[play.value]
-        offense_slots = play_definition.contributors
-        defense_slots = matchup_for_scheme(scheme)[0]
-        offense_players = [offense_roster.players[position] for position in offense_slots]
-        defense_players = [defense_roster.players[position] for position in defense_slots]
         offense_coach, _ = self._coach_profiles(offense_roster)
         _, defense_coach = self._coach_profiles(defense_roster)
         prior_plays = sum(
             event.play_result is not None for event in self.state.match_events
         )
-        matchup_power = calculate_matchup_power(
+        estimate = calculate_play_estimate(
             offense_roster,
             defense_roster,
             play,
             scheme,
             prior_plays=prior_plays,
         )
-        offense_power = matchup_power.offense
-        defense_power = matchup_power.defense
-        same_scheme = matchup_power.scheme_matches_play
+        offense_power = estimate.matchup.offense
+        defense_power = estimate.matchup.defense
+        same_scheme = estimate.matchup.scheme_matches_play
         drive_events = self._current_drive_events(self.state.possession)
         perk_effects: list[str] = []
         offense_perk = offense_coach.perk if offense_coach is not None else None
         defense_perk = defense_coach.perk if defense_coach is not None else None
 
-        spread = max(
-            MIN_PLAY_YARDAGE_SPREAD,
-            (
-                sum(player.volatility for player in offense_players)
-                / len(offense_players)
-                + sum(player.volatility for player in defense_players)
-                / len(defense_players)
-            )
-            * VOLATILITY_SPREAD_MULTIPLIER,
+        yards = estimate.yards_on_success + self.rng.uniform(
+            -estimate.yardage_spread,
+            estimate.yardage_spread,
         )
-        yards = _BASE_YARDAGE[play] + (offense_power - defense_power) * 0.5
-        yards += self.rng.uniform(-spread, spread)
         turnover = False
         incomplete = False
+        turnover_type: FootballTurnoverType | None = None
         if play_definition.family is FootballPlayFamily.PASS:
-            roll = self.rng.random()
-            incomplete_threshold = min(1.0, PASS_INCOMPLETE_BASE_PROBABILITY + (
-                MATCHED_SCHEME_INCOMPLETE_BONUS if same_scheme else 0.0
-            ) + (
-                defense_perk.value
-                if same_scheme
-                and defense_perk is not None
-                and defense_perk.kind
-                is FootballCoachPerkKind.MATCHED_PASS_INCOMPLETE_BONUS
-                else 0.0
-            ))
-            interception_threshold = min(
-                1.0,
-                incomplete_threshold
-                + PASS_INTERCEPTION_PROBABILITY
-                + (
-                    defense_perk.value
-                    if same_scheme
-                    and defense_perk is not None
-                    and defense_perk.kind
-                    is FootballCoachPerkKind.MATCHED_PASS_INTERCEPTION_BONUS
-                    else 0.0
-                ),
-            )
+            incomplete_probability = estimate.incomplete_probability
+            turnover_probability = estimate.turnover_probability
             if (
                 same_scheme
                 and defense_perk is not None
                 and defense_perk.kind
                 is FootballCoachPerkKind.MATCHED_PASS_INCOMPLETE_BONUS
             ):
-                perk_effects.append("Coverage: +5 percentage points to incompletion chance")
+                incomplete_probability = _clamp(
+                    incomplete_probability + defense_perk.value,
+                    0.12,
+                    0.52,
+                )
+                perk_effects.append(
+                    "Coverage: +5 percentage points to incompletion chance"
+                )
             if (
                 same_scheme
                 and defense_perk is not None
                 and defense_perk.kind
                 is FootballCoachPerkKind.MATCHED_PASS_INTERCEPTION_BONUS
             ):
-                perk_effects.append("Pressure / Blitz: +5 percentage points to interception chance")
-            if roll < incomplete_threshold:
+                turnover_probability = _clamp(
+                    turnover_probability + defense_perk.value,
+                    0.005,
+                    0.10,
+                )
+                perk_effects.append(
+                    "Pressure / Blitz: +5 percentage points to interception chance"
+                )
+            roll = self.rng.random()
+            interception_threshold = (
+                incomplete_probability
+                + (1.0 - incomplete_probability) * turnover_probability
+            )
+            if roll < incomplete_probability:
                 incomplete = True
                 yards = 0.0
             elif roll < interception_threshold:
                 turnover = True
+                turnover_type = FootballTurnoverType.INTERCEPTION
                 yards = 0.0
-        elif self.rng.random() < TURNOVER_BASE_PROBABILITY + (
-            MATCHED_SCHEME_TURNOVER_BONUS if same_scheme else 0.0
-        ):
+        elif self.rng.random() < estimate.turnover_probability:
             turnover = True
+            turnover_type = FootballTurnoverType.FUMBLE
             yards = min(yards, 0.0)
 
         if (
@@ -847,6 +1041,7 @@ class FootballMatchSimulator:
                 offense_power=offense_power,
                 defense_power=defense_power,
                 perk_effects=tuple(perk_effects),
+                turnover_type=turnover_type,
             )
             self.state = _record_event(
                 next_state,
@@ -856,6 +1051,10 @@ class FootballMatchSimulator:
                 scoring_team=scoring_team,
                 clock_seconds_used=result.clock_seconds_used,
                 perk_effects=result.perk_effects,
+            )
+            self.state = self._resolve_kickoff(
+                self.state,
+                offensive_side,
             )
             return self._finish_play_action(
                 self.state,
@@ -867,13 +1066,16 @@ class FootballMatchSimulator:
         if new_position >= GOAL_LINE_YARDS and positive_gain:
             scoring_team = self.state.possession
             scored = _add_score(self.state, scoring_team, TOUCHDOWN_POINTS)
-            next_state = _after_possession_change(
-                scored,
-                possession=_opponent(scoring_team),
-                field_position=TOUCHBACK_START_YARDS,
-                clock_cost=clock_cost,
+            next_state = self._conversion_state(
+                replace(
+                    scored,
+                    game_clock_seconds=max(
+                        0, self.state.game_clock_seconds - clock_cost
+                    ),
+                ),
+                scoring_team,
+                scheme,
             )
-            next_state = self._finish_action(next_state, points=TOUCHDOWN_POINTS)
             result = FootballPlayResult(
                 play,
                 yards,
@@ -922,11 +1124,15 @@ class FootballMatchSimulator:
                 scoring_team = _opponent(self.state.possession)
                 points_scored = TOUCHDOWN_POINTS
                 scored = _add_score(self.state, scoring_team, points_scored)
-                next_state = _after_possession_change(
-                    scored,
-                    possession=_opponent(scoring_team),
-                    field_position=TOUCHBACK_START_YARDS,
-                    clock_cost=clock_cost,
+                next_state = self._conversion_state(
+                    replace(
+                        scored,
+                        game_clock_seconds=max(
+                            0, self.state.game_clock_seconds - clock_cost
+                        ),
+                    ),
+                    scoring_team,
+                    scheme,
                 )
             else:
                 next_state = _after_possession_change(
@@ -995,8 +1201,10 @@ class FootballMatchSimulator:
             defense_power=defense_power,
             perk_effects=tuple(perk_effects),
             turnover_on_downs=turnover_on_downs,
+            turnover_type=turnover_type,
         )
-        next_state = self._finish_action(next_state, points=points_scored)
+        if not points_scored:
+            next_state = self._finish_action(next_state)
         self.state = _record_event(
             next_state,
             action=play,
@@ -1023,6 +1231,255 @@ class FootballMatchSimulator:
             return _complete_match(state)
         return _advance_period_if_expired(state, self.rng)
 
+    @staticmethod
+    def _conversion_state(
+        state: FootballMatchState,
+        team: FootballTeamSide,
+        defensive_scheme: DefensiveSchemeAction,
+    ) -> FootballMatchState:
+        return replace(
+            state,
+            possession=team,
+            down=1,
+            yards_to_go=2.0,
+            offense_field_position=98.0,
+            awaited_action=FootballAwaitedAction.CONVERSION,
+            current_drive_defensive_scheme=defensive_scheme,
+            conversion_team=team,
+        )
+
+    def _resolve_kickoff(
+        self,
+        state: FootballMatchState,
+        kicking_team: FootballTeamSide,
+        *,
+        clock_seconds_used: int = KICKOFF_CLOCK_SECONDS,
+    ) -> FootballMatchState:
+        if state.status is FootballMatchStatus.COMPLETED or state.period >= 3:
+            return state
+        clock_seconds_used = min(state.game_clock_seconds, clock_seconds_used)
+        receiving_team = _opponent(kicking_team)
+        if self.rng.random() < KICKOFF_TOUCHBACK_CHANCE:
+            return_yards = 0.0
+            field_position = TOUCHBACK_START_YARDS
+            description = "Kickoff touchback"
+            return_touchdown = False
+        else:
+            return_yards = _clamp(
+                self.rng.gauss(
+                    KICKOFF_RETURN_MEAN_YARDS,
+                    KICKOFF_RETURN_STANDARD_DEVIATION,
+                ),
+                0.0,
+                100.0,
+            )
+            return_touchdown = (
+                self.rng.random() < KICKOFF_RETURN_TOUCHDOWN_CHANCE
+            )
+            field_position = 100.0 if return_touchdown else return_yards
+            description = (
+                "Kickoff return touchdown"
+                if return_touchdown
+                else f"Kickoff returned {return_yards:.1f} yards"
+            )
+        if return_touchdown:
+            state = _add_score(state, receiving_team, TOUCHDOWN_POINTS)
+            state = self._conversion_state(
+                state,
+                receiving_team,
+                DefensiveSchemeAction.GOAL_LINE_FRONT,
+            )
+            state = replace(
+                state,
+                game_clock_seconds=max(
+                    0, state.game_clock_seconds - clock_seconds_used
+                ),
+            )
+        else:
+            state = replace(
+                state,
+                possession=receiving_team,
+                down=1,
+                yards_to_go=FIRST_DOWN_YARDS,
+                offense_field_position=field_position,
+                game_clock_seconds=max(0, state.game_clock_seconds - clock_seconds_used),
+                awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+                current_drive_defensive_scheme=None,
+                conversion_team=None,
+            )
+        state = _advance_period_if_expired(state, self.rng)
+        return _record_event(
+            state,
+            action=FootballAutomaticAction.KICKOFF,
+            points_scored=TOUCHDOWN_POINTS if return_touchdown else 0,
+            scoring_team=receiving_team if return_touchdown else None,
+            clock_seconds_used=clock_seconds_used,
+            description=description,
+            gross_yards=KICKOFF_GROSS_YARDS,
+            return_yards=return_yards,
+        )
+
+    def _finish_scoring_sequence(
+        self,
+        state: FootballMatchState,
+        *,
+        kickoff_team: FootballTeamSide,
+        previous_period: int,
+    ) -> FootballMatchState:
+        self.state = state
+        if state.status is FootballMatchStatus.IN_PROGRESS and state.period < 3:
+            state = self._resolve_kickoff(state, kickoff_team)
+            self.state = state
+        self._reset_for_period_boundary(previous_period)
+        return self.state
+
+    def resolve_conversion(
+        self, action: FootballConversionAction
+    ) -> FootballMatchState:
+        if not isinstance(action, FootballConversionAction):
+            raise ValueError("Conversion choice must be a FootballConversionAction.")
+        self._require_action(FootballAwaitedAction.CONVERSION)
+        team = self.state.conversion_team
+        scheme = self.state.current_drive_defensive_scheme
+        if team is None or scheme is None:
+            raise RuntimeError("The conversion state is missing its team or defense.")
+        previous_period = self.state.period
+        offense = (
+            self.state.team_a
+            if team is FootballTeamSide.TEAM_A
+            else self.state.team_b
+        )
+        defense = (
+            self.state.team_b
+            if team is FootballTeamSide.TEAM_A
+            else self.state.team_a
+        )
+        scoring_team: FootballTeamSide | None = None
+        points = 0
+        blocked = False
+        gross_yards: float | None = None
+        selected_card: FootballCardCopy | None = None
+        description: str
+
+        if action is FootballConversionAction.EXTRA_POINT:
+            blocked = self.rng.random() < EXTRA_POINT_BLOCK_CHANCE
+            if blocked:
+                description = "Extra point blocked"
+                if self.rng.random() < TWO_POINT_RETURN_TOUCHDOWN_CHANCE:
+                    scoring_team = _opponent(team)
+                    points = 2
+                    description = "Blocked extra point returned for two"
+            elif self.rng.random() < EXTRA_POINT_SUCCESS_CHANCE:
+                scoring_team = team
+                points = 1
+                description = "Extra point good"
+            else:
+                description = "Extra point missed"
+        else:
+            deck = self._deck_for(team, offensive=True)
+            selected_card = next(
+                (
+                    card
+                    for card in deck.hand
+                    if OFFENSIVE_PLAY_CATALOG[card.card_id].action
+                    is OffensivePlayAction.RB_RUN
+                ),
+                deck.hand[0] if deck.hand else None,
+            )
+            play = (
+                OFFENSIVE_PLAY_CATALOG[selected_card.card_id].action
+                if selected_card is not None
+                else OffensivePlayAction.RB_RUN
+            )
+            estimate = calculate_play_estimate(
+                offense,
+                defense,
+                play,
+                scheme,
+                prior_plays=sum(
+                    event.play_result is not None
+                    for event in self.state.match_events
+                ),
+            )
+            gross_yards = max(
+                0.0,
+                estimate.yards_on_success
+                + self.rng.uniform(
+                    -estimate.yardage_spread,
+                    estimate.yardage_spread,
+                ),
+            )
+            incomplete = False
+            turnover = False
+            if play in _PASS_PLAYS:
+                roll = self.rng.random()
+                incomplete = roll < estimate.incomplete_probability
+                turnover = (
+                    not incomplete
+                    and roll
+                    < estimate.incomplete_probability
+                    + (1.0 - estimate.incomplete_probability)
+                    * estimate.turnover_probability
+                )
+            else:
+                turnover = self.rng.random() < estimate.turnover_probability
+            if turnover and self.rng.random() < TWO_POINT_RETURN_TOUCHDOWN_CHANCE:
+                scoring_team = _opponent(team)
+                points = 2
+                description = "Two-point attempt returned for two"
+            elif not incomplete and not turnover and gross_yards >= 2.0:
+                scoring_team = team
+                points = 2
+                description = (
+                    f"Two-point {play.value.replace('_', ' ')} successful"
+                )
+            else:
+                description = (
+                    f"Two-point {play.value.replace('_', ' ')} "
+                    + ("intercepted" if turnover and play in _PASS_PLAYS else
+                       "fumbled" if turnover else
+                       "incomplete" if incomplete else
+                       f"stopped at {gross_yards:.1f} yards")
+                )
+            if selected_card is not None:
+                self._cycle_played_card(team, offensive=True, card=selected_card)
+
+        state = self.state
+        if points:
+            if scoring_team is None:
+                raise RuntimeError("A successful conversion must identify its scorer.")
+            state = _add_score(state, scoring_team, points)
+        state = replace(
+            state,
+            down=1,
+            yards_to_go=FIRST_DOWN_YARDS,
+            offense_field_position=TOUCHBACK_START_YARDS,
+            awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+            current_drive_defensive_scheme=None,
+            conversion_team=None,
+        )
+        if state.period >= 3 and state.team_a_score != state.team_b_score:
+            state = _complete_match(state)
+        else:
+            state = _advance_period_if_expired(state, self.rng)
+        self.state = _record_event(
+            state,
+            action=action,
+            points_scored=points,
+            scoring_team=scoring_team,
+            description=description,
+            gross_yards=gross_yards,
+            blocked=blocked,
+        )
+        if self.state.status is FootballMatchStatus.COMPLETED:
+            return self.state
+        kickoff_team = scoring_team if scoring_team is not None else team
+        return self._finish_scoring_sequence(
+            self.state,
+            kickoff_team=kickoff_team,
+            previous_period=previous_period,
+        )
+
     def resolve_fourth_down(
         self, decision: FootballFourthDownAction
     ) -> FootballMatchState:
@@ -1035,10 +1492,13 @@ class FootballMatchSimulator:
         previous_period = self.state.period
         state = self.state
         points = 0
-        scoring_team = None
-        distance = None
+        scoring_team: FootballTeamSide | None = None
+        distance: float | None = None
         clock_cost = 0
-        perk_effects: tuple[str, ...] = ()
+        gross_yards: float | None = None
+        return_yards: float | None = None
+        description: str | None = None
+        blocked = False
         if decision is FootballFourthDownAction.GO_FOR_IT:
             self.state = _record_event(
                 replace(state, awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY),
@@ -1047,22 +1507,71 @@ class FootballMatchSimulator:
             return self.state
         elif decision is FootballFourthDownAction.PUNT:
             clock_cost = PUNT_CLOCK_SECONDS
-            punt_end_position = state.offense_field_position + PUNT_NET_YARDS
-            receiving_position = (
-                TOUCHBACK_START_YARDS
-                if punt_end_position >= GOAL_LINE_YARDS
-                else 100.0 - punt_end_position
-            )
+            blocked = self.rng.random() < PUNT_BLOCK_CHANCE
+            if blocked:
+                description = "Punt blocked"
+                gross_yards = 0.0
+                return_yards = 0.0
+                receiving_position = 100.0 - state.offense_field_position
+            else:
+                gross_yards = _clamp(
+                    self.rng.gauss(
+                        PUNT_GROSS_MEAN_YARDS,
+                        PUNT_GROSS_STANDARD_DEVIATION,
+                    ),
+                    15.0,
+                    70.0,
+                )
+                return_yards = (
+                    _clamp(
+                        self.rng.gauss(
+                            PUNT_RETURN_MEAN_YARDS,
+                            PUNT_RETURN_STANDARD_DEVIATION,
+                        ),
+                        0.0,
+                        40.0,
+                    )
+                    if self.rng.random() < PUNT_RETURN_CHANCE
+                    else 0.0
+                )
+                punt_end_position = (
+                    state.offense_field_position + gross_yards - return_yards
+                )
+                touchback = punt_end_position >= GOAL_LINE_YARDS
+                receiving_position = (
+                    TOUCHBACK_START_YARDS
+                    if touchback
+                    else 100.0 - punt_end_position
+                )
+                description = (
+                    "Punt touchback"
+                    if touchback
+                    else f"Punt {gross_yards:.1f} yards, returned {return_yards:.1f}"
+                )
             state = _after_possession_change(
                 state,
                 possession=_opponent(state.possession),
-                field_position=receiving_position,
-                clock_cost=PUNT_CLOCK_SECONDS,
+                field_position=_clamp(receiving_position, 0.0, GOAL_LINE_YARDS),
+                clock_cost=clock_cost,
             )
         elif decision is FootballFourthDownAction.FIELD_GOAL:
             clock_cost = FIELD_GOAL_CLOCK_SECONDS
             distance = field_goal_distance_for_position(state.offense_field_position)
-            if self.rng.random() < field_goal_success_probability(distance):
+            blocked = self.rng.random() < FIELD_GOAL_BLOCK_CHANCE
+            made = (
+                not blocked
+                and self.rng.random() < field_goal_success_probability(distance)
+            )
+            if blocked:
+                description = "Field goal blocked"
+                state = _after_possession_change(
+                    state,
+                    possession=_opponent(state.possession),
+                    field_position=100.0 - state.offense_field_position,
+                    clock_cost=clock_cost,
+                )
+            elif made:
+                description = f"Field goal good from {distance:.0f} yards"
                 scoring_team = state.possession
                 points = FIELD_GOAL_POINTS
                 state = _add_score(state, scoring_team, points)
@@ -1070,14 +1579,15 @@ class FootballMatchSimulator:
                     state,
                     possession=_opponent(scoring_team),
                     field_position=TOUCHBACK_START_YARDS,
-                    clock_cost=FIELD_GOAL_CLOCK_SECONDS,
+                    clock_cost=clock_cost,
                 )
             else:
+                description = f"Field goal missed from {distance:.0f} yards"
                 state = _after_possession_change(
                     state,
                     possession=_opponent(state.possession),
                     field_position=100.0 - state.offense_field_position,
-                    clock_cost=FIELD_GOAL_CLOCK_SECONDS,
+                    clock_cost=clock_cost,
                 )
 
         if points and state.period >= 3:
@@ -1091,7 +1601,16 @@ class FootballMatchSimulator:
             scoring_team=scoring_team,
             field_goal_distance=distance,
             clock_seconds_used=min(self.state.game_clock_seconds, clock_cost),
-            perk_effects=perk_effects,
+            description=description,
+            gross_yards=gross_yards,
+            return_yards=return_yards,
+            blocked=blocked,
         )
+        if (
+            decision is FootballFourthDownAction.FIELD_GOAL
+            and points
+            and self.state.status is FootballMatchStatus.IN_PROGRESS
+        ):
+            self.state = self._resolve_kickoff(self.state, scoring_team)
         self._reset_for_period_boundary(previous_period)
         return self.state

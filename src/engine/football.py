@@ -38,6 +38,21 @@ class FootballAwaitedAction(str, Enum):
     OFFENSIVE_PLAY = "offensive_play"
     DEFENSIVE_SCHEME = "defensive_scheme"
     FOURTH_DOWN_DECISION = "fourth_down_decision"
+    CONVERSION = "conversion"
+
+
+class FootballConversionAction(str, Enum):
+    EXTRA_POINT = "extra_point"
+    TWO_POINT = "two_point"
+
+
+class FootballAutomaticAction(str, Enum):
+    KICKOFF = "kickoff"
+
+
+class FootballTurnoverType(str, Enum):
+    INTERCEPTION = "interception"
+    FUMBLE = "fumble"
 
 
 class OffensivePlayAction(str, Enum):
@@ -351,6 +366,8 @@ class FootballPlayResult:
     defense_power: float = 0.0
     perk_effects: tuple[str, ...] = ()
     turnover_on_downs: bool = False
+    turnover_type: FootballTurnoverType | None = None
+    conversion_attempt: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.offensive_play, OffensivePlayAction):
@@ -364,6 +381,14 @@ class FootballPlayResult:
             raise ValueError("Possession changed must be a boolean.")
         if not isinstance(self.turnover_on_downs, bool):
             raise ValueError("Turnover on downs must be a boolean.")
+        if not isinstance(self.conversion_attempt, bool):
+            raise ValueError("Conversion attempt must be a boolean.")
+        if self.turnover_type is not None and not self.turnover:
+            raise ValueError("A turnover type can only be set for a turnover.")
+        if self.turnover_type is not None and not isinstance(
+            self.turnover_type, FootballTurnoverType
+        ):
+            raise ValueError("Turnover type must be a FootballTurnoverType or None.")
         if self.turnover_on_downs and (
             self.turnover or not self.possession_changed
         ):
@@ -393,7 +418,13 @@ class FootballMatchEvent:
     """Immutable record of one caller action and the resulting match snapshot."""
 
     sequence: int
-    action: OffensivePlayAction | DefensiveSchemeAction | FootballFourthDownAction
+    action: (
+        OffensivePlayAction
+        | DefensiveSchemeAction
+        | FootballFourthDownAction
+        | FootballConversionAction
+        | FootballAutomaticAction
+    )
     team_a_score: int
     team_b_score: int
     possession: FootballTeamSide
@@ -409,6 +440,10 @@ class FootballMatchEvent:
     scoring_team: FootballTeamSide | None = None
     field_goal_distance: float | None = None
     perk_effects: tuple[str, ...] = ()
+    description: str | None = None
+    gross_yards: float | None = None
+    return_yards: float | None = None
+    blocked: bool = False
 
     def __post_init__(self) -> None:
         _validate_nonnegative_int(self.sequence, "Event sequence")
@@ -416,7 +451,13 @@ class FootballMatchEvent:
             raise ValueError("Event sequence must be positive.")
         if not isinstance(
             self.action,
-            (OffensivePlayAction, DefensiveSchemeAction, FootballFourthDownAction),
+            (
+                OffensivePlayAction,
+                DefensiveSchemeAction,
+                FootballFourthDownAction,
+                FootballConversionAction,
+                FootballAutomaticAction,
+            ),
         ):
             raise ValueError("Event action must be a supported football action.")
         if self.play_result is not None and not isinstance(
@@ -433,6 +474,18 @@ class FootballMatchEvent:
             raise ValueError("Scoring events must identify the scoring team.")
         if not self.points_scored and self.scoring_team is not None:
             raise ValueError("Non-scoring events cannot identify a scoring team.")
+        if self.description is not None:
+            _validate_name(self.description, "Event description")
+        if not isinstance(self.blocked, bool):
+            raise ValueError("Blocked must be a boolean.")
+        for value, label in (
+            (self.gross_yards, "Gross yards"),
+            (self.return_yards, "Return yards"),
+        ):
+            if value is not None:
+                _validate_finite_number(value, label)
+                if value < 0:
+                    raise ValueError(f"{label} must be non-negative.")
         if not isinstance(self.possession, FootballTeamSide):
             raise ValueError("Event possession must be a FootballTeamSide.")
         _validate_finite_number(self.offense_field_position, "Event field position")
@@ -526,6 +579,7 @@ class FootballMatchState:
     team_a_defense_deck: FootballDeckState | None = None
     team_b_offense_deck: FootballDeckState | None = None
     team_b_defense_deck: FootballDeckState | None = None
+    conversion_team: FootballTeamSide | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.team_a, FootballRoster) or not isinstance(
@@ -577,6 +631,10 @@ class FootballMatchState:
             raise ValueError(
                 "Current defensive scheme must be a DefensiveSchemeAction or None."
             )
+        if self.conversion_team is not None and not isinstance(
+            self.conversion_team, FootballTeamSide
+        ):
+            raise ValueError("Conversion team must be a FootballTeamSide or None.")
         if self.final_result is not None and not isinstance(
             self.final_result, FootballMatchResult
         ):
@@ -615,6 +673,8 @@ class FootballMatchState:
                 raise ValueError("Final result winner must match the match scores.")
             if self.awaited_action is not None or self.current_drive_defensive_scheme is not None:
                 raise ValueError("A completed match cannot await an action or retain a scheme.")
+            if self.conversion_team is not None:
+                raise ValueError("A completed match cannot await a conversion.")
         elif self.final_result is not None:
             raise ValueError("An in-progress match cannot have a final result.")
         if self.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME:
@@ -628,6 +688,20 @@ class FootballMatchState:
         elif self.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
             if self.current_drive_defensive_scheme is None:
                 raise ValueError("An active drive must have a defensive scheme.")
+        elif self.awaited_action is FootballAwaitedAction.CONVERSION:
+            if (
+                self.conversion_team is None
+                or self.conversion_team is not self.possession
+                or self.current_drive_defensive_scheme is None
+                or self.down != 1
+                or self.yards_to_go != 2.0
+                or self.offense_field_position != 98.0
+            ):
+                raise ValueError(
+                    "A conversion must identify its team and use the two-yard line."
+                )
+        elif self.conversion_team is not None:
+            raise ValueError("A conversion team is only valid while awaiting a conversion.")
         if (
             self.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION
             and self.down != 4

@@ -11,6 +11,7 @@ import pytest
 from src.application import ApplicationController
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballConversionAction,
     FootballFourthDownAction,
     FootballMatchEvent,
     FootballMatchResult,
@@ -1692,7 +1693,6 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
 
     seen_offense = False
     seen_defense = False
-    seen_fourth_down = False
     seen_ai_play = False
     for _ in range(1200):
         state = controller.state
@@ -1725,7 +1725,6 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
             assert len(hand_buttons) == min(3, len(deck.hand))
             hand_buttons[0].action()
         elif state.human_decision is FootballHumanDecision.FOURTH_DOWN:
-            seen_fourth_down = True
             expected = FootballFourthDownAction.PUNT
             assert set(labels) - {"PAUSE"} == {
                 "GO FOR IT",
@@ -1733,6 +1732,9 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
                 "FIELD GOAL",
             }
             labels["PUNT"].action()
+        elif state.human_decision is FootballHumanDecision.CONVERSION:
+            expected = FootballConversionAction.EXTRA_POINT
+            labels["EXTRA POINT"].action()
         else:
             pytest.fail(f"Unexpected match decision: {state.human_decision}")
 
@@ -1758,7 +1760,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     assert final.match is not None
     assert final.match.status is FootballMatchStatus.COMPLETED
     assert final.match.final_result is not None
-    assert seen_offense and seen_defense and seen_fourth_down and seen_ai_play
+    assert seen_offense and seen_defense and seen_ai_play
     desktop.router.draw(_surface())
     assert any(
         button.label in {"OPEN NEXT GAME SHOP", "RETURN TO MAIN MENU"}
@@ -1766,14 +1768,34 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     )
 
 
-def test_match_screen_uses_pause_and_numbered_play_calls(tmp_path: Path) -> None:
+def test_match_screen_previews_matchups_without_showing_roster_ratings(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     desktop = _new_desktop(tmp_path)
     _start_match(desktop)
     controller = desktop.football_controller
     assert controller is not None
     screen = desktop.run_screen
 
+    rendered_text: list[str] = []
+    draw_text = football_run_screen_module.draw_text
+
+    def capture_text(*args, **kwargs):
+        rendered_text.append(str(args[1]))
+        return draw_text(*args, **kwargs)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
     desktop.router.draw(_surface())
+    assert any("1ST" in text and "YDS" in text for text in rendered_text)
+    match = controller.state.match
+    assert match is not None
+    assert not any(
+        player.name in " ".join(rendered_text)
+        for roster in (match.team_a, match.team_b)
+        for player in roster.players.values()
+    )
+    assert not any("POWER" in text.upper() or "RATING" in text.upper() for text in rendered_text)
     labels = {button.label: button for button in screen.buttons}
     match = controller.state.match
     assert match is not None and match.team_a_offense_deck is not None

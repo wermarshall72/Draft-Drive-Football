@@ -5,6 +5,8 @@ import pygame
 
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballAutomaticAction,
+    FootballConversionAction,
     FootballMatchEvent,
     FootballMatchState,
     FootballFourthDownAction,
@@ -45,6 +47,7 @@ from src.engine.football_team_builder import (
     PLAYER_DRAFT_ORDER,
     FootballPlayerCandidate,
 )
+from src.engine.football_simulator import calculate_play_estimate
 from src.ui.coach_art import draw_playbook_mark, draw_recruiting_table
 from src.ui.coach_fonts import coach_font, staff_font
 from src.ui.layout import Layout
@@ -1035,6 +1038,26 @@ class FootballRunScreen(Screen):
                 )
                 for action in FootballFourthDownAction
             ]
+        elif decision is FootballHumanDecision.CONVERSION:
+            heading = "TOUCHDOWN   /   CHOOSE YOUR CONVERSION"
+            actions = [
+                (
+                    "EXTRA POINT",
+                    lambda: self._submit_match_action(
+                        lambda: self._require_controller().choose_conversion(
+                            FootballConversionAction.EXTRA_POINT
+                        )
+                    ),
+                ),
+                (
+                    "TWO-POINT TRY",
+                    lambda: self._submit_match_action(
+                        lambda: self._require_controller().choose_conversion(
+                            FootballConversionAction.TWO_POINT
+                        )
+                    ),
+                ),
+            ]
         else:
             heading = "LOCAL AI IS RESOLVING ITS DRIVE"
             actions = []
@@ -1209,7 +1232,7 @@ class FootballRunScreen(Screen):
                 draw_text(
                     surface,
                     _fit_text(label, self._small_font, card_rect.width - 12),
-                    (card_rect.left + 6, card_rect.top + 5),
+                    (card_rect.left + 6, card_rect.top + 3),
                     self._small_font,
                     _MATCH_CHALK,
                 )
@@ -1223,10 +1246,33 @@ class FootballRunScreen(Screen):
                         self._small_font,
                         card_rect.width - 12,
                     ),
-                    (card_rect.left + 6, card_rect.top + 27),
+                    (card_rect.left + 6, card_rect.top + 20),
                     self._small_font,
                     _MATCH_MUTED,
                 )
+                if offensive and match.current_drive_defensive_scheme is not None:
+                    prior_plays = sum(
+                        event.play_result is not None
+                        for event in match.match_events
+                    )
+                    estimate = calculate_play_estimate(
+                        match.team_a,
+                        match.team_b,
+                        definition.action,
+                        match.current_drive_defensive_scheme,
+                        prior_plays=prior_plays,
+                    )
+                    preview = (
+                        f"~{estimate.expected_yards:.1f} YDS"
+                        f"   1ST {estimate.first_down_probability(match.yards_to_go):.0%}"
+                    )
+                    draw_text(
+                        surface,
+                        _fit_text(preview, self._small_font, card_rect.width - 12),
+                        (card_rect.left + 6, card_rect.top + 37),
+                        self._small_font,
+                        _MATCH_BRASS,
+                    )
                 self._hand_card_rects[card.copy_id] = card_rect
                 self.buttons.append(
                     Button(
@@ -3019,6 +3065,14 @@ class FootballRunScreen(Screen):
                 ))
                 for action in FootballFourthDownAction
             ]
+        elif decision is FootballHumanDecision.CONVERSION:
+            heading = "TOUCHDOWN  /  CHOOSE YOUR CONVERSION"
+            actions = [
+                (action.value.replace("_", " ").upper(), lambda action=action: self._submit(
+                    lambda: self._require_controller().choose_conversion(action)
+                ))
+                for action in FootballConversionAction
+            ]
         else:
             heading = "LOCAL AI IS RESOLVING ITS DRIVE"
             actions = []
@@ -3233,6 +3287,21 @@ class FootballRunScreen(Screen):
                     f"{offense}: {_PLAY_LABELS[event.action]} - "
                     f"{result.yards_gained:+.1f} yd"
                 )
+        elif isinstance(
+            event.action, (FootballConversionAction, FootballAutomaticAction)
+        ):
+            responsible_side = event.scoring_team or event.possession
+            responsible_team = (
+                team_a_name
+                if responsible_side is FootballTeamSide.TEAM_A
+                else team_b_name
+            )
+            description = (
+                f"{responsible_team}: "
+                f"{event.description or event.action.value.replace('_', ' ').upper()}"
+            )
+        elif event.description is not None:
+            description = event.description
         else:
             offense = team_a_name if event.possession is FootballTeamSide.TEAM_A else team_b_name
             description = f"{offense}: {event.action.value.replace('_', ' ').upper()}"

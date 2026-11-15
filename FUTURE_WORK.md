@@ -44,7 +44,7 @@ or the design changes.
   defensive scheme; failed fourth-down plays turn the ball over at the play
   spot, while punts and field goals remain separate special-teams actions.
 - [x] Add shop Depth Chart and Playbook review screens and a match UI for the
-  human hand, card selection, and drag/drop calls.
+  human hand, card selection, matchup previews, and drag/drop calls.
 - [ ] Expand the initial play/scheme catalog and create the coach-upgrade
   catalog; coach-upgrade offers and their unlocks remain unavailable.
 - [ ] Design future player synergies, temporary upgrades, and AP-saving

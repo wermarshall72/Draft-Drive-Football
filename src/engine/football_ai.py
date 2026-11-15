@@ -10,6 +10,7 @@ from src.engine.football import (
     FootballAwaitedAction,
     FootballCardCopy,
     FootballDeckState,
+    FootballConversionAction,
     FootballCoach,
     FootballFourthDownAction,
     FootballMatchState,
@@ -30,7 +31,7 @@ from src.engine.football_player_catalog import (
     player_type_offer,
 )
 from src.engine.football_simulator import (
-    calculate_matchup_power,
+    calculate_play_estimate,
     field_goal_distance_for_position,
     field_goal_success_probability,
 )
@@ -194,13 +195,21 @@ class FootballAI:
 
     def choose_action(
         self, state: FootballMatchState
-    ) -> DefensiveSchemeAction | OffensivePlayAction | FootballFourthDownAction:
+    ) -> (
+        DefensiveSchemeAction
+        | OffensivePlayAction
+        | FootballFourthDownAction
+        | FootballConversionAction
+    ):
         """Select an action for this AI without changing the supplied match state."""
         if not isinstance(state, FootballMatchState):
             raise ValueError("AI action selection requires a FootballMatchState.")
         if (
             state.status is not FootballMatchStatus.IN_PROGRESS
-            or state.game_clock_seconds == 0
+            or (
+                state.game_clock_seconds == 0
+                and state.awaited_action is not FootballAwaitedAction.CONVERSION
+            )
         ):
             raise ValueError("AI cannot act after the match or period clock has ended.")
 
@@ -242,6 +251,14 @@ class FootballAI:
                     actions.append(FootballFourthDownAction.FIELD_GOAL)
                 return self._rng.choice(actions)
             return self._choose_fourth_down(state)
+
+        if awaited_action is FootballAwaitedAction.CONVERSION:
+            if state.possession is not self.team_side:
+                raise ValueError("AI cannot choose a conversion for the other team.")
+            margin = self._score_margin(state)
+            if state.period >= 2 and margin in (-2, -1):
+                return FootballConversionAction.TWO_POINT
+            return FootballConversionAction.EXTRA_POINT
 
         raise ValueError(f"AI cannot act while awaiting {awaited_action!r}.")
 
@@ -328,17 +345,20 @@ class FootballAI:
         prior_plays = sum(
             event.play_result is not None for event in state.match_events
         )
-        matchup = calculate_matchup_power(
+        estimate = calculate_play_estimate(
             offense,
             defense,
             play,
             scheme,
             prior_plays=prior_plays,
         )
-        matchup_edge = (matchup.offense - matchup.defense) / max(
-            1.0, matchup.offense + matchup.defense
+        probability = estimate.first_down_probability(state.yards_to_go)
+        return (
+            self._situational_play_score(state, play)
+            + 1.2 * estimate.expected_yards
+            + 8.0 * probability
+            - 12.0 * estimate.turnover_probability
         )
-        return self._situational_play_score(state, play) + 5.0 * matchup_edge
 
     def _choose_defensive_scheme(
         self,
@@ -408,17 +428,19 @@ class FootballAI:
         prior_plays = sum(
             event.play_result is not None for event in state.match_events
         )
-        matchup = calculate_matchup_power(
+        estimate = calculate_play_estimate(
             offense,
             defense,
             play,
             scheme,
             prior_plays=prior_plays,
         )
-        matchup_edge = (matchup.defense - matchup.offense) / max(
-            1.0, matchup.offense + matchup.defense
+        return (
+            self._likely_offensive_play_score(state, scheme)
+            - 1.2 * estimate.expected_yards
+            - 8.0 * estimate.first_down_probability(state.yards_to_go)
+            + 12.0 * estimate.turnover_probability
         )
-        return self._likely_offensive_play_score(state, scheme) + 5.0 * matchup_edge
 
     def _choose_fourth_down(
         self, state: FootballMatchState

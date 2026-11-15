@@ -387,6 +387,7 @@ def test_hard_offense_uses_the_simulator_matchup_strengths() -> None:
         possession=FootballTeamSide.TEAM_A,
         down=3,
         yards_to_go=8.0,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
     )
 
     assert _ai(FootballAIDifficulty.HARD).choose_action(state) is OffensivePlayAction.DEEP_PASS

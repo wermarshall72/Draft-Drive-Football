@@ -6,6 +6,8 @@ import pytest
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballAutomaticAction,
+    FootballConversionAction,
     FootballFourthDownAction,
     FootballMatchResult,
     FootballMatchStatus,
@@ -23,6 +25,7 @@ from src.engine.football_controller import (
     FootballHumanDecision,
     FootballRunPhase,
 )
+from src.engine.football_simulator import REGULATION_PERIOD_SECONDS
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerCandidate
 from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_shop import (
@@ -149,6 +152,7 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     )
     assert match_view.match.team_b.coach_assignment is not None
     assert match_view.match.possession is FootballTeamSide.TEAM_A
+    assert match_view.match.game_clock_seconds == REGULATION_PERIOD_SECONDS
     assert match_view.match.match_events
     assert isinstance(match_view.match.match_events[0].action, DefensiveSchemeAction)
     assert match_view.shop is not None and match_view.shop.finished
@@ -191,6 +195,8 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
             assert state.match.down == 4
             controller.choose_fourth_down(FootballFourthDownAction.PUNT)
             human_fourth_downs += 1
+        elif state.human_decision is FootballHumanDecision.CONVERSION:
+            controller.choose_conversion(FootballConversionAction.EXTRA_POINT)
         else:
             raise AssertionError(f"Unexpected decision: {state.human_decision}")
 
@@ -240,6 +246,8 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
             if isinstance(transition.action, OffensivePlayAction):
                 assert transition.play_result is not None
                 assert transition.play_result.possession_changed
+            elif isinstance(transition.action, FootballAutomaticAction):
+                assert transition.action is FootballAutomaticAction.KICKOFF
             else:
                 assert isinstance(transition.action, FootballFourthDownAction)
     assert human_defense_drive_count == human_defensive_drives
