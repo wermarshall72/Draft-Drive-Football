@@ -1565,14 +1565,104 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     _activate(desktop, "BACK TO SHOP")
     _activate(desktop, "PLAYBOOK")
     desktop.router.draw(_surface())
+    assert "OWNED CARDS" in " ".join(displayed)
+    for _ in range(desktop.run_screen._playbook_max_scroll):
+        desktop.run_screen.handle_event(
+            pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1})
+        )
+        desktop.router.draw(_surface())
     joined = " ".join(displayed)
-    assert "OWNED CARDS" in joined
     current_shop = controller.state.shop
     assert current_shop is not None
     for card in current_shop.offensive_deck:
         assert OFFENSIVE_PLAY_CATALOG[card.card_id].name in joined
     for card in current_shop.defensive_deck:
         assert DEFENSIVE_SCHEME_CATALOG[card.card_id].name in joined
+
+
+def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    play = OFFENSIVE_PLAY_CATALOG["slot_slant"]
+    scheme = DEFENSIVE_SCHEME_CATALOG["quarters_coverage"]
+    cards = (
+        FootballShopCard(
+            card_id=f"play:{play.card_id}",
+            name=play.name,
+            description=play.description,
+            section=FootballShopSection.PLAYS_SCHEMES,
+            rarity=FootballShopRarity.COMMON,
+            cost=2,
+            eligible=lambda _roster: True,
+            effect=lambda roster: roster,
+            football_card=play,
+        ),
+        FootballShopCard(
+            card_id=f"scheme:{scheme.card_id}",
+            name=scheme.name,
+            description=scheme.description,
+            section=FootballShopSection.PLAYS_SCHEMES,
+            rarity=FootballShopRarity.COMMON,
+            cost=2,
+            eligible=lambda _roster: True,
+            effect=lambda roster: roster,
+            football_card=scheme,
+        ),
+    )
+    controller = FootballGameController(
+        "Test Owls",
+        difficulty=FootballAIDifficulty.STANDARD,
+        builder_seed=17,
+        shop_seed=29,
+        ai_seed=4,
+        match_seed=1,
+        shop_catalogs={FootballShopSection.PLAYS_SCHEMES: cards},
+    )
+    desktop.football_controller = controller
+    desktop.run_screen.begin(controller)
+    _draft_to_shop(desktop)
+
+    displayed: list[str] = []
+    original_draw_text = football_run_screen_module.draw_text
+
+    def capture_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_draw_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
+    desktop.router.draw(_surface())
+    shop_copy = " ".join(displayed)
+    assert play.name in shop_copy and scheme.name in shop_copy
+    assert "COMMON" in shop_copy
+    assert "SHORT PASS" in shop_copy
+    assert "NEUTRAL ~7.3 YDS / 22s" in shop_copy
+    assert "COUNTERS: DEEP PASS" in shop_copy
+
+    desktop.router.draw(_surface())
+    buy_buttons = [
+        button for button in desktop.run_screen.buttons if button.label == "BUY"
+    ]
+    assert len(buy_buttons) == 5
+    for button in buy_buttons[3:]:
+        button.action()
+    displayed.clear()
+    _activate(desktop, "PLAYBOOK")
+    displayed.clear()
+    desktop.router.draw(_surface())
+    for _ in range(desktop.run_screen._playbook_max_scroll):
+        desktop.run_screen.handle_event(
+            pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1})
+        )
+        desktop.router.draw(_surface())
+    playbook_copy = " ".join(displayed)
+    assert "Slot Slant" in playbook_copy
+    assert "SHORT PASS" in playbook_copy
+    assert "NEUTRAL ~7.3 YDS / 22s" in playbook_copy
+    assert "Quarters Coverage" in playbook_copy
+    assert "COUNTERS DEEP PASS" in playbook_copy
 
 
 def test_match_history_labels_turnovers_on_downs(tmp_path: Path) -> None:

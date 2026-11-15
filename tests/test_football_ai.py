@@ -5,6 +5,7 @@ import pytest
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardFamily,
     FootballCardCopy,
     FootballCoach,
     FootballDeckState,
@@ -17,6 +18,7 @@ from src.engine.football import (
     FootballTeamSide,
     OffensivePlayAction,
 )
+from src.engine import football_ai as football_ai_module
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
@@ -390,7 +392,57 @@ def test_hard_offense_uses_the_simulator_matchup_strengths() -> None:
         current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
     )
 
-    assert _ai(FootballAIDifficulty.HARD).choose_action(state) is OffensivePlayAction.DEEP_PASS
+    selected = _ai(FootballAIDifficulty.HARD).choose_action(state)
+    assert OFFENSIVE_PLAY_CATALOG[selected.value].family is FootballCardFamily.DEEP_PASS
+
+
+def test_hard_ai_scores_exact_hand_variants_and_uses_clock_tempo() -> None:
+    ai = _ai(FootballAIDifficulty.HARD)
+    quick_out = FootballCardCopy("ai:tempo:quick", OffensivePlayAction.QUICK_OUT.value)
+    slot_slant = FootballCardCopy("ai:tempo:slant", OffensivePlayAction.SLOT_SLANT.value)
+    deck = FootballDeckState(
+        owned=(quick_out, slot_slant),
+        hand=(quick_out, slot_slant),
+    )
+    base = _state(
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        team_a_offense_deck=deck,
+        game_clock_seconds=900,
+        period=1,
+        team_a_score=0,
+        team_b_score=0,
+    )
+    late_lead = _state(
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        team_a_offense_deck=deck,
+        game_clock_seconds=100,
+        period=2,
+        team_a_score=7,
+        team_b_score=0,
+    )
+
+    quick_score = ai._hard_play_score(base, OffensivePlayAction.QUICK_OUT)
+    slant_score = ai._hard_play_score(base, OffensivePlayAction.SLOT_SLANT)
+    assert quick_score != slant_score
+    selected = ai.choose_action(late_lead)
+    assert selected in (OffensivePlayAction.QUICK_OUT, OffensivePlayAction.SLOT_SLANT)
+    expected = max(
+        (OffensivePlayAction.QUICK_OUT, OffensivePlayAction.SLOT_SLANT),
+        key=lambda play: ai._hard_play_score(late_lead, play),
+    )
+    assert selected is expected
+    for play in (OffensivePlayAction.QUICK_OUT, OffensivePlayAction.SLOT_SLANT):
+        tempo_delta = (
+            ai._hard_play_score(late_lead, play)
+            - ai._hard_play_score(base, play)
+        )
+        assert tempo_delta == pytest.approx(
+            0.03 * OFFENSIVE_PLAY_CATALOG[play.value].clock_seconds
+        )
 
 
 def test_hard_offense_uses_active_scheme_and_selects_only_legal_hand_cards() -> None:
@@ -490,6 +542,46 @@ def test_hard_defensive_score_prefers_schemes_with_stronger_contributors(
     )
 
     assert strong_defense > weak_defense
+
+
+def test_hard_defense_breaks_tied_variant_scores_deterministically(
+    monkeypatch,
+) -> None:
+    ai = _ai(FootballAIDifficulty.HARD, side=FootballTeamSide.TEAM_B)
+    state = _state(
+        possession=FootballTeamSide.TEAM_A,
+        awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+        down=1,
+        yards_to_go=5.0,
+    )
+    offense = _roster("Offense")
+    defense = _roster("Defense")
+    selected_plays: list[OffensivePlayAction] = []
+    calculate_estimate = football_ai_module.calculate_match_play_estimate
+
+    def record_estimate(state, play, **kwargs):
+        selected_plays.append(play)
+        return calculate_estimate(state, play, **kwargs)
+
+    monkeypatch.setattr(
+        ai,
+        "_situational_play_score",
+        lambda _state, _play: 1.0,
+    )
+    monkeypatch.setattr(
+        football_ai_module,
+        "calculate_match_play_estimate",
+        record_estimate,
+    )
+
+    ai._hard_defensive_scheme_score(
+        state,
+        DefensiveSchemeAction.DEEP_PASS,
+        offense,
+        defense,
+    )
+
+    assert selected_plays == [OffensivePlayAction.GO_ROUTE]
 
 
 def test_ai_rejects_invalid_constructor_values() -> None:

@@ -158,6 +158,71 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     assert match_view.shop is not None and match_view.shop.finished
 
 
+def test_controller_carries_bought_named_play_and_scheme_into_match_decks() -> None:
+    play = OFFENSIVE_PLAY_CATALOG["slot_slant"]
+    scheme = DEFENSIVE_SCHEME_CATALOG["quarters_coverage"]
+    cards = (
+        FootballShopCard(
+            card_id=f"play:{play.card_id}",
+            name=play.name,
+            description=play.description,
+            section=FootballShopSection.PLAYS_SCHEMES,
+            rarity=FootballShopRarity.COMMON,
+            cost=2,
+            eligible=lambda _roster: True,
+            effect=lambda roster: roster,
+            football_card=play,
+        ),
+        FootballShopCard(
+            card_id=f"scheme:{scheme.card_id}",
+            name=scheme.name,
+            description=scheme.description,
+            section=FootballShopSection.PLAYS_SCHEMES,
+            rarity=FootballShopRarity.COMMON,
+            cost=2,
+            eligible=lambda _roster: True,
+            effect=lambda roster: roster,
+            football_card=scheme,
+        ),
+    )
+    controller = FootballGameController(
+        "Human Team",
+        difficulty=FootballAIDifficulty.EASY,
+        builder_seed=17,
+        shop_seed=29,
+        ai_seed=41,
+        match_seed=53,
+        shop_catalogs={FootballShopSection.PLAYS_SCHEMES: cards},
+    )
+    _draft_to_shop(controller)
+
+    for card in cards:
+        controller.buy_shop_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    shop = controller.state.shop
+    assert shop is not None
+    purchased_play = next(card for card in shop.offensive_deck if card.card_id == play.card_id)
+    purchased_scheme = next(
+        card for card in shop.defensive_deck if card.card_id == scheme.card_id
+    )
+
+    match = controller.finish_shop().match
+    assert match is not None
+    assert match.team_a_offense_deck is not None
+    assert match.team_a_defense_deck is not None
+    assert purchased_play in match.team_a_offense_deck.owned
+    assert purchased_scheme in match.team_a_defense_deck.owned
+    assert purchased_play in (
+        match.team_a_offense_deck.hand
+        + match.team_a_offense_deck.draw_pile
+        + match.team_a_offense_deck.discard_pile
+    )
+    assert purchased_scheme in (
+        match.team_a_defense_deck.hand
+        + match.team_a_defense_deck.draw_pile
+        + match.team_a_defense_deck.discard_pile
+    )
+
+
 def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_match() -> None:
     controller = _controller(match_seed=1, ai_seed=4)
     _start_match(controller)

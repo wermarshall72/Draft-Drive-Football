@@ -346,15 +346,20 @@ def test_ground_and_pound_spends_first_run_attempt_on_turnover() -> None:
     assert any("attempt used" in effect for effect in result.perk_effects)
 
 
-def test_ground_and_pound_triggers_only_on_first_rb_run_attempt() -> None:
+def test_ground_and_pound_triggers_only_on_first_rb_run_family_attempt() -> None:
     simulator = _simulator(
         offense_assignment=_assignment("ground_and_pound"),
         scheme=DefensiveSchemeAction.DEEP_PASS,
     )
-    simulator.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
+    first = simulator.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
     result = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert first.match_events[-1].play_result is not None
+    assert any(
+        "Ground and Pound" in item
+        for item in first.match_events[-1].play_result.perk_effects
+    )
     assert result.match_events[-1].play_result is not None
-    assert any("Ground and Pound" in item for item in result.match_events[-1].play_result.perk_effects)
+    assert not result.match_events[-1].play_result.perk_effects
 
     other_run = _simulator(
         offense_assignment=_assignment("ground_and_pound"),
@@ -362,7 +367,10 @@ def test_ground_and_pound_triggers_only_on_first_rb_run_attempt() -> None:
     )
     result = other_run.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
     assert result.match_events[-1].play_result is not None
-    assert not result.match_events[-1].play_result.perk_effects
+    assert any(
+        "Ground and Pound" in item
+        for item in result.match_events[-1].play_result.perk_effects
+    )
 
 
 @pytest.mark.parametrize(
@@ -698,7 +706,7 @@ def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers()
         defense_assignment=_assignment("balanced_offense", "run_stop"),
         scheme=DefensiveSchemeAction.RB_RUN,
     )
-    not_stopped = wrong_play.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
+    not_stopped = wrong_play.resolve_offensive_play(OffensivePlayAction.SHORT_PASS)
     assert not_stopped.match_events[-1].play_result is not None
     assert not not_stopped.match_events[-1].play_result.perk_effects
 

@@ -35,9 +35,12 @@ or the design changes.
 - [x] Implement the recurring three-part pre-game shop framework with shared
   AP, seeded rarity offers, player upgrades, and permanent slot unlocks.
 - [ ] Create the larger player-upgrade catalog and its additional effects.
-- [x] Add an initial offensive-play and defensive-scheme catalog to the shop,
-  including deck additions and permanent removal of an explicitly selected
-  owned copy. Each deck must retain at least four cards.
+- [x] Add an initial named offensive-play and defensive-scheme catalog to the
+  shop, organized into six shared families with variants retaining distinct
+  identities, yardage, and clock values. Keep all play/scheme cards Common,
+  preserve the six-card starter decks, support deck additions and permanent
+  removal of an explicitly selected owned copy, and retain the four-card
+  minimum per deck.
 - [x] Implement match-local hands, draw/discard cycling, empty-hand fallbacks,
   period-boundary resets, and hand-limited AI choices for both sides.
 - [x] Resolve "Go For It" through a normal offensive card play using the active
@@ -55,8 +58,9 @@ or the design changes.
   resolution, Hard AI decisions, and desktop previews.
 - [x] Add shop Depth Chart and Playbook review screens and a match UI for the
   human hand, card selection, matchup previews, and drag/drop calls.
-- [ ] Expand the initial play/scheme catalog and create the coach-upgrade
-  catalog; coach-upgrade offers and their unlocks remain unavailable.
+- [ ] Expand the play/scheme catalog toward 100+ named ideas without changing
+  the six-family invariants; create the coach-upgrade catalog and its unlocks.
+  Coach-upgrade offers remain unavailable.
 - [ ] Design future player synergies, temporary upgrades, and AP-saving
   actions. Unspent AP currently expires at the end of each shop visit.
 - [ ] Implement a playoff bracket; the current run ends at the playoffs marker.

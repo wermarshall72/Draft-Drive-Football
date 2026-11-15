@@ -47,7 +47,10 @@ from src.engine.football_team_builder import (
     PLAYER_DRAFT_ORDER,
     FootballPlayerCandidate,
 )
-from src.engine.football_simulator import calculate_match_play_estimate
+from src.engine.football_simulator import (
+    calculate_match_play_estimate,
+    calculate_standardized_play_estimate,
+)
 from src.ui.coach_art import draw_playbook_mark, draw_recruiting_table
 from src.ui.coach_fonts import coach_font, staff_font
 from src.ui.layout import Layout
@@ -57,27 +60,12 @@ from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
 _PLAY_LABELS = {
-    OffensivePlayAction.RB_RUN: "RB RUN",
-    OffensivePlayAction.SCREEN_PASS: "SCREEN PASS",
-    OffensivePlayAction.PA_PASS: "PLAY-ACTION PASS",
-    OffensivePlayAction.SHORT_PASS: "SHORT PASS",
-    OffensivePlayAction.MEDIUM_PASS: "MEDIUM PASS",
-    OffensivePlayAction.DEEP_PASS: "DEEP PASS",
-    OffensivePlayAction.QB_SNEAK: "QUARTERBACK SNEAK",
-    OffensivePlayAction.JET_SWEEP: "JET SWEEP",
-    OffensivePlayAction.QUICK_OUT: "QUICK OUT",
+    definition.action: definition.name.upper()
+    for definition in OFFENSIVE_PLAY_CATALOG.values()
 }
-
 _SCHEME_LABELS = {
-    DefensiveSchemeAction.RB_RUN: "RB RUN SCHEME",
-    DefensiveSchemeAction.SCREEN_PASS: "SCREEN PASS SCHEME",
-    DefensiveSchemeAction.PA_PASS: "PLAY-ACTION SCHEME",
-    DefensiveSchemeAction.SHORT_PASS: "SHORT PASS SCHEME",
-    DefensiveSchemeAction.MEDIUM_PASS: "MEDIUM PASS SCHEME",
-    DefensiveSchemeAction.DEEP_PASS: "DEEP PASS SCHEME",
-    DefensiveSchemeAction.GOAL_LINE_FRONT: "GOAL-LINE FRONT",
-    DefensiveSchemeAction.COVER_TWO_SHELL: "COVER TWO SHELL",
-    DefensiveSchemeAction.FIRE_ZONE_BLITZ: "FIRE-ZONE BLITZ",
+    definition.action: definition.name.upper()
+    for definition in DEFENSIVE_SCHEME_CATALOG.values()
 }
 
 _POSITION_LABELS = {
@@ -1232,7 +1220,7 @@ class FootballRunScreen(Screen):
                     card_height,
                 )
                 definition = catalog[card.card_id]
-                label = labels[definition.action]
+                label = definition.name.upper()
                 fill = (
                     pygame.Color("#344536")
                     if card.copy_id == self._dragging_card_id
@@ -1264,7 +1252,7 @@ class FootballRunScreen(Screen):
                 draw_text(
                     surface,
                     _fit_text(
-                        contributor_label,
+                        f"{definition.family.label.upper()} / {contributor_label}",
                         self._small_font,
                         card_rect.width - 12,
                     ),
@@ -1278,12 +1266,25 @@ class FootballRunScreen(Screen):
                         definition.action,
                     )
                     preview = (
-                        f"~{estimate.expected_yards:.1f} YDS"
-                        f"   1ST {estimate.first_down_probability(match.yards_to_go):.0%}"
+                        f"LIVE ~{estimate.expected_yards:.1f} YDS"
+                        f" / 1ST {estimate.first_down_probability(match.yards_to_go):.0%}"
+                        f" / {definition.clock_seconds}s"
                     )
                     draw_text(
                         surface,
                         _fit_text(preview, self._small_font, card_rect.width - 12),
+                        (card_rect.left + 6, card_rect.top + 37),
+                        self._small_font,
+                        _MATCH_BRASS,
+                    )
+                elif not offensive:
+                    draw_text(
+                        surface,
+                        _fit_text(
+                            f"COUNTERS: {definition.family.label.upper()}",
+                            self._small_font,
+                            card_rect.width - 12,
+                        ),
                         (card_rect.left + 6, card_rect.top + 37),
                         self._small_font,
                         _MATCH_BRASS,
@@ -2382,7 +2383,7 @@ class FootballRunScreen(Screen):
         panel_height = max(1, footer_top - top)
         panel_width = (content.width - gap) // 2
         row_top_offset = 46
-        row_height = 48
+        row_height = 56
         visible_rows = max(1, (panel_height - row_top_offset - 8) // row_height)
         self._playbook_max_scroll = max(
             0, max(len(cards) for _, cards, _ in columns) - visible_rows
@@ -2419,7 +2420,8 @@ class FootballRunScreen(Screen):
                 seen[card.card_id] = seen.get(card.card_id, 0) + 1
                 definition = catalog[card.card_id]
                 label = (
-                    f"{definition.name}  /  COPY {seen[card.card_id]} OF "
+                    f"{definition.name}  /  {definition.family.label.upper()}  /  COPY "
+                    f"{seen[card.card_id]} OF "
                     f"{counts[card.card_id]}"
                 )
                 row = pygame.Rect(
@@ -2447,11 +2449,33 @@ class FootballRunScreen(Screen):
                     _POSITION_LABELS[position]
                     for position in definition.contributors
                 )
-                detail = f"{contributors}  /  {definition.description}"
+                if isinstance(definition, FootballPlayDefinition):
+                    neutral_yards = calculate_standardized_play_estimate(
+                        definition.action
+                    ).expected_yards
+                    detail = (
+                        f"{contributors} / NEUTRAL ~{neutral_yards:.1f} YDS / "
+                        f"{definition.clock_seconds}s"
+                    )
+                else:
+                    detail = (
+                        f"{contributors} / COUNTERS {definition.family.label.upper()}"
+                    )
                 draw_text(
                     surface,
                     _fit_text(detail, self._small_font, text_width),
                     (row.left + 7, row.top + 21),
+                    self._small_font,
+                    self.theme.muted,
+                )
+                draw_text(
+                    surface,
+                    _fit_text(
+                        definition.description,
+                        self._small_font,
+                        text_width,
+                    ),
+                    (row.left + 7, row.top + 38),
                     self._small_font,
                     self.theme.muted,
                 )
@@ -2748,25 +2772,60 @@ class FootballRunScreen(Screen):
             return
 
         rarity_label = card.rarity.value.replace("_", " ").upper()
+        football_card = card.football_card
+        compact = rect.height < 75
+        tiny = rect.height < 50
+        card_label = card.name
+        if isinstance(football_card, FootballPlayDefinition):
+            if tiny:
+                card_label = (
+                    f"{card.name} / {rarity_label} {card.cost} AP"
+                )
+            elif compact:
+                card_label = (
+                    f"{card.name} / {football_card.family.label.upper()}"
+                )
+        elif isinstance(football_card, FootballSchemeDefinition):
+            if tiny:
+                card_label = (
+                    f"{card.name} / {rarity_label} {card.cost} AP"
+                )
+            elif compact:
+                card_label = f"{card.name} / {football_card.family.label.upper()}"
         draw_text(
             surface,
-            _fit_text(card.name, self._small_font, text_width),
-            (text_left, rect.top + 4),
+            _fit_text(card_label, self._small_font, text_width),
+            (text_left, rect.top + (3 if compact else 4)),
             self._small_font,
             self.theme.text,
         )
-        draw_text(
-            surface,
-            _fit_text(
-                f"{rarity_label}  /  {card.cost} AP",
+        if not tiny:
+            draw_text(
+                surface,
+                _fit_text(
+                    f"{rarity_label}  /  {card.cost} AP",
+                    self._small_font,
+                    text_width,
+                ),
+                (text_left, rect.top + (17 if compact else 23)),
                 self._small_font,
-                text_width,
-            ),
-            (text_left, rect.top + 23),
-            self._small_font,
-            _RARITY_COLORS[card.rarity],
-        )
-        if purchased:
+                _RARITY_COLORS[card.rarity],
+            )
+        if tiny and isinstance(football_card, FootballPlayDefinition):
+            neutral_yards = calculate_standardized_play_estimate(
+                football_card.action
+            ).expected_yards
+            reason = (
+                f"{football_card.family.label.upper()} / "
+                f"NEUTRAL ~{neutral_yards:.1f} YDS / "
+                f"{football_card.clock_seconds}s"
+            )
+        elif tiny and isinstance(football_card, FootballSchemeDefinition):
+            reason = (
+                f"{football_card.family.label.upper()} / COUNTERS: "
+                f"{football_card.family.label.upper()}"
+            )
+        elif purchased:
             reason = "PURCHASED"
         elif card.cost > remaining_ap:
             reason = f"NEED {card.cost - remaining_ap} MORE AP"
@@ -2774,16 +2833,89 @@ class FootballRunScreen(Screen):
             reason = slot.disabled_reason
         elif card.upgrade is not None:
             reason = f"{card.upgrade.stat.value.upper()}  /  {_POSITION_LABELS[card.upgrade.position]}"
+        elif isinstance(football_card, FootballPlayDefinition):
+            contributors = ", ".join(
+                _POSITION_LABELS[position] for position in football_card.contributors
+            )
+            reason = (
+                f"{contributors.replace(', ', '/')} / "
+                f"NEUTRAL ~{neutral_yards:.1f} YDS / "
+                f"{football_card.clock_seconds}s"
+                if compact and neutral_yards is not None
+                else f"{football_card.family.label.upper()} / {contributors}"
+            )
+        elif isinstance(football_card, FootballSchemeDefinition):
+            contributors = ", ".join(
+                _POSITION_LABELS[position] for position in football_card.contributors
+            )
+            reason = (
+                f"{contributors.replace(', ', '/')} / COUNTERS: "
+                f"{football_card.family.label.upper()}"
+                if compact
+                else f"{football_card.family.label.upper()} / {contributors}"
+            )
         else:
             reason = _fit_text(card.description, self._small_font, text_width)
-        if rect.height >= 58:
+        if rect.height >= (34 if tiny else 42 if compact else 58):
             draw_text(
                 surface,
                 _fit_text(reason, self._small_font, text_width),
-                (text_left, rect.top + 41),
+                (text_left, rect.top + (18 if tiny else 30 if compact else 41)),
                 self._small_font,
                 self.theme.secondary_accent if not purchased else self.theme.muted,
             )
+        if rect.height >= 75 and isinstance(football_card, FootballPlayDefinition):
+            neutral_yards = calculate_standardized_play_estimate(
+                football_card.action
+            ).expected_yards
+            draw_text(
+                surface,
+                _fit_text(
+                    f"NEUTRAL ~{neutral_yards:.1f} YDS / "
+                    f"{football_card.clock_seconds}s",
+                    self._small_font,
+                    text_width,
+                ),
+                (text_left, rect.top + 58),
+                self._small_font,
+                self.theme.muted,
+            )
+            if rect.height >= 92:
+                draw_text(
+                    surface,
+                    _fit_text(
+                        football_card.description,
+                        self._small_font,
+                        text_width,
+                    ),
+                    (text_left, rect.top + 75),
+                    self._small_font,
+                    self.theme.muted,
+                )
+        elif rect.height >= 75 and isinstance(football_card, FootballSchemeDefinition):
+            draw_text(
+                surface,
+                _fit_text(
+                    f"COUNTERS: {football_card.family.label.upper()}",
+                    self._small_font,
+                    text_width,
+                ),
+                (text_left, rect.top + 58),
+                self._small_font,
+                self.theme.muted,
+            )
+            if rect.height >= 92:
+                draw_text(
+                    surface,
+                    _fit_text(
+                        football_card.description,
+                        self._small_font,
+                        text_width,
+                    ),
+                    (text_left, rect.top + 75),
+                    self._small_font,
+                    self.theme.muted,
+                )
         button_label = (
             "PURCHASED"
             if purchased

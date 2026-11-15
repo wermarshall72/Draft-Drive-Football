@@ -55,6 +55,26 @@ class FootballTurnoverType(str, Enum):
     FUMBLE = "fumble"
 
 
+class FootballCardFamily(str, Enum):
+    RB_RUN = "rb_run"
+    SCREEN_PASS = "screen_pass"
+    PA_PASS = "pa_pass"
+    SHORT_PASS = "short_pass"
+    MEDIUM_PASS = "medium_pass"
+    DEEP_PASS = "deep_pass"
+
+    @property
+    def label(self) -> str:
+        return {
+            FootballCardFamily.RB_RUN: "RB Run",
+            FootballCardFamily.SCREEN_PASS: "Screen Pass",
+            FootballCardFamily.PA_PASS: "Play-Action Pass",
+            FootballCardFamily.SHORT_PASS: "Short Pass",
+            FootballCardFamily.MEDIUM_PASS: "Medium Pass",
+            FootballCardFamily.DEEP_PASS: "Deep Pass",
+        }[self]
+
+
 class OffensivePlayAction(str, Enum):
     RB_RUN = "rb_run"
     SCREEN_PASS = "screen_pass"
@@ -65,6 +85,12 @@ class OffensivePlayAction(str, Enum):
     QB_SNEAK = "qb_sneak"
     JET_SWEEP = "jet_sweep"
     QUICK_OUT = "quick_out"
+    POWER_TOSS = "power_toss"
+    BUBBLE_SCREEN = "bubble_screen"
+    BOOTLEG_KEEPER = "bootleg_keeper"
+    SLOT_SLANT = "slot_slant"
+    DEEP_DIG = "deep_dig"
+    GO_ROUTE = "go_route"
 
 
 class DefensiveSchemeAction(str, Enum):
@@ -77,6 +103,12 @@ class DefensiveSchemeAction(str, Enum):
     GOAL_LINE_FRONT = "goal_line_front"
     COVER_TWO_SHELL = "cover_two_shell"
     FIRE_ZONE_BLITZ = "fire_zone_blitz"
+    SPILL_FRONT = "spill_front"
+    PERIMETER_CHECK = "perimeter_check"
+    READ_REACT = "read_react"
+    NICKEL_UNDER = "nickel_under"
+    TWO_HIGH_PRESSURE = "two_high_pressure"
+    QUARTERS_COVERAGE = "quarters_coverage"
 
 
 class FootballFourthDownAction(str, Enum):
@@ -85,109 +117,115 @@ class FootballFourthDownAction(str, Enum):
     FIELD_GOAL = "field_goal"
 
 
+OFFENSIVE_PLAY_FAMILIES = MappingProxyType(
+    {
+        OffensivePlayAction.RB_RUN: FootballCardFamily.RB_RUN,
+        OffensivePlayAction.QB_SNEAK: FootballCardFamily.RB_RUN,
+        OffensivePlayAction.JET_SWEEP: FootballCardFamily.RB_RUN,
+        OffensivePlayAction.POWER_TOSS: FootballCardFamily.RB_RUN,
+        OffensivePlayAction.SCREEN_PASS: FootballCardFamily.SCREEN_PASS,
+        OffensivePlayAction.BUBBLE_SCREEN: FootballCardFamily.SCREEN_PASS,
+        OffensivePlayAction.PA_PASS: FootballCardFamily.PA_PASS,
+        OffensivePlayAction.BOOTLEG_KEEPER: FootballCardFamily.PA_PASS,
+        OffensivePlayAction.SHORT_PASS: FootballCardFamily.SHORT_PASS,
+        OffensivePlayAction.QUICK_OUT: FootballCardFamily.SHORT_PASS,
+        OffensivePlayAction.SLOT_SLANT: FootballCardFamily.SHORT_PASS,
+        OffensivePlayAction.MEDIUM_PASS: FootballCardFamily.MEDIUM_PASS,
+        OffensivePlayAction.DEEP_DIG: FootballCardFamily.MEDIUM_PASS,
+        OffensivePlayAction.DEEP_PASS: FootballCardFamily.DEEP_PASS,
+        OffensivePlayAction.GO_ROUTE: FootballCardFamily.DEEP_PASS,
+    }
+)
+
+DEFENSIVE_SCHEME_FAMILIES = MappingProxyType(
+    {
+        DefensiveSchemeAction.RB_RUN: FootballCardFamily.RB_RUN,
+        DefensiveSchemeAction.GOAL_LINE_FRONT: FootballCardFamily.RB_RUN,
+        DefensiveSchemeAction.SPILL_FRONT: FootballCardFamily.RB_RUN,
+        DefensiveSchemeAction.SCREEN_PASS: FootballCardFamily.SCREEN_PASS,
+        DefensiveSchemeAction.PERIMETER_CHECK: FootballCardFamily.SCREEN_PASS,
+        DefensiveSchemeAction.PA_PASS: FootballCardFamily.PA_PASS,
+        DefensiveSchemeAction.READ_REACT: FootballCardFamily.PA_PASS,
+        DefensiveSchemeAction.SHORT_PASS: FootballCardFamily.SHORT_PASS,
+        DefensiveSchemeAction.NICKEL_UNDER: FootballCardFamily.SHORT_PASS,
+        DefensiveSchemeAction.MEDIUM_PASS: FootballCardFamily.MEDIUM_PASS,
+        DefensiveSchemeAction.FIRE_ZONE_BLITZ: FootballCardFamily.MEDIUM_PASS,
+        DefensiveSchemeAction.TWO_HIGH_PRESSURE: FootballCardFamily.MEDIUM_PASS,
+        DefensiveSchemeAction.DEEP_PASS: FootballCardFamily.DEEP_PASS,
+        DefensiveSchemeAction.COVER_TWO_SHELL: FootballCardFamily.DEEP_PASS,
+        DefensiveSchemeAction.QUARTERS_COVERAGE: FootballCardFamily.DEEP_PASS,
+    }
+)
+
 FOOTBALL_PLAY_MATCHUPS = MappingProxyType({
-    OffensivePlayAction.RB_RUN: (
+    FootballCardFamily.RB_RUN: (
         (FootballPosition.O_LINE, FootballPosition.RB),
         (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
     ),
-    OffensivePlayAction.SCREEN_PASS: (
+    FootballCardFamily.SCREEN_PASS: (
         (FootballPosition.O_LINE, FootballPosition.WR),
         (FootballPosition.D_LINE, FootballPosition.CORNERBACKS),
     ),
-    OffensivePlayAction.PA_PASS: (
+    FootballCardFamily.PA_PASS: (
         (FootballPosition.QB, FootballPosition.RB),
         (FootballPosition.SAFETIES, FootballPosition.LINEBACKERS),
     ),
-    OffensivePlayAction.SHORT_PASS: (
+    FootballCardFamily.SHORT_PASS: (
         (FootballPosition.RB, FootballPosition.WR),
         (FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS),
     ),
-    OffensivePlayAction.MEDIUM_PASS: (
+    FootballCardFamily.MEDIUM_PASS: (
         (FootballPosition.QB, FootballPosition.O_LINE),
         (FootballPosition.SAFETIES, FootballPosition.D_LINE),
     ),
-    OffensivePlayAction.DEEP_PASS: (
+    FootballCardFamily.DEEP_PASS: (
         (FootballPosition.QB, FootballPosition.WR),
         (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
-    ),
-    OffensivePlayAction.QB_SNEAK: (
-        (FootballPosition.QB, FootballPosition.O_LINE),
-        (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
-    ),
-    OffensivePlayAction.JET_SWEEP: (
-        (FootballPosition.WR, FootballPosition.O_LINE),
-        (FootballPosition.D_LINE, FootballPosition.CORNERBACKS),
-    ),
-    OffensivePlayAction.QUICK_OUT: (
-        (FootballPosition.QB, FootballPosition.WR),
-        (FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS),
     ),
 })
 
 FOOTBALL_SCHEME_MATCHUPS = MappingProxyType({
-    DefensiveSchemeAction.RB_RUN: (
+    FootballCardFamily.RB_RUN: (
         (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
-        frozenset((OffensivePlayAction.RB_RUN,)),
     ),
-    DefensiveSchemeAction.SCREEN_PASS: (
+    FootballCardFamily.SCREEN_PASS: (
         (FootballPosition.D_LINE, FootballPosition.CORNERBACKS),
-        frozenset((OffensivePlayAction.SCREEN_PASS,)),
     ),
-    DefensiveSchemeAction.PA_PASS: (
+    FootballCardFamily.PA_PASS: (
         (FootballPosition.SAFETIES, FootballPosition.LINEBACKERS),
-        frozenset((OffensivePlayAction.PA_PASS,)),
     ),
-    DefensiveSchemeAction.SHORT_PASS: (
+    FootballCardFamily.SHORT_PASS: (
         (FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS),
-        frozenset((OffensivePlayAction.SHORT_PASS,)),
     ),
-    DefensiveSchemeAction.MEDIUM_PASS: (
+    FootballCardFamily.MEDIUM_PASS: (
         (FootballPosition.SAFETIES, FootballPosition.D_LINE),
-        frozenset((OffensivePlayAction.MEDIUM_PASS,)),
     ),
-    DefensiveSchemeAction.DEEP_PASS: (
+    FootballCardFamily.DEEP_PASS: (
         (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
-        frozenset((OffensivePlayAction.DEEP_PASS,)),
-    ),
-    DefensiveSchemeAction.GOAL_LINE_FRONT: (
-        (FootballPosition.D_LINE, FootballPosition.LINEBACKERS),
-        frozenset((
-            OffensivePlayAction.RB_RUN,
-            OffensivePlayAction.QB_SNEAK,
-            OffensivePlayAction.JET_SWEEP,
-        )),
-    ),
-    DefensiveSchemeAction.COVER_TWO_SHELL: (
-        (FootballPosition.SAFETIES, FootballPosition.CORNERBACKS),
-        frozenset((
-            OffensivePlayAction.DEEP_PASS,
-            OffensivePlayAction.MEDIUM_PASS,
-            OffensivePlayAction.QUICK_OUT,
-        )),
-    ),
-    DefensiveSchemeAction.FIRE_ZONE_BLITZ: (
-        (FootballPosition.LINEBACKERS, FootballPosition.D_LINE),
-        frozenset((
-            OffensivePlayAction.PA_PASS,
-            OffensivePlayAction.MEDIUM_PASS,
-        )),
     ),
 })
 
 def matchup_for_play(
     play: OffensivePlayAction,
 ) -> tuple[tuple[FootballPosition, ...], tuple[FootballPosition, ...]]:
-    if not isinstance(play, OffensivePlayAction) or play not in FOOTBALL_PLAY_MATCHUPS:
+    if not isinstance(play, OffensivePlayAction) or play not in OFFENSIVE_PLAY_FAMILIES:
         raise ValueError(f"Unsupported play: {play!r}")
-    return FOOTBALL_PLAY_MATCHUPS[play]
+    return FOOTBALL_PLAY_MATCHUPS[OFFENSIVE_PLAY_FAMILIES[play]]
 
 
 def matchup_for_scheme(
     scheme: DefensiveSchemeAction,
 ) -> tuple[tuple[FootballPosition, ...], frozenset[OffensivePlayAction]]:
-    if not isinstance(scheme, DefensiveSchemeAction) or scheme not in FOOTBALL_SCHEME_MATCHUPS:
+    if not isinstance(scheme, DefensiveSchemeAction) or scheme not in DEFENSIVE_SCHEME_FAMILIES:
         raise ValueError(f"Unsupported scheme: {scheme!r}")
-    return FOOTBALL_SCHEME_MATCHUPS[scheme]
+    family = DEFENSIVE_SCHEME_FAMILIES[scheme]
+    contributors = FOOTBALL_SCHEME_MATCHUPS[family][0]
+    counters = frozenset(
+        play
+        for play, play_family in OFFENSIVE_PLAY_FAMILIES.items()
+        if play_family is family
+    )
+    return contributors, counters
 
 
 @dataclass(frozen=True)
@@ -444,6 +482,8 @@ class FootballMatchEvent:
     gross_yards: float | None = None
     return_yards: float | None = None
     blocked: bool = False
+    card_id: str | None = None
+    card_copy_id: str | None = None
 
     def __post_init__(self) -> None:
         _validate_nonnegative_int(self.sequence, "Event sequence")
@@ -469,6 +509,17 @@ class FootballMatchEvent:
                 raise ValueError("Offensive-play events must include their matching result.")
         elif self.play_result is not None:
             raise ValueError("Only offensive-play events can include a play result.")
+        if self.card_id is not None:
+            _validate_name(self.card_id, "Event card identifier")
+        if self.card_copy_id is not None:
+            _validate_name(self.card_copy_id, "Event card-copy identifier")
+            if self.card_id is None:
+                raise ValueError("An event card copy must identify its catalog card.")
+        if isinstance(self.action, (OffensivePlayAction, DefensiveSchemeAction)):
+            if self.card_id is not None and self.card_id != self.action.value:
+                raise ValueError("Event card identifier must match its selected action.")
+        if self.action is FootballConversionAction.EXTRA_POINT and self.card_id is not None:
+            raise ValueError("An extra-point event cannot identify an offensive card.")
         _validate_nonnegative_int(self.points_scored, "Event points scored")
         if self.points_scored and not isinstance(self.scoring_team, FootballTeamSide):
             raise ValueError("Scoring events must identify the scoring team.")

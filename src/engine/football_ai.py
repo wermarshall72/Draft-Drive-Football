@@ -6,8 +6,10 @@ import random
 from enum import Enum
 
 from src.engine.football import (
+    DEFENSIVE_SCHEME_FAMILIES,
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardFamily,
     FootballCardCopy,
     FootballDeckState,
     FootballConversionAction,
@@ -38,6 +40,8 @@ from src.engine.football_simulator import (
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
+    FootballPlayDefinition,
+    FootballSchemeDefinition,
     starting_defensive_deck,
     starting_offensive_deck,
 )
@@ -142,10 +146,23 @@ class FootballAI:
         offense_cards = list(starting_offensive_deck(f"ai:{game_number}"))
         defense_cards = list(starting_defensive_deck(f"ai:{game_number}"))
 
-        def weighted_choice(definitions, *, is_offense: bool):
-            scored = []
+        def weighted_choice(
+            definitions: (
+                tuple[FootballPlayDefinition, ...]
+                | tuple[FootballSchemeDefinition, ...]
+            ),
+            *,
+            is_offense: bool,
+        ) -> FootballPlayDefinition | FootballSchemeDefinition:
+            by_family: dict[
+                FootballCardFamily,
+                list[FootballPlayDefinition | FootballSchemeDefinition],
+            ] = {}
             for definition in definitions:
-                positions = definition.contributors
+                by_family.setdefault(definition.family, []).append(definition)
+            scored = []
+            for family, family_cards in by_family.items():
+                positions = family_cards[0].contributors
                 players = tuple(roster.players[position] for position in positions)
                 coach = offense if is_offense else defense
                 strength = sum(
@@ -159,7 +176,7 @@ class FootballAI:
                     )
                     for player in players
                 )
-                scored.append((strength, definition))
+                scored.append((strength, family))
             scored.sort(key=lambda item: item[0], reverse=True)
             pool_size = (
                 len(scored)
@@ -168,7 +185,8 @@ class FootballAI:
                 if self.difficulty is FootballAIDifficulty.STANDARD
                 else min(3, len(scored))
             )
-            return rng.choice(scored[:pool_size])[1]
+            family = rng.choice(scored[:pool_size])[1]
+            return rng.choice(by_family[family])
 
         for index in range(extra_count):
             play = weighted_choice(
@@ -319,42 +337,40 @@ class FootballAI:
     def _situational_play_score(
         self, state: FootballMatchState, play: OffensivePlayAction
     ) -> float:
+        family = OFFENSIVE_PLAY_CATALOG[play.value].family
         scores = {
-            OffensivePlayAction.RB_RUN: 1.0,
-            OffensivePlayAction.SCREEN_PASS: 0.4,
-            OffensivePlayAction.PA_PASS: 0.2,
-            OffensivePlayAction.SHORT_PASS: 0.8,
-            OffensivePlayAction.MEDIUM_PASS: 0.3,
-            OffensivePlayAction.DEEP_PASS: 0.1,
-            OffensivePlayAction.QB_SNEAK: 1.0,
-            OffensivePlayAction.JET_SWEEP: 0.9,
-            OffensivePlayAction.QUICK_OUT: 0.6,
+            FootballCardFamily.RB_RUN: 1.0,
+            FootballCardFamily.SCREEN_PASS: 0.4,
+            FootballCardFamily.PA_PASS: 0.2,
+            FootballCardFamily.SHORT_PASS: 0.8,
+            FootballCardFamily.MEDIUM_PASS: 0.3,
+            FootballCardFamily.DEEP_PASS: 0.1,
         }
         if state.yards_to_go >= 8:
-            scores[OffensivePlayAction.MEDIUM_PASS] += 1.4
-            scores[OffensivePlayAction.DEEP_PASS] += 1.2
-            scores[OffensivePlayAction.RB_RUN] -= 0.8
+            scores[FootballCardFamily.MEDIUM_PASS] += 1.4
+            scores[FootballCardFamily.DEEP_PASS] += 1.2
+            scores[FootballCardFamily.RB_RUN] -= 0.8
         elif state.yards_to_go <= 2:
-            scores[OffensivePlayAction.RB_RUN] += 1.0
-            scores[OffensivePlayAction.SHORT_PASS] += 0.5
-            scores[OffensivePlayAction.DEEP_PASS] -= 1.0
+            scores[FootballCardFamily.RB_RUN] += 1.0
+            scores[FootballCardFamily.SHORT_PASS] += 0.5
+            scores[FootballCardFamily.DEEP_PASS] -= 1.0
 
         if state.down >= 3 and state.yards_to_go >= 6:
-            scores[OffensivePlayAction.MEDIUM_PASS] += 0.8
-            scores[OffensivePlayAction.DEEP_PASS] += 0.8
+            scores[FootballCardFamily.MEDIUM_PASS] += 0.8
+            scores[FootballCardFamily.DEEP_PASS] += 0.8
         if 100.0 - state.offense_field_position <= 10:
-            scores[OffensivePlayAction.RB_RUN] += 0.8
-            scores[OffensivePlayAction.SCREEN_PASS] += 0.4
-            scores[OffensivePlayAction.DEEP_PASS] -= 0.8
+            scores[FootballCardFamily.RB_RUN] += 0.8
+            scores[FootballCardFamily.SCREEN_PASS] += 0.4
+            scores[FootballCardFamily.DEEP_PASS] -= 0.8
 
         score_margin = self._score_margin(state)
         if self._is_late_game(state) and score_margin < 0:
-            scores[OffensivePlayAction.DEEP_PASS] += 1.8
-            scores[OffensivePlayAction.MEDIUM_PASS] += 1.0
+            scores[FootballCardFamily.DEEP_PASS] += 1.8
+            scores[FootballCardFamily.MEDIUM_PASS] += 1.0
         elif self._is_late_game(state) and score_margin > 0:
-            scores[OffensivePlayAction.RB_RUN] += 1.0
-            scores[OffensivePlayAction.DEEP_PASS] -= 0.8
-        return scores[play]
+            scores[FootballCardFamily.RB_RUN] += 1.0
+            scores[FootballCardFamily.DEEP_PASS] -= 0.8
+        return scores[family]
 
     def _hard_play_score(
         self, state: FootballMatchState, play: OffensivePlayAction
@@ -371,12 +387,22 @@ class FootballAI:
                 state.awaited_action is FootballAwaitedAction.CONVERSION
             ),
         )
+        clock_value = 0.0
+        if (
+            state.awaited_action is not FootballAwaitedAction.CONVERSION
+            and self._is_late_game(state)
+        ):
+            margin = self._score_margin(state)
+            if margin:
+                duration = OFFENSIVE_PLAY_CATALOG[play.value].clock_seconds
+                clock_value = 0.03 * duration * (1 if margin > 0 else -1)
         probability = estimate.first_down_probability(state.yards_to_go)
         return (
             self._situational_play_score(state, play)
             + 1.2 * estimate.expected_yards
             + 8.0 * probability
             - 12.0 * estimate.turnover_probability
+            + clock_value
         )
 
     def _choose_defensive_scheme(
@@ -402,31 +428,27 @@ class FootballAI:
     def _likely_offensive_play_score(
         self, state: FootballMatchState, scheme: DefensiveSchemeAction
     ) -> float:
-        _, counters = matchup_for_scheme(scheme)
-        if scheme not in tuple(DefensiveSchemeAction)[:6]:
-            return max(
-                self._situational_play_score(state, play) for play in counters
-            )
+        family = DEFENSIVE_SCHEME_FAMILIES[scheme]
         score = 1.0
         if state.yards_to_go <= 2:
-            score += 1.8 if scheme in (
-                DefensiveSchemeAction.RB_RUN,
-                DefensiveSchemeAction.SHORT_PASS,
+            score += 1.8 if family in (
+                FootballCardFamily.RB_RUN,
+                FootballCardFamily.SHORT_PASS,
             ) else 0.0
         elif state.yards_to_go >= 8:
-            score += 1.5 if scheme in (
-                DefensiveSchemeAction.MEDIUM_PASS,
-                DefensiveSchemeAction.DEEP_PASS,
+            score += 1.5 if family in (
+                FootballCardFamily.MEDIUM_PASS,
+                FootballCardFamily.DEEP_PASS,
             ) else 0.0
         if state.down >= 3 and state.yards_to_go >= 6:
-            score += 1.2 if scheme in (
-                DefensiveSchemeAction.MEDIUM_PASS,
-                DefensiveSchemeAction.DEEP_PASS,
+            score += 1.2 if family in (
+                FootballCardFamily.MEDIUM_PASS,
+                FootballCardFamily.DEEP_PASS,
             ) else 0.0
         if 100.0 - state.offense_field_position <= 10:
-            score += 1.0 if scheme in (
-                DefensiveSchemeAction.RB_RUN,
-                DefensiveSchemeAction.SCREEN_PASS,
+            score += 1.0 if family in (
+                FootballCardFamily.RB_RUN,
+                FootballCardFamily.SCREEN_PASS,
             ) else 0.0
         return score
 
@@ -442,7 +464,10 @@ class FootballAI:
             return self._likely_offensive_play_score(state, scheme)
         play = max(
             counters,
-            key=lambda action: self._situational_play_score(state, action),
+            key=lambda action: (
+                self._situational_play_score(state, action),
+                action.value,
+            ),
         )
         estimate = calculate_match_play_estimate(
             state,

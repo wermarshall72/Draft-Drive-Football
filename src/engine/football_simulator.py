@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, replace
+from functools import lru_cache
 from math import isfinite
 from numbers import Real
 
 from src.engine.football import (
+    DEFENSIVE_SCHEME_FAMILIES,
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardFamily,
     FootballCardCopy,
+    FootballCoach,
     FootballDeckState,
     FootballFourthDownAction,
     FootballMatchEvent,
@@ -23,12 +27,15 @@ from src.engine.football import (
     FootballMatchState,
     FootballMatchStatus,
     FootballPlayer,
+    FootballPosition,
     FootballPlayResult,
     FootballRoster,
+    FootballSpecialTeams,
     FootballAutomaticAction,
     FootballConversionAction,
     FootballTeamSide,
     FootballTurnoverType,
+    OFFENSIVE_PLAY_FAMILIES,
     OffensivePlayAction,
     matchup_for_scheme,
     matchup_for_play,
@@ -41,7 +48,6 @@ from src.engine.football_player_catalog import player_contribution_modifier
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
-    FootballPlayFamily,
     starting_defensive_deck,
     starting_offensive_deck,
 )
@@ -102,23 +108,20 @@ MATCHED_SCHEME_TURNOVER_BONUS = 0.005
 MIN_PLAY_YARDAGE = -5.0
 MAX_PLAY_YARDAGE = 25.0
 PASS_INTERCEPTION_PROBABILITIES = {
-    OffensivePlayAction.SCREEN_PASS: 0.015,
-    OffensivePlayAction.PA_PASS: 0.025,
-    OffensivePlayAction.SHORT_PASS: 0.015,
-    OffensivePlayAction.MEDIUM_PASS: 0.025,
-    OffensivePlayAction.DEEP_PASS: 0.04,
-    OffensivePlayAction.QUICK_OUT: 0.015,
+    FootballCardFamily.SCREEN_PASS: 0.015,
+    FootballCardFamily.PA_PASS: 0.025,
+    FootballCardFamily.SHORT_PASS: 0.015,
+    FootballCardFamily.MEDIUM_PASS: 0.025,
+    FootballCardFamily.DEEP_PASS: 0.04,
 }
 RUN_FUMBLE_PROBABILITIES = {
-    OffensivePlayAction.RB_RUN: 0.012,
-    OffensivePlayAction.QB_SNEAK: 0.008,
-    OffensivePlayAction.JET_SWEEP: 0.015,
+    FootballCardFamily.RB_RUN: 0.012,
 }
 
 _PASS_PLAYS = frozenset(
     definition.action
     for definition in OFFENSIVE_PLAY_CATALOG.values()
-    if definition.family is FootballPlayFamily.PASS
+    if definition.family is not FootballCardFamily.RB_RUN
 )
 _BASE_YARDAGE = {
     definition.action: definition.base_yards
@@ -207,6 +210,7 @@ class FootballPlayEstimate:
     """Expected play result from the same matchup and risk model as resolution."""
 
     matchup: FootballMatchupPower
+    family: FootballCardFamily
     yards_on_success: float
     yardage_spread: float
     incomplete_probability: float
@@ -216,10 +220,23 @@ class FootballPlayEstimate:
 
     @property
     def expected_yards(self) -> float:
+        if self.family is not FootballCardFamily.RB_RUN:
+            return (
+                self.yards_on_success
+                * (1.0 - self.incomplete_probability)
+                * (1.0 - self.turnover_probability)
+            )
+        lower = self.yards_on_success - self.yardage_spread
+        upper = self.yards_on_success + self.yardage_spread
+        if upper <= 0:
+            fumble_yards = self.yards_on_success
+        elif lower >= 0:
+            fumble_yards = 0.0
+        else:
+            fumble_yards = -(lower * lower) / (4.0 * self.yardage_spread)
         return (
-            self.yards_on_success
-            * (1.0 - self.incomplete_probability)
-            * (1.0 - self.turnover_probability)
+            self.yards_on_success * (1.0 - self.turnover_probability)
+            + fumble_yards * self.turnover_probability
         )
 
     def first_down_probability(self, yards_to_go: float) -> float:
@@ -249,7 +266,8 @@ def _play_risk_probabilities(
 ) -> tuple[float, float]:
     power_total = max(1.0, matchup.offense + matchup.defense)
     defensive_edge = (matchup.defense - matchup.offense) / power_total
-    if play in _PASS_PLAYS:
+    family = OFFENSIVE_PLAY_FAMILIES[play]
+    if family is not FootballCardFamily.RB_RUN:
         incomplete = (
             PASS_INCOMPLETE_BASE_PROBABILITY
             + defensive_edge * MATCHUP_INCOMPLETE_SENSITIVITY
@@ -261,7 +279,7 @@ def _play_risk_probabilities(
             + incomplete_bonus
         )
         interception = (
-            PASS_INTERCEPTION_PROBABILITIES[play]
+            PASS_INTERCEPTION_PROBABILITIES[family]
             + defensive_edge * MATCHUP_TURNOVER_SENSITIVITY
             + (
                 MATCHED_SCHEME_TURNOVER_BONUS
@@ -274,7 +292,7 @@ def _play_risk_probabilities(
         interception = _clamp(interception, 0.005, 0.10)
         return incomplete, interception
     fumble = (
-        RUN_FUMBLE_PROBABILITIES[play]
+        RUN_FUMBLE_PROBABILITIES[family]
         + defensive_edge * MATCHUP_TURNOVER_SENSITIVITY
         + (
             MATCHED_SCHEME_TURNOVER_BONUS
@@ -300,7 +318,8 @@ def _active_play_perks(
     _, defense_coach = coaches_for_assignment(defense_roster.coach_assignment)
     offense_perk = offense_coach.perk if offense_coach is not None else None
     defense_perk = defense_coach.perk if defense_coach is not None else None
-    is_pass = OFFENSIVE_PLAY_CATALOG[play.value].family is FootballPlayFamily.PASS
+    family = OFFENSIVE_PLAY_CATALOG[play.value].family
+    is_run = family is FootballCardFamily.RB_RUN
     active: set[FootballCoachPerkKind] = set()
     yardage_bonus = 0.0
     incomplete_bonus = 0.0
@@ -308,22 +327,27 @@ def _active_play_perks(
     interception_return_yards = 0.0
 
     if (
-        play is OffensivePlayAction.RB_RUN
+        is_run
         and offense_perk is not None
         and offense_perk.kind is FootballCoachPerkKind.FIRST_RUN_YARDS
-        and not any(event.action is OffensivePlayAction.RB_RUN for event in drive_events)
+        and not any(
+            isinstance(event.action, OffensivePlayAction)
+            and OFFENSIVE_PLAY_CATALOG[event.action.value].family
+            is FootballCardFamily.RB_RUN
+            for event in drive_events
+        )
     ):
         active.add(offense_perk.kind)
         yardage_bonus += offense_perk.value
     if (
-        is_pass
+        not is_run
         and offense_perk is not None
         and offense_perk.kind is FootballCoachPerkKind.FIRST_COMPLETED_PASS_YARDS
         and not any(
             event.play_result is not None
             and isinstance(event.action, OffensivePlayAction)
             and OFFENSIVE_PLAY_CATALOG[event.action.value].family
-            is FootballPlayFamily.PASS
+            is not FootballCardFamily.RB_RUN
             and not event.play_result.incomplete
             and not event.play_result.turnover
             for event in drive_events
@@ -332,7 +356,7 @@ def _active_play_perks(
         active.add(offense_perk.kind)
         yardage_bonus += offense_perk.value
     if (
-        is_pass
+        not is_run
         and not is_conversion
         and down == 1
         and offense_perk is not None
@@ -341,8 +365,8 @@ def _active_play_perks(
         active.add(offense_perk.kind)
         yardage_bonus += offense_perk.value
     if (
-        play is OffensivePlayAction.RB_RUN
-        and scheme is DefensiveSchemeAction.RB_RUN
+        is_run
+        and DEFENSIVE_SCHEME_FAMILIES[scheme] is FootballCardFamily.RB_RUN
         and defense_perk is not None
         and defense_perk.kind is FootballCoachPerkKind.MATCHED_RUN_YARDS_REDUCTION
     ):
@@ -357,7 +381,7 @@ def _active_play_perks(
         active.add(offense_perk.kind)
         yardage_bonus += offense_perk.value
     if (
-        is_pass
+        not is_run
         and defense_perk is not None
         and play in matchup_for_scheme(scheme)[1]
         and defense_perk.kind
@@ -366,7 +390,7 @@ def _active_play_perks(
         active.add(defense_perk.kind)
         incomplete_bonus += defense_perk.value
     if (
-        is_pass
+        not is_run
         and defense_perk is not None
         and play in matchup_for_scheme(scheme)[1]
         and defense_perk.kind
@@ -375,7 +399,7 @@ def _active_play_perks(
         active.add(defense_perk.kind)
         turnover_bonus += defense_perk.value
     if (
-        is_pass
+        not is_run
         and defense_perk is not None
         and defense_perk.kind is FootballCoachPerkKind.INTERCEPTION_RETURN_YARDS
     ):
@@ -452,7 +476,8 @@ def calculate_play_estimate(
         + OFFENSIVE_BASELINE_YARDAGE_BONUS
         + (
             RUN_BASELINE_YARDAGE_ADJUSTMENT
-            if OFFENSIVE_PLAY_CATALOG[play.value].family is FootballPlayFamily.RUN
+            if OFFENSIVE_PLAY_CATALOG[play.value].family
+            is FootballCardFamily.RB_RUN
             else PASS_BASELINE_YARDAGE_ADJUSTMENT
         )
         + (matchup.offense - matchup.defense) * POWER_YARDAGE_MULTIPLIER
@@ -474,12 +499,55 @@ def calculate_play_estimate(
     )
     return FootballPlayEstimate(
         matchup,
+        OFFENSIVE_PLAY_CATALOG[play.value].family,
         yards,
         spread,
         incomplete,
         conditional_turnover,
         interception_return_yards,
         active_perks,
+    )
+
+
+@lru_cache(maxsize=None)
+def calculate_standardized_play_estimate(
+    play: OffensivePlayAction,
+) -> FootballPlayEstimate:
+    """Estimate a card against equal, rested, uncoached players and a non-counter."""
+    if not isinstance(play, OffensivePlayAction):
+        raise ValueError("Standardized play estimate requires an OffensivePlayAction.")
+
+    def neutral_roster(name: str) -> FootballRoster:
+        players = {
+            position: FootballPlayer(
+                name=f"{name} {position.value}",
+                position=position,
+                power=10.0,
+                volatility=0.0,
+                stamina=1.0,
+            )
+            for position in FootballPosition
+        }
+        return FootballRoster(
+            team_name=name,
+            players=players,
+            coach=FootballCoach(f"{name} Coach"),
+            special_teams=FootballSpecialTeams(f"{name} Special Teams"),
+        )
+
+    family = OFFENSIVE_PLAY_FAMILIES[play]
+    scheme = next(
+        scheme
+        for scheme, scheme_family in DEFENSIVE_SCHEME_FAMILIES.items()
+        if scheme_family is not family
+    )
+    return calculate_play_estimate(
+        neutral_roster("Neutral Offense"),
+        neutral_roster("Neutral Defense"),
+        play,
+        scheme,
+        prior_plays=0,
+        down=1,
     )
 
 
@@ -555,7 +623,7 @@ def _play_perk_effect_messages(
         if FootballCoachPerkKind.FIRST_DOWN_PASS_YARDS in active:
             effects.append("Pro Style: +2 yards on a first-down pass")
         if (
-            play is OffensivePlayAction.RB_RUN
+            estimate.family is FootballCardFamily.RB_RUN
             and FootballCoachPerkKind.MATCHED_RUN_YARDS_REDUCTION in active
         ):
             effects.append("Run Stop: -2 yards on RB Run vs. RB Run scheme")
@@ -721,6 +789,8 @@ def _record_event(
     gross_yards: float | None = None,
     return_yards: float | None = None,
     blocked: bool = False,
+    card_id: str | None = None,
+    card_copy_id: str | None = None,
 ) -> FootballMatchState:
     event = FootballMatchEvent(
         sequence=len(state.match_events) + 1,
@@ -744,6 +814,8 @@ def _record_event(
         gross_yards=gross_yards,
         return_yards=return_yards,
         blocked=blocked,
+        card_id=card_id,
+        card_copy_id=card_copy_id,
     )
     events = state.match_events + (event,)
     first = events[0]
@@ -1048,7 +1120,14 @@ class FootballMatchSimulator:
             current_drive_defensive_scheme=selected_scheme,
             awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
         )
-        self.state = _record_event(updated, action=selected_scheme)
+        self.state = _record_event(
+            updated,
+            action=selected_scheme,
+            card_id=selected_scheme.value,
+            card_copy_id=(
+                selected_card.copy_id if selected_card is not None else None
+            ),
+        )
         self._cycle_played_card(
             _opponent(self.state.possession),
             offensive=False,
@@ -1087,7 +1166,7 @@ class FootballMatchSimulator:
         turnover = False
         incomplete = False
         turnover_type: FootballTurnoverType | None = None
-        if play_definition.family is FootballPlayFamily.PASS:
+        if play_definition.family is not FootballCardFamily.RB_RUN:
             roll = self.rng.random()
             interception_threshold = (
                 estimate.incomplete_probability
@@ -1154,6 +1233,10 @@ class FootballMatchSimulator:
                 scoring_team=scoring_team,
                 clock_seconds_used=result.clock_seconds_used,
                 perk_effects=result.perk_effects,
+                card_id=play.value,
+                card_copy_id=(
+                    selected_card.copy_id if selected_card is not None else None
+                ),
             )
             self.state = self._resolve_kickoff(
                 self.state,
@@ -1200,6 +1283,10 @@ class FootballMatchSimulator:
                 scoring_team=scoring_team,
                 clock_seconds_used=result.clock_seconds_used,
                 perk_effects=result.perk_effects,
+                card_id=play.value,
+                card_copy_id=(
+                    selected_card.copy_id if selected_card is not None else None
+                ),
             )
             return self._finish_play_action(
                 self.state,
@@ -1313,6 +1400,10 @@ class FootballMatchSimulator:
             scoring_team=scoring_team,
             clock_seconds_used=result.clock_seconds_used,
             perk_effects=result.perk_effects,
+            card_id=play.value,
+            card_copy_id=(
+                selected_card.copy_id if selected_card is not None else None
+            ),
         )
         return self._finish_play_action(
             self.state,
@@ -1534,6 +1625,8 @@ class FootballMatchSimulator:
         gross_yards: float | None = None
         perk_effects: tuple[str, ...] = ()
         description: str
+        selected_play: OffensivePlayAction | None = None
+        selected_card: FootballCardCopy | None = None
 
         if action is FootballConversionAction.EXTRA_POINT:
             blocked = self.rng.random() < EXTRA_POINT_BLOCK_CHANCE
@@ -1551,6 +1644,7 @@ class FootballMatchSimulator:
                 description = "Extra point missed"
         else:
             play, selected_card = self._select_offensive_card(play)
+            selected_play = play
             estimate = calculate_match_play_estimate(
                 self.state,
                 play,
@@ -1637,6 +1731,10 @@ class FootballMatchSimulator:
             blocked=blocked,
             clock_seconds_used=0,
             perk_effects=perk_effects,
+            card_id=selected_play.value if selected_play is not None else None,
+            card_copy_id=(
+                selected_card.copy_id if selected_card is not None else None
+            ),
         )
         if self.state.status is FootballMatchStatus.COMPLETED:
             return self.state

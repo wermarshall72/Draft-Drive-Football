@@ -1,4 +1,8 @@
-"""Reproducible seeded matchup and full-game balance measurements."""
+"""Reproducible seeded matchup and full-game balance measurements.
+
+Single-play samples cover every named offensive card; full-game samples cover
+Easy, Standard, and Hard local AI opponents.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from math import sqrt
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
+    FootballCardFamily,
     FootballCardCopy,
     FootballCoach,
     FootballCoachAssignment,
@@ -28,7 +33,6 @@ from src.engine.football_ai import FootballAI, FootballAIDifficulty
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
-    FootballPlayFamily,
 )
 from src.engine.football_simulator import (
     FootballMatchSimulator,
@@ -57,13 +61,7 @@ SCENARIOS = (
     Scenario("Ground and Pound + Run Stop + RB/O-line partners", 50.0, 50.0, coach_and_partnership=True),
 )
 
-PLAYS = (
-    OffensivePlayAction.RB_RUN,
-    OffensivePlayAction.JET_SWEEP,
-    OffensivePlayAction.SCREEN_PASS,
-    OffensivePlayAction.MEDIUM_PASS,
-    OffensivePlayAction.DEEP_PASS,
-)
+PLAYS = tuple(OffensivePlayAction)
 
 
 def _roster(
@@ -176,7 +174,10 @@ def _one_play(
     if result is None:
         raise RuntimeError("The simulator did not record the sampled play.")
     converted = not result.turnover and not result.incomplete and result.yards_gained >= distance
-    is_pass = OFFENSIVE_PLAY_CATALOG[play.value].family is FootballPlayFamily.PASS
+    is_pass = (
+        OFFENSIVE_PLAY_CATALOG[play.value].family
+        is not FootballCardFamily.RB_RUN
+    )
     is_run = not is_pass
     return (
         result.yards_gained,
@@ -228,7 +229,10 @@ def measure_plays(samples: int, seed: int) -> None:
                 useful += result[1]
                 negative += result[2]
                 converted += result[3]
-                is_pass = OFFENSIVE_PLAY_CATALOG[play.value].family is FootballPlayFamily.PASS
+                is_pass = (
+                    OFFENSIVE_PLAY_CATALOG[play.value].family
+                    is not FootballCardFamily.RB_RUN
+                )
                 if is_pass:
                     incompletions += result[4]
                 else:

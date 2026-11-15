@@ -759,25 +759,19 @@ class FootballShop:
 
 def _play_scheme_catalog() -> tuple[FootballShopCard, ...]:
     cards: list[FootballShopCard] = []
-    uncommon_ids = {"quick_out", "cover_two_shell", "fire_zone_blitz"}
     for kind, definitions in (
         ("play", OFFENSIVE_PLAY_CATALOG),
         ("scheme", DEFENSIVE_SCHEME_CATALOG),
     ):
         for definition in definitions.values():
-            rarity = (
-                FootballShopRarity.UNCOMMON
-                if definition.card_id in uncommon_ids
-                else FootballShopRarity.COMMON
-            )
             cards.append(
                 FootballShopCard(
                     card_id=f"{kind}:{definition.card_id}",
                     name=definition.name,
                     description=definition.description,
                     section=FootballShopSection.PLAYS_SCHEMES,
-                    rarity=rarity,
-                    cost=3 if rarity is FootballShopRarity.UNCOMMON else 2,
+                    rarity=FootballShopRarity.COMMON,
+                    cost=2,
                     eligible=lambda _roster: True,
                     effect=lambda roster: roster,
                     football_card=definition,
