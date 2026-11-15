@@ -9,6 +9,7 @@ from src.engine.football import (
     FootballCardCopy,
     FootballCoach,
     FootballCoachAssignment,
+    FootballCoachAssignment,
     FootballFourthDownAction,
     FootballMatchEvent,
     FootballMatchState,
@@ -480,10 +481,152 @@ def test_negative_yardage_increases_distance_and_turnover_flips_field_position()
     turnover = turnover_sim.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
     assert turnover.match_events[-1].play_result.turnover
     assert turnover.possession is FootballTeamSide.TEAM_B
-    assert turnover.offense_field_position == 78.0
+    assert turnover.offense_field_position == 75.0
     assert turnover.down == 1
     assert turnover.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
     assert turnover.current_drive_defensive_scheme is None
+
+
+def test_long_yardage_requires_the_actual_distance_on_later_downs() -> None:
+    simulator = _sim_with_scheme(
+        rng=SequenceRNG((0.99,), (-10.0,)),
+        yards_to_go=10.0,
+    )
+    negative = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert negative.down == 2
+    assert negative.yards_to_go == 16.0
+
+    simulator.rng = SequenceRNG((0.99,), (6.0,))
+    short = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    result = short.match_events[-1].play_result
+    assert result is not None
+    assert result.yards_gained == 10.0
+    assert short.down == 3
+    assert short.yards_to_go == 6.0
+
+
+@pytest.mark.parametrize(
+    ("gain", "converted"),
+    [(10.0, False), (15.0, True)],
+)
+def test_fourth_and_fifteen_requires_fifteen_yards(
+    gain: float, converted: bool
+) -> None:
+    simulator = FootballMatchSimulator(
+        _match_state(
+            down=4,
+            yards_to_go=15.0,
+            offense_field_position=25.0,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+            current_drive_defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
+        )
+    )
+    simulator.rng = SequenceRNG((0.99,), (gain - 4.0,))
+    simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+    state = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    result = state.match_events[-1].play_result
+    assert result is not None
+    assert result.yards_gained == gain
+    assert result.turnover_on_downs is not converted
+    assert state.possession is (
+        FootballTeamSide.TEAM_A if converted else FootballTeamSide.TEAM_B
+    )
+    if converted:
+        assert state.down == 1
+        assert state.offense_field_position == 40.0
+        assert state.yards_to_go == 10.0
+    else:
+        assert state.offense_field_position == 65.0
+
+
+def test_goal_to_go_exact_line_gain_scores_and_updates_possession() -> None:
+    simulator = _sim_with_scheme(
+        rng=SequenceRNG((0.99,), (-2.0,)),
+        yards_to_go=2.0,
+        offense_field_position=98.0,
+    )
+    state = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    result = state.match_events[-1].play_result
+    assert result is not None
+    assert result.yards_gained == 2.0
+    assert state.team_a_score == 7
+    assert state.possession is FootballTeamSide.TEAM_B
+
+
+@pytest.mark.parametrize("field_position", (2.0, 98.0))
+@pytest.mark.parametrize("down", (1, 4))
+@pytest.mark.parametrize("ball_hawk", (False, True))
+def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
+    field_position: float,
+    down: int,
+    ball_hawk: bool,
+) -> None:
+    pass_card = FootballCardCopy("interception:deep-pass", "deep_pass")
+    other_cards = (
+        FootballCardCopy("interception:rb-run", "rb_run"),
+        FootballCardCopy("interception:short-pass", "short_pass"),
+    )
+    offense_deck = FootballDeckState(
+        owned=(pass_card, *other_cards),
+        hand=(pass_card,),
+        draw_pile=other_cards,
+    )
+    away = _roster("Away")
+    if ball_hawk:
+        away = replace(
+            away,
+            coach_assignment=FootballCoachAssignment(
+                "balanced_offense", "ball_hawk"
+            ),
+        )
+    simulator = FootballMatchSimulator(
+        _match_state(
+            team_b=away,
+            down=down,
+            yards_to_go=8.0,
+            offense_field_position=field_position,
+            awaited_action=(
+                FootballAwaitedAction.FOURTH_DOWN_DECISION
+                if down == 4
+                else FootballAwaitedAction.DEFENSIVE_SCHEME
+            ),
+            current_drive_defensive_scheme=(
+                DefensiveSchemeAction.DEEP_PASS if down == 4 else None
+            ),
+            team_a_offense_deck=offense_deck,
+        )
+    )
+    simulator.rng = SequenceRNG((0.4,), (0.0,))
+    if down == 1:
+        simulator.select_defensive_scheme(DefensiveSchemeAction.DEEP_PASS)
+    else:
+        simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+
+    state = simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+    result = state.match_events[-1].play_result
+    expected_return = 10.0 if ball_hawk else 0.0
+    assert result is not None and result.turnover
+    assert result.yards_gained == 0.0
+    assert result.points_scored == 0
+    assert not result.turnover_on_downs
+    assert state.team_a_score == state.team_b_score == 0
+    assert state.possession is FootballTeamSide.TEAM_B
+    assert state.offense_field_position == min(
+        100.0, 100.0 - field_position + expected_return
+    )
+    assert state.game_clock_seconds == 882
+    assert state.current_drive_defensive_scheme is None
+    assert state.match_events[-1].scoring_team is None
+    assert state.match_events[-1].clock_seconds_used == 18
+    assert state.match_events[-1].action is OffensivePlayAction.DEEP_PASS
+    assert state.team_a_offense_deck is not None
+    assert state.team_a_offense_deck.discard_pile == (pass_card,)
+    assert pass_card not in state.team_a_offense_deck.hand
+    assert set(
+        state.team_a_offense_deck.hand
+        + state.team_a_offense_deck.draw_pile
+        + state.team_a_offense_deck.discard_pile
+    ) == set(state.team_a_offense_deck.owned)
 
 
 def test_negative_yardage_from_goal_to_go_uses_actual_line_to_gain():

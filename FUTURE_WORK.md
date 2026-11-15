@@ -23,8 +23,9 @@ or the design changes.
   status out of the default card comparison.
 - [ ] Implement approved player perk effects later, when their supporting game
   systems and trigger/reset rules are defined.
-- [ ] Define a replacement for the Option / Spread fourth-down perk; it is
-  disabled until a card-resolved effect is designed and approved.
+- [x] Define and implement the approved Option / Spread fourth-down perk:
+  +1 yard on a non-turnover run or completed pass when going for it. This value
+  is provisional and should be revisited during balance work.
 - [ ] Revisit AI difficulty and shop upgrade balance after the player base
   ratings change. Existing offsets and upgrade values are to remain unchanged
   for the initial player redesign.

@@ -67,7 +67,6 @@ PUNT_NET_YARDS = 40.0
 TOUCHBACK_START_YARDS = 25.0
 MIN_PLAY_YARDAGE_SPREAD = 1.0
 VOLATILITY_SPREAD_MULTIPLIER = 6.0
-TURNOVER_LOSS_YARDS = -3.0
 FATIGUE_RAMP_PLAYS = 30
 MAX_FATIGUE_POWER_REDUCTION = 0.10
 MATCHED_SCHEME_DEFENSE_MULTIPLIER = 1.12
@@ -737,7 +736,7 @@ class FootballMatchSimulator:
                 yards = 0.0
             elif roll < interception_threshold:
                 turnover = True
-                yards = TURNOVER_LOSS_YARDS
+                yards = 0.0
         elif self.rng.random() < TURNOVER_BASE_PROBABILITY + (
             MATCHED_SCHEME_TURNOVER_BONUS if same_scheme else 0.0
         ):
@@ -745,13 +744,11 @@ class FootballMatchSimulator:
             yards = min(yards, 0.0)
 
         if (
-            play_definition.family is FootballPlayFamily.RUN
+            play is OffensivePlayAction.RB_RUN
             and offense_perk is not None
             and offense_perk.kind is FootballCoachPerkKind.FIRST_RUN_YARDS
             and not any(
-                isinstance(event.action, OffensivePlayAction)
-                and OFFENSIVE_PLAY_CATALOG[event.action.value].family
-                is FootballPlayFamily.RUN
+                event.action is OffensivePlayAction.RB_RUN
                 for event in drive_events
             )
         ):
@@ -794,15 +791,26 @@ class FootballMatchSimulator:
             yards += offense_perk.value
             perk_effects.append("Pro Style: +2 yards on a first-down pass")
         if (
-            play_definition.family is FootballPlayFamily.RUN
-            and same_scheme
+            play is OffensivePlayAction.RB_RUN
+            and scheme is DefensiveSchemeAction.RB_RUN
             and not turnover
             and defense_perk is not None
             and defense_perk.kind
             is FootballCoachPerkKind.MATCHED_RUN_YARDS_REDUCTION
         ):
             yards -= defense_perk.value
-            perk_effects.append("Run Stop: -2 yards on the matched run")
+            perk_effects.append("Run Stop: -2 yards on RB Run vs. RB Run scheme")
+        if (
+            self.state.down == 4
+            and play_definition.family in (FootballPlayFamily.RUN, FootballPlayFamily.PASS)
+            and not incomplete
+            and not turnover
+            and offense_perk is not None
+            and offense_perk.kind
+            is FootballCoachPerkKind.FOURTH_DOWN_PLAY_YARDS
+        ):
+            yards += offense_perk.value
+            perk_effects.append("Option / Spread: +1 yard on a fourth-down play")
 
         clock_cost = (
             INCOMPLETE_PASS_CLOCK_SECONDS
@@ -916,7 +924,6 @@ class FootballMatchSimulator:
         else:
             line_to_gain = min(
                 self.state.yards_to_go,
-                FIRST_DOWN_YARDS,
                 _drive_yards_remaining(self.state.offense_field_position),
             )
             line_to_gain = max(0.1, line_to_gain)

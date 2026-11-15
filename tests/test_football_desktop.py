@@ -839,8 +839,7 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
     assert pair.offense.name in " ".join(displayed)
     assert pair.defense.name in " ".join(displayed)
     assert "Hover or tab to scout a coach." in displayed
-    assert "Play modifier sum" not in displayed
-    assert "Scheme modifier sum" not in displayed
+    assert "How position modifiers apply" not in displayed
 
     screen = desktop.run_screen
     offense = next(button for button in screen.buttons if button.label == "INSPECT OFFENSE 1")
@@ -854,7 +853,7 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": offense.rect.center}))
     text = render()
     assert f"Offense {pair.offense.name}" in text
-    assert "Play modifier sum" in text and "Scheme modifier sum" not in text
+    assert "How position modifiers apply" in text
     assert pair.offense.perk is not None
     assert pair.offense.perk.effect in text
     assert pair.defense.perk is not None
@@ -870,15 +869,15 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
     ))
     text = render()
     assert f"Defense {pair.defense.name}" in text
-    assert "Scheme modifier sum" in text and "Play modifier sum" not in text
+    assert "How position modifiers apply" in text
     assert pair.defense.perk.effect in text
     assert pair.offense.perk.effect not in text
 
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": (1, 1)}))
-    assert "Play modifier sum" not in render()
+    assert "How position modifiers apply" not in render()
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": defense.rect.center}))
     desktop.router.handle_event(pygame.event.Event(pygame.WINDOWLEAVE))
-    assert "Scheme modifier sum" not in render()
+    assert "How position modifiers apply" not in render()
 
     screen._focus(0)
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
@@ -887,7 +886,7 @@ def test_coach_inspection_is_side_specific_for_mouse_and_keyboard(
     assert f"Defense {pair.defense.name}" in render()
     assert controller.state.phase is FootballRunPhase.COACH_DRAFT
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
-    assert "Play modifier sum" not in render()
+    assert "How position modifiers apply" not in render()
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
     assert controller.state.selected_coach_pair is controller.state.team_builder.coach_offer[1]
 
@@ -1302,9 +1301,8 @@ def test_coach_detail_contains_all_data_without_clipping(tmp_path: Path, monkeyp
             football_run_screen_module._STAFF_NEGATIVE if modifier < 0 else
             football_run_screen_module._COACH_CHALK
         )
-    for action, percentage in coach.action_percentages.items():
-        label = football_run_screen_module._coach_action_label(action.value)
-        assert f"{label}  {percentage}%" in displayed
+    assert "How position modifiers apply" in displayed
+    assert any("Modifiers apply per player" in text for text in displayed)
     if coach.perk is None:
         assert "No perk." in displayed
     else:

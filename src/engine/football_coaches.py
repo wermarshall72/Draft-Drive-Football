@@ -13,8 +13,6 @@ from src.engine.football import (
     FootballCoachAssignment,
     FootballPosition,
     OffensivePlayAction,
-    matchup_for_scheme,
-    matchup_for_play,
 )
 from src.engine.football_decks import (
     STARTING_DEFENSIVE_ACTIONS,
@@ -29,6 +27,7 @@ class FootballCoachSide(str, Enum):
 
 class FootballCoachPerkKind(str, Enum):
     FIRST_RUN_YARDS = "first_run_yards"
+    FOURTH_DOWN_PLAY_YARDS = "fourth_down_play_yards"
     FIRST_COMPLETED_PASS_YARDS = "first_completed_pass_yards"
     FIRST_DOWN_PASS_YARDS = "first_down_pass_yards"
     MATCHED_RUN_YARDS_REDUCTION = "matched_run_yards_reduction"
@@ -140,28 +139,6 @@ class FootballCoachProfile:
             else DEFENSIVE_ACTIONS
         )
 
-    @property
-    def action_percentages(
-        self,
-    ) -> Mapping[OffensivePlayAction | DefensiveSchemeAction, int]:
-        percentages = {}
-        for play in OFFENSIVE_ACTIONS:
-            offense_positions, _ = matchup_for_play(play)
-            positions = (
-                offense_positions
-                if self.side is FootballCoachSide.OFFENSE
-                else matchup_for_scheme(DefensiveSchemeAction(play.value))[0]
-            )
-            action = (
-                play
-                if self.side is FootballCoachSide.OFFENSE
-                else DefensiveSchemeAction(play.value)
-            )
-            bonus = sum(self.position_modifiers[position] for position in positions)
-            percentages[action] = round((1.0 + bonus) * 100)
-        return MappingProxyType(percentages)
-
-
 @dataclass(frozen=True)
 class FootballCoachPair:
     offense: FootballCoachProfile
@@ -240,7 +217,14 @@ OFFENSIVE_COACHES = (
             FootballPosition.QB: -0.1,
             FootballPosition.O_LINE: 0.0,
         },
-        None,
+        _perk(
+            FootballCoachPerkKind.FOURTH_DOWN_PLAY_YARDS,
+            1,
+            "The offense chooses Go For It on fourth down.",
+            "+1 yard on a non-turnover run or completed pass.",
+            "That fourth-down play.",
+            "Eligible on every fourth-down card play.",
+        ),
     ),
     _profile(
         "air_raid",

@@ -1578,21 +1578,19 @@ class FootballRunScreen(Screen):
         action_y = rect.top + 298
         draw_text(
             surface,
-            "Play modifier sum" if coach.side is FootballCoachSide.OFFENSE
-            else "Scheme modifier sum",
-            (left, action_y), self._staff_main_font, _COACH_CHALK,
+            "How position modifiers apply",
+            (left, action_y),
+            self._staff_main_font,
+            _COACH_CHALK,
         )
-        font = self._staff_detail_font
-        for offset, (action, percentage) in enumerate(coach.action_percentages.items()):
-            x = left + (offset % 2) * 140
-            draw_text(
-                surface, f"{_coach_action_label(action.value)}  {percentage}%",
-                (x, action_y + 22 + (offset // 2) * 22), font, _COACH_CHALK,
-            )
-        draw_text(
-            surface, "100% + position modifiers; not team power",
-            (left, rect.bottom - 24),
-            self._staff_small_font, "#c1c6c4",
+        draw_wrapped_text(
+            surface,
+            "Modifiers apply per player; total power varies with roster stats, "
+            "partnerships, fatigue, and other effects.",
+            pygame.Rect(left, action_y + 23, rect.width - 32, rect.bottom - action_y - 32),
+            self._staff_detail_font,
+            "#c1c6c4",
+            line_gap=1,
         )
 
     def _draw_buttons(self, surface: pygame.Surface) -> None:
@@ -3364,15 +3362,3 @@ def _coach_perk_summary(coach: FootballCoachProfile) -> str:
     return (
         f"{perk.effect} {perk.trigger} {perk.duration} {perk.reset}"
     )
-
-
-def _coach_action_label(action: str) -> str:
-    labels = {
-        "rb_run": "RB Run",
-        "screen_pass": "Screen",
-        "pa_pass": "PA Pass",
-        "short_pass": "Short",
-        "medium_pass": "Medium",
-        "deep_pass": "Deep",
-    }
-    return labels[action]

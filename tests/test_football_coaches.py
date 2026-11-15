@@ -35,15 +35,20 @@ from src.engine.football_simulator import FootballMatchSimulator
 
 
 class FixedRNG(random.Random):
-    def __init__(self, rolls: tuple[float, ...] = (0.99,)) -> None:
+    def __init__(
+        self,
+        rolls: tuple[float, ...] = (0.99,),
+        uniforms: tuple[float, ...] = (),
+    ) -> None:
         super().__init__(0)
         self.rolls = iter(rolls)
+        self.uniforms = iter(uniforms)
 
     def random(self) -> float:
         return next(self.rolls, 0.99)
 
     def uniform(self, low: float, high: float) -> float:
-        return low
+        return next(self.uniforms, low)
 
 
 def _roster(
@@ -76,10 +81,21 @@ def _simulator(
     field_position: float = 25.0,
     scheme: DefensiveSchemeAction = DefensiveSchemeAction.DEEP_PASS,
     rolls: tuple[float, ...] = (0.99,),
+    uniforms: tuple[float, ...] = (),
+    power: float = 10.0,
 ) -> FootballMatchSimulator:
-    team_a = _roster("Home", offense_assignment)
-    team_b = _roster("Away", defense_assignment)
+    team_a = _roster(
+        "Home",
+        offense_assignment if possession is FootballTeamSide.TEAM_A else defense_assignment,
+        power=power,
+    )
+    team_b = _roster(
+        "Away",
+        defense_assignment if possession is FootballTeamSide.TEAM_A else offense_assignment,
+        power=power,
+    )
     offense_deck = _test_deck(OffensivePlayAction, "home-offense")
+    away_offense_deck = _test_deck(OffensivePlayAction, "away-offense")
     defense_deck = _test_deck(DefensiveSchemeAction, "away-defense")
     state = FootballMatchState(
         team_a=team_a,
@@ -100,10 +116,11 @@ def _simulator(
         ),
         current_drive_defensive_scheme=scheme if down == 4 else None,
         team_a_offense_deck=offense_deck,
+        team_b_offense_deck=away_offense_deck,
         team_b_defense_deck=defense_deck,
     )
     simulator = FootballMatchSimulator(state)
-    simulator.rng = FixedRNG(rolls)
+    simulator.rng = FixedRNG(rolls, uniforms)
     if down != 4:
         simulator.select_defensive_scheme(scheme)
     return simulator
@@ -131,20 +148,15 @@ def test_catalog_is_complete_side_scoped_and_has_all_six_actions() -> None:
     for coach in OFFENSIVE_COACHES:
         assert set(coach.position_modifiers) == set(OFFENSIVE_POSITIONS)
         assert coach.actions == OFFENSIVE_ACTIONS
-        assert set(coach.action_percentages) == set(OFFENSIVE_ACTIONS)
     for coach in DEFENSIVE_COACHES:
         assert set(coach.position_modifiers) == set(DEFENSIVE_POSITIONS)
         assert coach.actions == DEFENSIVE_ACTIONS
-        assert set(coach.action_percentages) == set(DEFENSIVE_ACTIONS)
 
 
 def test_specialists_distribute_position_modifiers_and_balanced_profiles_are_uniform() -> None:
     for coach in (*OFFENSIVE_COACHES[:4], *DEFENSIVE_COACHES[:4]):
         assert sorted(coach.position_modifiers.values()) == [-0.1, 0.0, 0.1, 0.2]
-        if coach.coach_id == "option_spread":
-            assert coach.perk is None
-        else:
-            assert coach.perk is not None
+        assert coach.perk is not None
     for coach in (OFFENSIVE_COACHES[-1], DEFENSIVE_COACHES[-1]):
         assert set(coach.position_modifiers.values()) == {0.05}
         assert coach.perk is None
@@ -231,57 +243,11 @@ def test_seeded_builder_generates_distinct_reproducible_pair_offers() -> None:
     assert all(pair in COACH_PAIR_OFFERS for pair in first.coach_offer)
 
 
-@pytest.mark.parametrize(
-    ("coach_id", "expected"),
-    [
-        ("ground_and_pound", 130),
-        ("option_spread", 120),
-        ("air_raid", 90),
-        ("pro_style", 100),
-    ],
-)
-def test_offensive_play_percentages_are_derived_from_contributing_positions(
-    coach_id: str, expected: int
-) -> None:
-    coach = COACHES_BY_ID[coach_id]
-    assert coach.action_percentages[OffensivePlayAction.RB_RUN] == expected
-
-
-def test_balanced_staff_gives_each_action_110_percent_without_perks() -> None:
-    for coach in (OFFENSIVE_COACHES[-1], DEFENSIVE_COACHES[-1]):
-        assert set(coach.action_percentages.values()) == {110}
-
-
-def test_full_action_modifier_tables_are_consistent_with_position_bonuses() -> None:
-    expected_offense = {
-        "ground_and_pound": (130, 110, 110, 100, 120, 90),
-        "option_spread": (120, 110, 110, 130, 90, 100),
-        "air_raid": (90, 110, 110, 120, 100, 130),
-        "pro_style": (100, 110, 110, 90, 130, 120),
-        "balanced_offense": (110, 110, 110, 110, 110, 110),
-    }
-    expected_defense = {
-        "run_stop": (130, 110, 110, 100, 120, 90),
-        "pressure_blitz": (120, 110, 110, 130, 90, 100),
-        "coverage": (90, 110, 110, 120, 100, 130),
-        "ball_hawk": (100, 110, 110, 90, 130, 120),
-        "balanced_defense": (110, 110, 110, 110, 110, 110),
-    }
-    for coach_id, expected in expected_offense.items():
-        coach = COACHES_BY_ID[coach_id]
-        assert tuple(coach.action_percentages[action] for action in OFFENSIVE_ACTIONS) == expected
-    for coach_id, expected in expected_defense.items():
-        coach = COACHES_BY_ID[coach_id]
-        assert tuple(
-            coach.action_percentages[DefensiveSchemeAction(action.value)]
-            for action in OFFENSIVE_ACTIONS
-        ) == expected
-
-
 def test_modifier_calculation_is_additive_and_never_mutates_base_players() -> None:
     simulator = _simulator(
         offense_assignment=_assignment("ground_and_pound"),
         scheme=DefensiveSchemeAction.DEEP_PASS,
+        power=50.0,
     )
     base_power = {
         position: player.power
@@ -292,8 +258,8 @@ def test_modifier_calculation_is_additive_and_never_mutates_base_players() -> No
     result = result_state.match_events[-1].play_result
 
     assert result is not None
-    assert result.offense_power == pytest.approx(23.0)
-    assert result.defense_power == pytest.approx(20.0)
+    assert result.offense_power == pytest.approx(115.0)
+    assert result.defense_power == pytest.approx(100.0)
     assert {
         position: player.power
         for position, player in result_state.team_a.players.items()
@@ -371,6 +337,25 @@ def test_ground_and_pound_spends_first_run_attempt_on_turnover() -> None:
     assert any("attempt used" in effect for effect in result.perk_effects)
 
 
+def test_ground_and_pound_triggers_only_on_first_rb_run_attempt() -> None:
+    simulator = _simulator(
+        offense_assignment=_assignment("ground_and_pound"),
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+    )
+    simulator.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
+    result = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert result.match_events[-1].play_result is not None
+    assert any("Ground and Pound" in item for item in result.match_events[-1].play_result.perk_effects)
+
+    other_run = _simulator(
+        offense_assignment=_assignment("ground_and_pound"),
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+    )
+    result = other_run.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
+    assert result.match_events[-1].play_result is not None
+    assert not result.match_events[-1].play_result.perk_effects
+
+
 def test_air_raid_first_completed_pass_skips_incomplete_and_applies_once() -> None:
     simulator = _simulator(
         offense_assignment=_assignment("air_raid"),
@@ -392,7 +377,7 @@ def test_air_raid_first_completed_pass_skips_incomplete_and_applies_once() -> No
     assert not next_completed.match_events[-1].play_result.perk_effects
 
 
-def test_pro_style_first_down_pass_applies_and_option_fourth_down_perk_is_disabled() -> None:
+def test_pro_style_first_down_pass_and_option_spread_fourth_down_perk() -> None:
     pro_style = _simulator(
         offense_assignment=_assignment("pro_style"),
         scheme=DefensiveSchemeAction.RB_RUN,
@@ -405,11 +390,12 @@ def test_pro_style_first_down_pass_applies_and_option_fourth_down_perk_is_disabl
     assert first_pass.match_events[-1].play_result.perk_effects
     assert second_pass.match_events[-1].play_result.perk_effects
 
-    assert COACHES_BY_ID["option_spread"].perk is None
+    assert COACHES_BY_ID["option_spread"].perk is not None
     option = _simulator(
         offense_assignment=_assignment("option_spread"),
         down=4,
-        yards_to_go=2.0,
+        yards_to_go=15.0,
+        uniforms=(9.0,),
     )
     option_state = option.resolve_fourth_down(
         FootballFourthDownAction.GO_FOR_IT
@@ -419,9 +405,75 @@ def test_pro_style_first_down_pass_applies_and_option_fourth_down_perk_is_disabl
     assert not option_state.match_events[-1].perk_effects
     played = option.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     assert played.match_events[-1].play_result is not None
-    assert "fourth-down" not in " ".join(
-        played.match_events[-1].play_result.perk_effects
-    ).lower()
+    result = played.match_events[-1].play_result
+    assert result is not None
+    assert result.yards_gained == pytest.approx(15.0)
+    assert result.perk_effects == (
+        "Option / Spread: +1 yard on a fourth-down play",
+    )
+    assert played.possession is FootballTeamSide.TEAM_A
+
+
+@pytest.mark.parametrize(
+    ("play", "rolls", "uniforms", "expected_yards", "eligible"),
+    [
+        (OffensivePlayAction.RB_RUN, (0.99,), (9.0,), 15.0, True),
+        (OffensivePlayAction.SHORT_PASS, (0.99,), (7.0,), 15.0, True),
+        (OffensivePlayAction.SHORT_PASS, (0.0,), (7.0,), 0.0, False),
+        (OffensivePlayAction.DEEP_PASS, (0.4,), (9.0,), 0.0, False),
+        (OffensivePlayAction.RB_RUN, (0.0,), (9.0,), 0.0, False),
+    ],
+)
+def test_option_spread_bonus_only_applies_to_non_turnover_fourth_down_plays(
+    play: OffensivePlayAction,
+    rolls: tuple[float, ...],
+    uniforms: tuple[float, ...],
+    expected_yards: float,
+    eligible: bool,
+) -> None:
+    simulator = _simulator(
+        offense_assignment=_assignment("option_spread"),
+        down=4,
+        yards_to_go=15.0,
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+        rolls=rolls,
+        uniforms=uniforms,
+    )
+    simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+    result_state = simulator.resolve_offensive_play(play)
+    result = result_state.match_events[-1].play_result
+    assert result is not None
+    assert result.yards_gained == pytest.approx(expected_yards)
+    assert bool(result.perk_effects) is eligible
+
+
+def test_option_spread_fourth_down_bonus_applies_for_either_team_and_can_score() -> None:
+    away = _simulator(
+        offense_assignment=_assignment("option_spread"),
+        possession=FootballTeamSide.TEAM_B,
+        down=4,
+        yards_to_go=1.0,
+        field_position=99.0,
+        scheme=DefensiveSchemeAction.RB_RUN,
+        uniforms=(-3.0,),
+    )
+    away.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+    scored = away.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert scored.team_b_score == 7
+    assert scored.match_events[-1].play_result is not None
+    assert scored.match_events[-1].play_result.perk_effects
+
+    no_perk = _simulator(
+        down=4,
+        yards_to_go=15.0,
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+        uniforms=(10.0,),
+    )
+    no_perk.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+    failed = no_perk.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert failed.match_events[-1].play_result is not None
+    assert failed.match_events[-1].play_result.yards_gained == pytest.approx(14.0)
+    assert failed.match_events[-1].play_result.turnover_on_downs
 
 
 def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers() -> None:
@@ -432,6 +484,22 @@ def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers()
     stopped = run_stop.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     assert stopped.match_events[-1].play_result is not None
     assert stopped.match_events[-1].play_result.perk_effects
+
+    wrong_play = _simulator(
+        defense_assignment=_assignment("balanced_offense", "run_stop"),
+        scheme=DefensiveSchemeAction.RB_RUN,
+    )
+    not_stopped = wrong_play.resolve_offensive_play(OffensivePlayAction.JET_SWEEP)
+    assert not_stopped.match_events[-1].play_result is not None
+    assert not not_stopped.match_events[-1].play_result.perk_effects
+
+    wrong_scheme = _simulator(
+        defense_assignment=_assignment("balanced_offense", "run_stop"),
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+    )
+    not_matched = wrong_scheme.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert not_matched.match_events[-1].play_result is not None
+    assert not not_matched.match_events[-1].play_result.perk_effects
 
     pressure = _simulator(
         defense_assignment=_assignment("balanced_offense", "pressure_blitz"),
@@ -460,7 +528,7 @@ def test_run_stop_pressure_coverage_and_ball_hawk_perks_have_matching_triggers()
     )
     returned = ball_hawk.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
     assert returned.possession is FootballTeamSide.TEAM_B
-    assert returned.offense_field_position == pytest.approx(88.0)
+    assert returned.offense_field_position == pytest.approx(85.0)
     assert returned.match_events[-1].play_result is not None
     assert returned.match_events[-1].play_result.perk_effects
 
@@ -523,15 +591,10 @@ def test_balanced_pair_combines_all_eight_position_bonuses() -> None:
     )
     assert set(pair.offense.position_modifiers.values()) == {0.05}
     assert set(pair.defense.position_modifiers.values()) == {0.05}
-    assert set(pair.offense.action_percentages.values()) == {110}
-    assert set(pair.defense.action_percentages.values()) == {110}
 
 
 def test_coach_perk_definitions_include_trigger_effect_duration_and_reset() -> None:
-    for coach in (
-        *(coach for coach in OFFENSIVE_COACHES[:-1] if coach.coach_id != "option_spread"),
-        *DEFENSIVE_COACHES[:-1],
-    ):
+    for coach in (*OFFENSIVE_COACHES[:-1], *DEFENSIVE_COACHES[:-1]):
         assert coach.perk is not None
         assert coach.perk.trigger.strip()
         assert coach.perk.effect.strip()
