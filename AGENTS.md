@@ -17,6 +17,10 @@ The existing auto-battler engine, controller, shop, and snapshot code are legacy
 
 See [FUTURE_WORK.md](FUTURE_WORK.md) for deferred redesign work and open decisions; update it when work is completed or the design changes.
 
+## System Map Maintenance
+* Consult the [system map](SYSTEM_MAP.md) before navigating or changing a feature. Update the relevant entries in the same change when feature locations, responsibilities, entry points, or relevant test locations materially change.
+* Keep entries concise and verified against the code. Routine changes that do not affect the map do not require a documentation edit.
+
 ## Development and Tests
 * Supported Python version: 3.10 or newer.
 * Install the test dependency with `python -m pip install -e ".[test]"`.

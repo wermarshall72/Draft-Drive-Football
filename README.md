@@ -52,21 +52,8 @@ Desktop run state is in memory only. The desktop gameplay flow uses
 `FootballGameController` and does not initialize or write to the legacy game
 database.
 
-The run UI is coordinated by `src/ui/football_run_screen.py`. Coach selection,
-player draft, shop, depth-chart/playbook review, and completed-game results have
-dedicated renderers in `football_coach_view.py`, `football_player_draft_view.py`,
-`football_shop_view.py`, `football_review_view.py`, and `football_result.py`
-under `src/ui/`. Match field, scoreboard/history, and hand/decision rendering
-live in `football_match_field.py`, `football_match_status.py`, and
-`football_match_decision_view.py`. The coordinator connects these views to
-controller actions and shared navigation; `football_match_palette.py` holds
-their shared colors.
-
-Match hand input, scrolling and field animation state live in
-`src/ui/football_match_interaction.py`; shop review mode and scrolling live in
-`src/ui/football_shop_review.py`. Coach and player inspection input state lives
-in `src/ui/football_draft_interaction.py`. Shared display labels and text
-fitting live in `src/ui/football_display.py` and `src/ui/text.py`.
+For code paths, feature ownership, and relevant tests, see the
+[system map](SYSTEM_MAP.md).
 
 ## Run the terminal client
 
