@@ -1249,26 +1249,136 @@ def test_blocked_kick_defensive_recovery_returns_from_both_sides(
     "decision",
     (FootballFourthDownAction.PUNT, FootballFourthDownAction.FIELD_GOAL),
 )
+@pytest.mark.parametrize(
+    ("field_position", "yards_to_go", "setback", "expected_receiving_position"),
+    (
+        (40.0, 10.0, 5.0, 65.0),
+        (40.0, 10.0, 0.0, 60.0),
+        (40.0, 10.0, 50.0, 99.0),
+        (98.0, 2.0, 5.0, 7.0),
+    ),
+)
+@pytest.mark.parametrize(
+    "kicking_team",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
 def test_blocked_kick_can_be_recovered_by_the_kicking_team(
+    decision: FootballFourthDownAction,
+    field_position: float,
+    yards_to_go: float,
+    setback: float,
+    expected_receiving_position: float,
+    kicking_team: FootballTeamSide,
+) -> None:
+    simulator = FootballMatchSimulator(
+        _match_state(
+            possession=kicking_team,
+            down=4,
+            yards_to_go=yards_to_go,
+            offense_field_position=field_position,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        )
+    )
+    initial_state = simulator.state
+    simulator.rng = SequenceRNG((0.0, 0.99), gauss_values=(setback,))
+    result = simulator.resolve_fourth_down(decision)
+
+    receiving_team = (
+        FootballTeamSide.TEAM_B
+        if kicking_team is FootballTeamSide.TEAM_A
+        else FootballTeamSide.TEAM_A
+    )
+    assert result.possession is receiving_team
+    assert result.offense_field_position == expected_receiving_position
+    assert result.down == 1
+    assert result.yards_to_go == 10.0
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+    assert result.current_drive_defensive_scheme is None
+    assert result.conversion_team is None
+    assert result.game_clock_seconds == initial_state.game_clock_seconds - (
+        10 if decision is FootballFourthDownAction.PUNT else 5
+    )
+    assert result.match_events[-1].description == (
+        "Blocked kick recovered by kicking team; turnover on downs"
+    )
+    assert result.team_a_score == initial_state.team_a_score
+    assert result.team_b_score == initial_state.team_b_score
+    for deck_name in (
+        "team_a_offense_deck",
+        "team_a_defense_deck",
+        "team_b_offense_deck",
+        "team_b_defense_deck",
+    ):
+        assert getattr(result, deck_name).owned == getattr(initial_state, deck_name).owned
+
+
+@pytest.mark.parametrize(
+    ("period", "clock", "team_b_score", "expected_period", "expected_status"),
+    (
+        (1, 1, 0, 2, FootballMatchStatus.IN_PROGRESS),
+        (2, 1, 0, 3, FootballMatchStatus.IN_PROGRESS),
+        (2, 1, 3, 2, FootballMatchStatus.COMPLETED),
+    ),
+)
+@pytest.mark.parametrize(
+    "decision",
+    (FootballFourthDownAction.PUNT, FootballFourthDownAction.FIELD_GOAL),
+)
+def test_blocked_kicking_team_recovery_preserves_period_transitions_and_decks(
+    period: int,
+    clock: int,
+    team_b_score: int,
+    expected_period: int,
+    expected_status: FootballMatchStatus,
     decision: FootballFourthDownAction,
 ) -> None:
     simulator = FootballMatchSimulator(
         _match_state(
             down=4,
-            offense_field_position=25.0,
+            offense_field_position=40.0,
+            game_clock_seconds=clock,
+            period=period,
+            team_b_score=team_b_score,
             awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
         )
     )
-    simulator.rng = SequenceRNG((0.0, 0.99), gauss_values=(4.0,))
+    initial_state = simulator.state
+    simulator.rng = SequenceRNG((0.0, 0.99), gauss_values=(5.0,))
     result = simulator.resolve_fourth_down(decision)
 
-    assert result.possession is FootballTeamSide.TEAM_A
-    assert result.offense_field_position == 21.0
-    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
-    assert result.current_drive_defensive_scheme is None
-    assert result.match_events[-1].description == (
-        "Blocked kick recovered by kicking team"
-    )
+    assert result.period == expected_period
+    assert result.status is expected_status
+    assert result.match_events[-1].clock_seconds_used == 1
+    if expected_status is FootballMatchStatus.COMPLETED:
+        assert result.final_result is not None
+        assert result.final_result.completed
+    elif expected_period == 2:
+        assert result.game_clock_seconds == REGULATION_PERIOD_SECONDS
+        assert result.possession is FootballTeamSide.TEAM_B
+        assert result.offense_field_position == 65.0
+    elif expected_period == 3:
+        assert result.game_clock_seconds == 300
+        assert result.down == 1
+        assert result.yards_to_go == 10.0
+        assert result.offense_field_position == 25.0
+        assert result.possession is FootballTeamSide.TEAM_A
+        assert result.current_drive_defensive_scheme is None
+        assert (result.team_a_score, result.team_b_score) == (0, 0)
+
+    for deck_name in (
+        "team_a_offense_deck",
+        "team_a_defense_deck",
+        "team_b_offense_deck",
+        "team_b_defense_deck",
+    ):
+        initial_deck = getattr(initial_state, deck_name)
+        final_deck = getattr(result, deck_name)
+        assert final_deck.owned == initial_deck.owned
+        assert len(final_deck.owned) == len(initial_deck.owned)
+        assert sorted(
+            card.copy_id
+            for card in (*final_deck.hand, *final_deck.draw_pile, *final_deck.discard_pile)
+        ) == sorted(card.copy_id for card in final_deck.owned)
 
 
 @pytest.mark.parametrize(

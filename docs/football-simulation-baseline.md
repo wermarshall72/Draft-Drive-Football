@@ -27,6 +27,13 @@ touchdown kicks after a defensive conversion return. Blocked punts and field
 goals resolve an automatic recovery and, for defensive recoveries, a return
 that can score a touchdown and trigger a conversion. Those recovery and return
 rates are provisional gameplay assumptions, not empirically calibrated.
+For kicking-team recoveries, the model samples a setback from the original
+line of scrimmage, truncated so the recovery spot cannot move forward. Since
+these kicks occur on fourth down and the model has no kicking-team advance
+outcome, every kicking-team recovery is a turnover on downs; the opponent
+starts at the mirrored recovery spot. This avoids granting an automatic first
+down and is a deliberate simplification. Defensive recoveries retain the
+existing return and touchdown flow.
 On two-point plays, drive-based run perks and matched-scheme pass effects use
 the normal context-aware estimate; first-down and fourth-down perks do not
 trigger on a conversion down. A defensive return on a conversion uses the
@@ -107,6 +114,15 @@ equal, uncountered RB run remained 3.68 yards on average and gained at least
 four yards 38.6% of the time (95% Wilson CI: 37.3%-40.0%) in the 5,000-play
 sample. These additional samples improve repeatability checks but do not
 replace human playtesting or independently validate the model assumptions.
+
+After the blocked-kick recovery adjustment, a fourth fresh-seed run
+(`20261117`) completed another 300 games per difficulty: Easy 35.88 combined
+points, 84.7 snaps, and 10.73 drives; Standard 37.37 points, 85.5 snaps, and
+10.34 drives; Hard 39.69 points, 84.9 snaps, and 10.70 drives. Points include
+both teams' final scores, overtime, conversions, and return scores. Snaps count
+events with a `play_result`, including overtime but excluding conversions;
+drives count defensive-scheme selections, including overtime. These are AI
+simulation measurements, not a manual desktop playtest.
 
 ## Historical references and limits
 

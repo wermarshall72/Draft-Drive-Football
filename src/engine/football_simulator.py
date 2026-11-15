@@ -1442,17 +1442,20 @@ class FootballMatchSimulator:
                     BLOCKED_KICK_OWN_RECOVERY_STANDARD_DEVIATION,
                 ),
             )
-            state = replace(
+            recovery_position = max(1.0, state.offense_field_position - setback)
+            state = _after_possession_change(
                 state,
-                down=1,
-                yards_to_go=FIRST_DOWN_YARDS,
-                offense_field_position=max(1.0, state.offense_field_position - setback),
-                game_clock_seconds=max(0, state.game_clock_seconds - clock_cost),
-                awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
-                current_drive_defensive_scheme=None,
-                conversion_team=None,
+                possession=return_team,
+                field_position=100.0 - recovery_position,
+                clock_cost=clock_cost,
             )
-            return state, 0.0, 0, None, "Blocked kick recovered by kicking team"
+            return (
+                state,
+                0.0,
+                0,
+                None,
+                "Blocked kick recovered by kicking team; turnover on downs",
+            )
 
         starting_position = 100.0 - state.offense_field_position
         return_yards = _clamp(
