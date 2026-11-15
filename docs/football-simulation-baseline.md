@@ -101,6 +101,10 @@ outcome, every kicking-team recovery is a turnover on downs; the opponent
 starts at the mirrored recovery spot. This avoids granting an automatic first
 down and is a deliberate simplification. Defensive recoveries retain the
 existing return and touchdown flow.
+After a non-scoring possession change, the new drive starts first-and-10 or
+first-and-goal at the remaining distance, whichever is shorter. If a
+non-scoring possession change would place the ball exactly on the opponent's
+goal line, the drive instead starts at the 99-yard line.
 On two-point plays, drive-based run perks and matched-scheme pass effects use
 the normal context-aware estimate; first-down and fourth-down perks do not
 trigger on a conversion down. A defensive return on a conversion uses the

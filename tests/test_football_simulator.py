@@ -581,6 +581,36 @@ def test_negative_yardage_increases_distance_and_turnover_flips_field_position()
     assert turnover.current_drive_defensive_scheme is None
 
 
+@pytest.mark.parametrize("kind", ("interception", "downs"))
+def test_turnover_inside_ten_starts_first_and_goal(kind: str) -> None:
+    if kind == "interception":
+        simulator = _sim_with_scheme(
+            scheme=DefensiveSchemeAction.RB_RUN,
+            rng=SequenceRNG((0.31,), (0.0,)),
+            offense_field_position=5.0,
+        )
+        result = simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+        assert result.match_events[-1].play_result.turnover
+    else:
+        simulator = FootballMatchSimulator(
+            _match_state(
+                down=4,
+                offense_field_position=5.0,
+                awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+                current_drive_defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
+            )
+        )
+        simulator.rng = SequenceRNG((0.99,), (-3.75,))
+        simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
+        result = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+        assert result.match_events[-1].play_result.turnover_on_downs
+    assert result.possession is FootballTeamSide.TEAM_B
+    assert result.offense_field_position == 95.0
+    assert result.down == 1 and result.yards_to_go == 5.0
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+    assert (result.team_a_score, result.team_b_score) == (0, 0)
+
+
 def test_long_yardage_requires_the_actual_distance_on_later_downs() -> None:
     simulator = _sim_with_scheme(
         rng=SequenceRNG((0.99,), (-10.0,)),
@@ -1291,7 +1321,7 @@ def test_blocked_kick_can_be_recovered_by_the_kicking_team(
     assert result.possession is receiving_team
     assert result.offense_field_position == expected_receiving_position
     assert result.down == 1
-    assert result.yards_to_go == 10.0
+    assert result.yards_to_go == min(10.0, 100.0 - expected_receiving_position)
     assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
     assert result.current_drive_defensive_scheme is None
     assert result.conversion_team is None
@@ -1412,6 +1442,7 @@ def test_blocked_kick_return_respects_goal_line_and_conversion_flow(
         assert event.points_scored == 0
         assert result.possession is FootballTeamSide.TEAM_B
         assert result.offense_field_position == 99.0
+        assert result.down == 1 and result.yards_to_go == 1.0
         assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
         return
 
@@ -1466,6 +1497,27 @@ def test_field_goal_distance_is_goal_distance_plus_ten_and_made_or_missed():
     assert missed_state.team_a_score == 0
     assert missed_state.possession is FootballTeamSide.TEAM_B
     assert missed_state.offense_field_position == 55.0
+
+
+@pytest.mark.parametrize("position", (0.0, 1.0, 5.0, 10.0, 12.0))
+def test_missed_field_goal_sets_new_drive_distance_to_goal(position: float) -> None:
+    simulator = FootballMatchSimulator(
+        _match_state(
+            down=4,
+            offense_field_position=position,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        )
+    )
+    simulator.rng = SequenceRNG((0.99, 0.99))
+    result = simulator.resolve_fourth_down(FootballFourthDownAction.FIELD_GOAL)
+    receiving_position = min(99.0, 100.0 - position)
+    assert result.possession is FootballTeamSide.TEAM_B
+    assert result.offense_field_position == receiving_position
+    assert result.down == 1
+    assert result.yards_to_go == min(10.0, 100.0 - receiving_position)
+    assert (result.team_a_score, result.team_b_score) == (0, 0)
+    assert result.match_events[-1].action is FootballFourthDownAction.FIELD_GOAL
+    assert "missed" in result.match_events[-1].description
 
 
 def test_conversion_at_expired_clock_is_untimed_and_completes_after_touchdown():

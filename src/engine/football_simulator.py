@@ -982,12 +982,16 @@ def _after_possession_change(
     field_position: float,
     clock_cost: int,
 ) -> FootballMatchState:
+    field_position = _clamp(field_position, 0.0, GOAL_LINE_YARDS)
+    if field_position == GOAL_LINE_YARDS:
+        # A non-scoring drive cannot start on the goal line with positive yards to go.
+        field_position = MAX_NONSCORING_RETURN_FIELD_POSITION
     return replace(
         state,
         possession=possession,
         down=1,
-        yards_to_go=FIRST_DOWN_YARDS,
-        offense_field_position=_clamp(field_position, 0.0, GOAL_LINE_YARDS),
+        yards_to_go=min(FIRST_DOWN_YARDS, _drive_yards_remaining(field_position)),
+        offense_field_position=field_position,
         game_clock_seconds=max(0, state.game_clock_seconds - clock_cost),
         awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
         current_drive_defensive_scheme=None,
@@ -1737,17 +1741,13 @@ class FootballMatchSimulator:
                 ),
             )
         else:
-            state = replace(
+            state = _after_possession_change(
                 state,
                 possession=receiving_team,
-                down=1,
-                yards_to_go=FIRST_DOWN_YARDS,
-                offense_field_position=field_position,
-                game_clock_seconds=max(0, state.game_clock_seconds - clock_seconds_used),
-                awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
-                current_drive_defensive_scheme=None,
-                conversion_team=None,
+                field_position=field_position,
+                clock_cost=clock_seconds_used,
             )
+            state = replace(state, conversion_team=None)
         state = _advance_period_if_expired(state, self.rng)
         return _record_event(
             state,

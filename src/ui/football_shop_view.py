@@ -50,7 +50,6 @@ class FootballShopView:
         self.unlock = unlock
         self.purchase = purchase
         self.dismiss_details = dismiss_details
-        self._selected_coach_card: FootballShopCard | None = None
         self._coach_detail_rect: pygame.Rect | None = None
         self._coach_detail_sections: tuple[str, ...] = ()
         self._active_coach_card_id: str | None = None
@@ -61,13 +60,9 @@ class FootballShopView:
         content: pygame.Rect,
         shop: FootballShopState | None,
         transition_message: str | None = None,
-        *,
-        focus_index: int | None = None,
-        hover_index: int | None = None,
     ) -> list[Button]:
         if shop is None:
             raise RuntimeError("The controller did not provide the active shop state.")
-        self._selected_coach_card = None
         self._coach_detail_rect = None
         self._coach_detail_sections = ()
         if self._active_coach_card_id is not None:
@@ -133,8 +128,6 @@ class FootballShopView:
         panel_width = (content.width - gap * 2) // 3
         panel_height = max(1, panel_bottom - panel_top)
         buttons: list[Button] = []
-        selected_coach_card = None
-        coach_panel: pygame.Rect | None = None
         for section_index, section_id in enumerate(FootballShopSection):
             section = shop.section(section_id)
             panel = pygame.Rect(
@@ -144,8 +137,6 @@ class FootballShopView:
                 panel_height,
             )
             draw_panel(surface, panel, self.theme, fill=self.theme.panel)
-            if section_id is FootballShopSection.COACH_UPGRADES:
-                coach_panel = panel
             draw_text(
                 surface,
                 section.title,
@@ -184,22 +175,7 @@ class FootballShopView:
                     slot,
                     buttons,
                     shop,
-                    focus_index=focus_index,
-                    hover_index=hover_index,
                 )
-                if self._selected_coach_card is not None:
-                    selected_coach_card = self._selected_coach_card
-
-        if selected_coach_card is not None and coach_panel is not None:
-            self._active_coach_card_id = selected_coach_card.card_id
-            pygame.draw.rect(surface, self.theme.canvas, content)
-            return [
-                self._draw_coach_details(
-                    surface,
-                    content,
-                    selected_coach_card,
-                )
-            ]
 
         footer_top = content.bottom - 44
         reroll_rect = pygame.Rect(
@@ -264,9 +240,6 @@ class FootballShopView:
         slot: FootballShopSlotState,
         buttons: list[Button],
         shop: FootballShopState,
-        *,
-        focus_index: int | None = None,
-        hover_index: int | None = None,
     ) -> None:
         remaining_ap = shop.remaining_ap
         card = slot.card
@@ -530,7 +503,6 @@ class FootballShopView:
         )
 
         if is_coach_upgrade:
-            detail_index = len(buttons)
             buttons.append(
                 Button(
                     "DETAILS",
@@ -540,12 +512,6 @@ class FootballShopView:
                     variant="quiet",
                 )
             )
-            if focus_index in (detail_index, detail_index + 1) or hover_index in (
-                detail_index,
-                detail_index + 1,
-            ):
-                self._selected_coach_card = card
-
         buttons.append(
             Button(
                 button_label,

@@ -113,28 +113,27 @@ class FootballRunScreen(Screen):
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is None
         ):
+            if self._focus_shop_navigation_after_details:
+                return
             shop_view = self._shop_view()
             if shop_view.coach_details_open:
                 details_rect = shop_view.coach_details_rect
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     self._close_coach_details()
-                    self.hover_index = None
+                    return
+                if details_rect is None:
                     return
                 if (
                     event.type == pygame.MOUSEMOTION
-                    and details_rect is not None
                     and not details_rect.collidepoint(event.pos)
                 ):
                     self._close_coach_details()
-                    self.hover_index = None
                     return
                 if (
                     event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP)
-                    and details_rect is not None
                     and not details_rect.collidepoint(event.pos)
                 ):
                     self._close_coach_details()
-                    self.hover_index = None
                     return
         if (
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
@@ -279,17 +278,18 @@ class FootballRunScreen(Screen):
                 restore_navigation_focus = (
                     self._focus_shop_navigation_after_details
                 )
+                if (
+                    shop_view.coach_details_open
+                    and shop_view.coach_details_rect is None
+                ):
+                    self.focus_index = 0
+                    self.hover_index = None
+                    self.pressed_index = None
                 shop_buttons = shop_view.draw(
                     surface,
                     content,
                     state.shop,
                     state.transition_message,
-                    focus_index=(
-                        None if restore_navigation_focus else self.focus_index
-                    ),
-                    hover_index=(
-                        None if restore_navigation_focus else self.hover_index
-                    ),
                 )
                 if restore_navigation_focus:
                     self.focus_index = next(
@@ -608,6 +608,8 @@ class FootballRunScreen(Screen):
 
     def _close_coach_details(self) -> None:
         self._shop_view().close_coach_details()
+        self.hover_index = None
+        self.pressed_index = None
         self._focus_shop_navigation_after_details = True
 
     def _purchase_shop_card(
@@ -674,6 +676,11 @@ class FootballRunScreen(Screen):
         self._submit(self._require_controller().move_to_next_day)
 
     def _request_exit(self) -> None:
+        if (
+            self._current_state().phase is FootballRunPhase.PRE_MATCH_SHOP
+            and self._shop_view().coach_details_open
+        ):
+            self._close_coach_details()
         self.confirm_exit = True
 
     def _keep_playing(self) -> None:

@@ -4,6 +4,7 @@ import pytest
 
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballAutomaticAction,
     FootballAwaitedAction,
     FootballCardCopy,
     FootballCardFamily,
@@ -1035,6 +1036,93 @@ def test_punt_returns_stop_before_goal_line(
     assert result.possession is FootballTeamSide.TEAM_B
     assert result.offense_field_position == pytest.approx(expected_field_position)
     assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+
+
+@pytest.mark.parametrize("return_type", ("kickoff", "punt"))
+@pytest.mark.parametrize("with_upgrade", (False, True))
+@pytest.mark.parametrize("position", (88.0, 90.0, 95.0, 99.0))
+def test_returns_start_drive_with_correct_goal_distance_and_next_play(
+    return_type: str, with_upgrade: bool, position: float,
+) -> None:
+    upgrade = _coach_card(f"{return_type}_return_lane").coach_upgrade_effect
+    assert upgrade is not None
+    bonus = upgrade.magnitude if with_upgrade else 0.0
+    run_card = FootballCardCopy("return-test:run", OffensivePlayAction.RB_RUN.value)
+    scheme_card = FootballCardCopy("return-test:scheme", DefensiveSchemeAction.RB_RUN.value)
+    state = _match_state(
+        down=4 if return_type == "punt" else 1,
+        offense_field_position=0.0 if return_type == "punt" else 30.0,
+        awaited_action=(
+            FootballAwaitedAction.FOURTH_DOWN_DECISION
+            if return_type == "punt"
+            else FootballAwaitedAction.DEFENSIVE_SCHEME
+        ),
+        current_drive_defensive_scheme=(
+            DefensiveSchemeAction.RB_RUN if return_type == "punt" else None
+        ),
+        team_b_coach_upgrades=(upgrade,) if with_upgrade else (),
+        team_b_offense_deck=FootballDeckState((run_card,), hand=(run_card,)),
+        team_a_defense_deck=FootballDeckState((scheme_card,), hand=(scheme_card,)),
+    )
+    simulator = FootballMatchSimulator(state)
+    state = simulator.state
+    if return_type == "kickoff":
+        simulator.rng.random = iter((0.99, 0.99)).__next__
+        simulator.rng.gauss = lambda _mean, _deviation: position - bonus
+        result = simulator._resolve_kickoff(state, FootballTeamSide.TEAM_A)
+        expected_return = position
+    else:
+        simulator.rng.random = iter((0.99, 0.0)).__next__
+        gauss_values = iter((15.0, position - 85.0 - bonus))
+        simulator.rng.gauss = lambda _mean, _deviation: next(gauss_values)
+        result = simulator.resolve_fourth_down(FootballFourthDownAction.PUNT)
+        expected_return = position - 85.0
+
+    assert result.possession is FootballTeamSide.TEAM_B
+    assert result.offense_field_position == pytest.approx(position)
+    assert result.down == 1
+    assert result.yards_to_go == pytest.approx(min(10.0, 100.0 - position))
+    assert (result.team_a_score, result.team_b_score) == (0, 0)
+    assert len(result.match_events) == 1
+    assert result.match_events[-1].action is (
+        FootballAutomaticAction.KICKOFF
+        if return_type == "kickoff"
+        else FootballFourthDownAction.PUNT
+    )
+    assert result.match_events[-1].return_yards == pytest.approx(expected_return)
+    assert result.match_events[-1].points_scored == 0
+    assert result.match_events[-1].possession is FootballTeamSide.TEAM_B
+    assert result.match_events[-1].offense_field_position == pytest.approx(position)
+    assert result.match_events[-1].down == 1
+    assert result.match_events[-1].yards_to_go == pytest.approx(result.yards_to_go)
+
+    simulator.state = result
+    simulator.select_defensive_scheme(DefensiveSchemeAction.RB_RUN)
+    estimate = calculate_match_play_estimate(simulator.state, OffensivePlayAction.RB_RUN)
+    gain = 0.5 if position == 99.0 else 2.0
+    simulator.rng.uniform = lambda _low, _high: gain - estimate.yards_on_success
+    simulator.rng.random = lambda: 0.99
+    after_play = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert after_play.possession is FootballTeamSide.TEAM_B
+    assert after_play.down == 2
+    assert after_play.yards_to_go == pytest.approx(min(10.0, 100.0 - position) - gain)
+    assert after_play.match_events[-1].play_result.yards_gained == pytest.approx(gain)
+    assert (after_play.team_a_score, after_play.team_b_score) == (0, 0)
+    if position == 88.0:
+        estimate = calculate_match_play_estimate(simulator.state, OffensivePlayAction.RB_RUN)
+        simulator.rng.uniform = lambda _low, _high: 8.0 - estimate.yards_on_success
+        first_down = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+        assert first_down.down == 1
+        assert first_down.offense_field_position == pytest.approx(98.0)
+        assert first_down.yards_to_go == pytest.approx(2.0)
+        assert first_down.team_b_score == 0
+    if position == 99.0:
+        estimate = calculate_match_play_estimate(simulator.state, OffensivePlayAction.RB_RUN)
+        simulator.rng.uniform = lambda _low, _high: 1.0 - estimate.yards_on_success
+        touchdown = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+        assert touchdown.team_b_score == 6
+        assert touchdown.awaited_action is FootballAwaitedAction.CONVERSION
+        assert touchdown.match_events[-1].points_scored == 6
 
 
 def _controller_with_bye(shop_catalogs=None) -> FootballGameController:
