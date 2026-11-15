@@ -1142,8 +1142,9 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "punt_return_lane",
             "Punt Return Lane",
-            "Add 2 yards to each punt return your team makes; existing return "
-            "yardage limits still apply. Return chance is unchanged.",
+            "Add 2 yards to each punt return your team makes. Non-scoring "
+            "returns stop one yard short of the goal line; return chance is "
+            "unchanged.",
             FootballCoachUpgradeKind.PUNT_RETURN_YARDS_BONUS,
             2,
             uncommon,
@@ -1152,9 +1153,9 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "kickoff_return_lane",
             "Kickoff Return Lane",
-            "Add 2 yards to each kickoff return your team makes; existing return "
-            "yardage limits still apply. Touchback and touchdown chances are "
-            "unchanged.",
+            "Add 2 yards to each kickoff return your team makes. Non-scoring "
+            "returns stop one yard short of the goal line; touchback and "
+            "touchdown chances are unchanged.",
             FootballCoachUpgradeKind.KICKOFF_RETURN_YARDS_BONUS,
             2,
             uncommon,

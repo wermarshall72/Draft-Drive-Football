@@ -88,6 +88,8 @@ class FootballRunScreen(Screen):
         self._draft_small_font = staff_font(13)
         self._draft_button_font = staff_font(17, semibold=True)
         self.shop_review = ShopReviewInteraction()
+        self._shop_view_instance: FootballShopView | None = None
+        self._focus_shop_navigation_after_details = False
         self._result_view = FootballResultView(
             self._display_font, self._title_font, self._label_font, self._small_font,
             self._open_next_shop, self._return_to_menu,
@@ -102,9 +104,38 @@ class FootballRunScreen(Screen):
         self.coach_inspection = CoachInspection(focus_changed_at=pygame.time.get_ticks())
         self.player_inspection = PlayerInspection()
         self.shop_review = ShopReviewInteraction()
+        self._shop_view_instance = None
+        self._focus_shop_navigation_after_details = False
 
     def handle_event(self, event: pygame.event.Event) -> None:
         state = self._current_state()
+        if (
+            state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and self.shop_review.mode is None
+        ):
+            shop_view = self._shop_view()
+            if shop_view.coach_details_open:
+                details_rect = shop_view.coach_details_rect
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self._close_coach_details()
+                    self.hover_index = None
+                    return
+                if (
+                    event.type == pygame.MOUSEMOTION
+                    and details_rect is not None
+                    and not details_rect.collidepoint(event.pos)
+                ):
+                    self._close_coach_details()
+                    self.hover_index = None
+                    return
+                if (
+                    event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP)
+                    and details_rect is not None
+                    and not details_rect.collidepoint(event.pos)
+                ):
+                    self._close_coach_details()
+                    self.hover_index = None
+                    return
         if (
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is not None
@@ -245,16 +276,33 @@ class FootballRunScreen(Screen):
                 self._draw_buttons(surface)
             else:
                 shop_view = self._shop_view()
-                self._set_buttons(
-                    shop_view.draw(
-                        surface,
-                        content,
-                        state.shop,
-                        state.transition_message,
-                        focus_index=self.focus_index,
-                        hover_index=self.hover_index,
-                    )
+                restore_navigation_focus = (
+                    self._focus_shop_navigation_after_details
                 )
+                shop_buttons = shop_view.draw(
+                    surface,
+                    content,
+                    state.shop,
+                    state.transition_message,
+                    focus_index=(
+                        None if restore_navigation_focus else self.focus_index
+                    ),
+                    hover_index=(
+                        None if restore_navigation_focus else self.hover_index
+                    ),
+                )
+                if restore_navigation_focus:
+                    self.focus_index = next(
+                        (
+                            index
+                            for index, button in enumerate(shop_buttons)
+                            if button.label == "DEPTH CHART"
+                        ),
+                        0,
+                    )
+                    self.hover_index = None
+                    self._focus_shop_navigation_after_details = False
+                self._set_buttons(shop_buttons)
                 self._draw_buttons(surface)
         else:
             self._set_buttons(self._result_view.draw(surface, content, state, self.theme))
@@ -542,15 +590,25 @@ class FootballRunScreen(Screen):
         self.shop_review.open_depth_chart()
 
     def _shop_view(self) -> FootballShopView:
-        return FootballShopView(
-            self.theme, self._small_font, self._label_font, self._move_to_next_day,
-            self._open_depth_chart, self.shop_review.open_playbook,
-            lambda: self._submit(self._require_controller().finish_shop),
-            lambda section, number: self._submit(
-                lambda: self._require_controller().unlock_shop_slot(section, number)
-            ),
-            self._purchase_shop_card,
-        )
+        if self._shop_view_instance is None:
+            self._shop_view_instance = FootballShopView(
+                self.theme, self._small_font, self._label_font,
+                self._move_to_next_day, self._open_depth_chart,
+                self.shop_review.open_playbook,
+                lambda: self._submit(self._require_controller().finish_shop),
+                lambda section, number: self._submit(
+                    lambda: self._require_controller().unlock_shop_slot(
+                        section, number
+                    )
+                ),
+                self._purchase_shop_card,
+                self._close_coach_details,
+            )
+        return self._shop_view_instance
+
+    def _close_coach_details(self) -> None:
+        self._shop_view().close_coach_details()
+        self._focus_shop_navigation_after_details = True
 
     def _purchase_shop_card(
         self, section: FootballShopSection, card_id: str, is_removal: bool,

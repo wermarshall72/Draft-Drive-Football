@@ -116,6 +116,8 @@ upgrade's purchase cost and rarity are separate from those slot-unlock costs.
 Purchased match effects remain active for later games in the run; future-shop
 AP bonuses apply only to later shops. These initial values are provisional
 gameplay assumptions, not empirically calibrated balance targets.
+Future-shop AP upgrades are offered through scheduled game 9, but not in game
+10 because no subsequent shop remains.
 
 | Upgrade | Rarity | Cost | Effect |
 |---|---|---:|---|
@@ -135,8 +137,8 @@ gameplay assumptions, not empirically calibrated balance targets.
 | Ball-Security Clinic | Rare | 3 AP | -20% relative conditional interception chance; fumble risk is unchanged |
 | Field-Goal Lab | Rare | 4 AP | +5 percentage points to conditional make probability given an unblocked kick, capped at 100%; 0.5% block risk is unchanged |
 | Clean-Pocket Protection | Uncommon | 3 AP | -25% relative punt and field-goal block chance; extra-point block chance is unchanged |
-| Punt Return Lane | Uncommon | 2 AP | +2 yards per punt return, subject to existing yardage limits |
-| Kickoff Return Lane | Uncommon | 2 AP | +2 yards per kickoff return, subject to existing yardage limits |
+| Punt Return Lane | Uncommon | 2 AP | +2 yards per punt return; non-scoring returns stop one yard short of the goal line |
+| Kickoff Return Lane | Uncommon | 2 AP | +2 yards per kickoff return; non-scoring returns stop one yard short of the goal line, and touchback/touchdown chances are unchanged |
 
 Power bonuses apply after existing coach, partnership, fatigue, and scheme
 calculations; offense and defense upgrades use separate +20% caps. Volatility

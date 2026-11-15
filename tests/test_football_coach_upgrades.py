@@ -954,6 +954,89 @@ def test_kick_block_risk_and_return_yard_effects_apply_only_to_the_human_team() 
     assert kickoff_event.return_yards == 27.0
 
 
+@pytest.mark.parametrize("with_upgrade", (False, True))
+@pytest.mark.parametrize(
+    ("raw_field_position", "expected_return_yards", "expected_field_position"),
+    (
+        (98.9, 98.9, 98.9),
+        (100.0, 99.0, 99.0),
+        (101.0, 99.0, 99.0),
+    ),
+)
+def test_kickoff_returns_stop_before_goal_line(
+    raw_field_position: float,
+    expected_return_yards: float,
+    expected_field_position: float,
+    with_upgrade: bool,
+) -> None:
+    upgrade = _coach_card("kickoff_return_lane").coach_upgrade_effect
+    assert upgrade is not None
+    bonus = upgrade.magnitude if with_upgrade else 0.0
+    state = _match_state(
+        team_b_coach_upgrades=(upgrade,) if with_upgrade else (),
+    )
+    simulator = FootballMatchSimulator(state)
+    simulator.rng.random = iter((0.99, 0.99)).__next__
+    simulator.rng.gauss = lambda _mean, _deviation: raw_field_position - bonus
+
+    result = simulator._resolve_kickoff(state, FootballTeamSide.TEAM_A)
+    event = result.match_events[-1]
+
+    assert event.points_scored == 0
+    assert event.scoring_team is None
+    assert event.description == f"Kickoff returned {expected_return_yards:.1f} yards"
+    assert event.return_yards == pytest.approx(expected_return_yards)
+    assert result.team_a_score == result.team_b_score == 0
+    assert result.possession is FootballTeamSide.TEAM_B
+    assert result.offense_field_position == pytest.approx(expected_field_position)
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+
+
+@pytest.mark.parametrize("with_upgrade", (False, True))
+@pytest.mark.parametrize(
+    ("raw_field_position", "expected_return_yards", "expected_field_position"),
+    (
+        (98.9, 13.9, 98.9),
+        (100.0, 14.0, 99.0),
+        (101.0, 14.0, 99.0),
+    ),
+)
+def test_punt_returns_stop_before_goal_line(
+    raw_field_position: float,
+    expected_return_yards: float,
+    expected_field_position: float,
+    with_upgrade: bool,
+) -> None:
+    upgrade = _coach_card("punt_return_lane").coach_upgrade_effect
+    assert upgrade is not None
+    bonus = upgrade.magnitude if with_upgrade else 0.0
+    state = _match_state(
+        down=4,
+        offense_field_position=0.0,
+        awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+        team_b_coach_upgrades=(upgrade,) if with_upgrade else (),
+    )
+    simulator = FootballMatchSimulator(state)
+    simulator.rng.random = iter((0.99, 0.0)).__next__
+    gauss_values = iter((15.0, raw_field_position - 85.0 - bonus))
+    simulator.rng.gauss = lambda _mean, _deviation: next(gauss_values)
+
+    result = simulator.resolve_fourth_down(FootballFourthDownAction.PUNT)
+    event = result.match_events[-1]
+
+    assert event.points_scored == 0
+    assert event.scoring_team is None
+    assert event.description == (
+        f"Punt 15.0 yards, returned {expected_return_yards:.1f}"
+    )
+    assert event.return_yards == pytest.approx(expected_return_yards)
+    assert result.team_a_score == result.team_b_score == 0
+    assert result.possession is FootballTeamSide.TEAM_B
+    assert result.offense_field_position == pytest.approx(expected_field_position)
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+
+
 def _controller_with_bye(shop_catalogs=None) -> FootballGameController:
     return FootballGameController(
         "Human Team",

@@ -38,6 +38,7 @@ class FootballShopView:
         open_playbook: Callable[[], None], finish: Callable[[], None],
         unlock: Callable[[FootballShopSection, int], None],
         purchase: Callable[[FootballShopSection, str, bool], None],
+        dismiss_details: Callable[[], None],
     ) -> None:
         self.theme = theme
         self._small_font = small_font
@@ -48,9 +49,11 @@ class FootballShopView:
         self.finish = finish
         self.unlock = unlock
         self.purchase = purchase
+        self.dismiss_details = dismiss_details
         self._selected_coach_card: FootballShopCard | None = None
         self._coach_detail_rect: pygame.Rect | None = None
         self._coach_detail_sections: tuple[str, ...] = ()
+        self._active_coach_card_id: str | None = None
 
     def draw(
         self,
@@ -67,6 +70,26 @@ class FootballShopView:
         self._selected_coach_card = None
         self._coach_detail_rect = None
         self._coach_detail_sections = ()
+        if self._active_coach_card_id is not None:
+            card = next(
+                (
+                    slot.card
+                    for slot in shop.section(
+                        FootballShopSection.COACH_UPGRADES
+                    ).slots
+                    if slot.card is not None
+                    and slot.card.card_id == self._active_coach_card_id
+                ),
+                None,
+            )
+            if card is None:
+                self._active_coach_card_id = None
+            else:
+                pygame.draw.rect(surface, self.theme.canvas, content)
+                close_button = self._draw_coach_details(
+                    surface, content, card
+                )
+                return [close_button]
         draw_text(
             surface,
             "THREE SHOPS  /  ONE SHARED AP BUDGET",
@@ -168,12 +191,15 @@ class FootballShopView:
                     selected_coach_card = self._selected_coach_card
 
         if selected_coach_card is not None and coach_panel is not None:
-            self._draw_coach_details(
-                surface,
-                content,
-                coach_panel,
-                selected_coach_card,
-            )
+            self._active_coach_card_id = selected_coach_card.card_id
+            pygame.draw.rect(surface, self.theme.canvas, content)
+            return [
+                self._draw_coach_details(
+                    surface,
+                    content,
+                    selected_coach_card,
+                )
+            ]
 
         footer_top = content.bottom - 44
         reroll_rect = pygame.Rect(
@@ -508,7 +534,7 @@ class FootballShopView:
             buttons.append(
                 Button(
                     "DETAILS",
-                    lambda: None,
+                    lambda card_id=card.card_id: self.open_coach_details(card_id),
                     detail_rect,
                     enabled=True,
                     variant="quiet",
@@ -536,18 +562,30 @@ class FootballShopView:
             )
         )
 
+    @property
+    def coach_details_open(self) -> bool:
+        return self._active_coach_card_id is not None
+
+    @property
+    def coach_details_rect(self) -> pygame.Rect | None:
+        return self._coach_detail_rect
+
+    def open_coach_details(self, card_id: str) -> None:
+        self._active_coach_card_id = card_id
+
+    def close_coach_details(self) -> None:
+        self._active_coach_card_id = None
+        self._coach_detail_rect = None
+        self._coach_detail_sections = ()
+
     def _draw_coach_details(
         self,
         surface: pygame.Surface,
         content: pygame.Rect,
-        coach_panel: pygame.Rect,
         card: FootballShopCard,
-    ) -> None:
+    ) -> Button:
         sections = coach_upgrade_detail_sections(card)
-        panel_width = min(
-            content.width - 24,
-            coach_panel.width * 2 + 10,
-        )
+        panel_width = min(content.width - 24, 980)
         inner_width = panel_width - 24
         title_lines = wrap_text_lines(sections[0], self._label_font, inner_width)
         body_lines = tuple(
@@ -557,10 +595,10 @@ class FootballShopView:
         )
         title_height = len(title_lines) * (self._label_font.get_height() + 2)
         body_height = len(body_lines) * (self._small_font.get_height() + 2)
-        panel_height = title_height + body_height + 28
+        panel_height = title_height + body_height + 68
         panel_rect = pygame.Rect(
-            content.left + 12,
-            coach_panel.centery - panel_height // 2,
+            content.centerx - panel_width // 2,
+            content.centery - panel_height // 2,
             panel_width,
             panel_height,
         )
@@ -590,4 +628,16 @@ class FootballShopView:
             self._small_font,
             self.theme.text,
             line_gap=2,
+        )
+        close_rect = pygame.Rect(
+            panel_rect.right - 152,
+            panel_rect.bottom - 38,
+            140,
+            28,
+        )
+        return Button(
+            "CLOSE DETAILS",
+            self.dismiss_details,
+            close_rect,
+            variant="primary",
         )

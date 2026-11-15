@@ -116,6 +116,7 @@ MATCHUP_TURNOVER_SENSITIVITY = 0.04
 MATCHED_SCHEME_TURNOVER_BONUS = 0.005
 MIN_PLAY_YARDAGE = -5.0
 MAX_PLAY_YARDAGE = 25.0
+MAX_NONSCORING_RETURN_FIELD_POSITION = GOAL_LINE_YARDS - 1.0
 PASS_INTERCEPTION_PROBABILITIES = {
     FootballCardFamily.SCREEN_PASS: 0.015,
     FootballCardFamily.PA_PASS: 0.025,
@@ -1711,6 +1712,11 @@ class FootballMatchSimulator:
             return_touchdown = (
                 self.rng.random() < KICKOFF_RETURN_TOUCHDOWN_CHANCE
             )
+            if not return_touchdown:
+                return_yards = min(
+                    return_yards,
+                    MAX_NONSCORING_RETURN_FIELD_POSITION,
+                )
             field_position = 100.0 if return_touchdown else return_yards
             description = (
                 "Kickoff return touchdown"
@@ -2053,6 +2059,13 @@ class FootballMatchSimulator:
                     if self.rng.random() < PUNT_RETURN_CHANCE
                     else 0.0
                 )
+                max_non_scoring_return = max(
+                    0.0,
+                    state.offense_field_position
+                    + gross_yards
+                    - (GOAL_LINE_YARDS - MAX_NONSCORING_RETURN_FIELD_POSITION),
+                )
+                return_yards = min(return_yards, max_non_scoring_return)
                 punt_end_position = (
                     state.offense_field_position + gross_yards - return_yards
                 )

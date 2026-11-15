@@ -1920,6 +1920,153 @@ def test_all_coach_upgrade_details_are_keyboard_and_mouse_accessible(
     assert view._coach_detail_sections == coach_upgrade_detail_sections(mouse_card)
 
 
+@pytest.mark.parametrize(
+    "window_size",
+    ((1280, 720), (1000, 800)),
+)
+def test_coach_details_do_not_activate_obscured_shop_buttons(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    window_size: tuple[int, int],
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    assert controller is not None
+    controller._shop_catalogs = {
+        FootballShopSection.COACH_UPGRADES: (
+            next(
+                card
+                for card in COACH_UPGRADE_CATALOG
+                if card.card_id == "pattern_match"
+            ),
+        )
+    }
+    _draft_to_shop(desktop)
+    _force_result(monkeypatch, FootballTeamSide.TEAM_A)
+
+    for game_number in range(1, 4):
+        _activate(desktop, "FINISH SHOP / START MATCH")
+        _play_first_match_card(desktop)
+        if game_number < 4:
+            _activate(desktop, "OPEN NEXT GAME SHOP")
+
+    assert controller.state.game_number == 4
+    controller.unlock_shop_slot(FootballShopSection.COACH_UPGRADES, 1)
+    screen.state = controller.state
+    assert controller.state.shop is not None
+    assert controller.state.shop.section(
+        FootballShopSection.COACH_UPGRADES
+    ).slots[0].unlocked
+    assert controller.state.shop.section(
+        FootballShopSection.COACH_UPGRADES
+    ).slots[0].card is not None
+    desktop.window_size = window_size
+    surface = _surface()
+
+    desktop.router.draw(surface)
+    details_index = next(
+        index for index, button in enumerate(screen.buttons)
+        if button.label == "DETAILS"
+    )
+    player_buy = next(
+        button for button in screen.buttons
+        if button.label == "BUY"
+    )
+    ap_before = controller.state.shop.remaining_ap
+    logical_buy_position = player_buy.rect.center
+
+    screen.focus_index = 0
+    for _ in range(len(screen.buttons)):
+        if screen.focus_index == details_index:
+            break
+        screen.handle_event(
+            pygame.event.Event(
+                pygame.KEYDOWN,
+                {"key": pygame.K_TAB, "mod": 0, "unicode": ""},
+            )
+        )
+    assert screen.focus_index == details_index
+    desktop.router.draw(surface)
+    assert screen._shop_view().coach_details_open
+    detail_rect = screen._shop_view().coach_details_rect
+    assert detail_rect is not None
+    assert detail_rect.collidepoint(logical_buy_position)
+    assert {button.label for button in screen.buttons} == {
+        "CLOSE DETAILS",
+        "END RUN",
+    }
+
+    def physical_position(logical_position: tuple[int, int]) -> tuple[int, int]:
+        scale = min(
+            window_size[0] / LOGICAL_SIZE[0],
+            window_size[1] / LOGICAL_SIZE[1],
+        )
+        offset_x = (window_size[0] - round(LOGICAL_SIZE[0] * scale)) // 2
+        offset_y = (window_size[1] - round(LOGICAL_SIZE[1] * scale)) // 2
+        return (
+            round(logical_position[0] * scale + offset_x),
+            round(logical_position[1] * scale + offset_y),
+        )
+
+    def send_mouse(event_type: int, position: tuple[int, int]) -> None:
+        event = pygame.event.Event(
+            event_type,
+            {"pos": physical_position(position), "button": 1},
+        )
+        desktop.router.handle_event(desktop._logical_event(event))
+
+    send_mouse(pygame.MOUSEBUTTONDOWN, logical_buy_position)
+    send_mouse(pygame.MOUSEBUTTONUP, logical_buy_position)
+    assert controller.state.shop.remaining_ap == ap_before
+    assert controller.state.shop.purchased_cards == ()
+
+    screen.handle_event(
+        pygame.event.Event(
+            pygame.KEYDOWN,
+            {"key": pygame.K_ESCAPE, "mod": 0, "unicode": ""},
+        )
+    )
+    desktop.router.draw(surface)
+    details_button = next(
+        button for button in screen.buttons if button.label == "DETAILS"
+    )
+    details_position = details_button.rect.center
+    send_mouse(pygame.MOUSEMOTION, details_position)
+    desktop.router.draw(surface)
+    send_mouse(pygame.MOUSEBUTTONDOWN, logical_buy_position)
+    send_mouse(pygame.MOUSEBUTTONUP, logical_buy_position)
+    assert controller.state.shop.remaining_ap == ap_before
+    assert controller.state.shop.purchased_cards == ()
+
+    close_button = next(
+        button for button in screen.buttons if button.label == "CLOSE DETAILS"
+    )
+    send_mouse(pygame.MOUSEBUTTONDOWN, close_button.rect.center)
+    assert screen.pressed_index == screen.buttons.index(close_button)
+    send_mouse(pygame.MOUSEBUTTONUP, close_button.rect.center)
+    assert not screen._shop_view().coach_details_open
+    desktop.router.draw(surface)
+    assert not screen._shop_view().coach_details_open
+
+    details_button = next(
+        button for button in screen.buttons if button.label == "DETAILS"
+    )
+    send_mouse(pygame.MOUSEMOTION, details_button.rect.center)
+    desktop.router.draw(surface)
+    assert screen._shop_view().coach_details_open
+    outside_details = (detail_rect.left - 2, detail_rect.centery)
+    assert not detail_rect.collidepoint(outside_details)
+    send_mouse(pygame.MOUSEMOTION, outside_details)
+    desktop.router.draw(surface)
+    assert any(button.label == "BUY" for button in screen.buttons)
+    player_buy = next(button for button in screen.buttons if button.label == "BUY")
+    send_mouse(pygame.MOUSEBUTTONDOWN, player_buy.rect.center)
+    send_mouse(pygame.MOUSEBUTTONUP, player_buy.rect.center)
+    assert controller.state.shop.remaining_ap < ap_before
+
+
 def test_match_hand_clock_preview_matches_resolved_play_and_incomplete_rule(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
