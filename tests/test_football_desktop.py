@@ -47,6 +47,8 @@ from src.engine.football_player_catalog import (
 )
 from src.ui.theme import readable_ink, relative_luminance
 from src.engine.football_shop import (
+    COACH_UPGRADE_CATALOG,
+    FootballShop,
     FootballShopCard,
     FootballShopRarity,
     FootballShopSection,
@@ -60,6 +62,7 @@ from src.ui import football_match_decision_view as football_match_decision_modul
 from src.ui.football_display import _PLAY_LABELS, _POSITION_LABELS
 from src.ui import football_coach_view as football_coach_module
 from src.ui import football_review_view as football_review_module
+from src.ui import football_result as football_result_module
 from src.ui import football_shop_view as football_shop_module
 from src.ui import football_player_draft_view as football_player_draft_module
 from src.ui.football_match_status import FootballMatchStatusView
@@ -1507,7 +1510,8 @@ def test_shop_sections_reroll_unlock_and_keyboard_purchase(tmp_path: Path) -> No
     assert controller.state.shop is not None
     assert controller.state.shop.section(FootballShopSection.PLAYS_SCHEMES).catalog_available
     assert "No play/scheme cards yet." not in joined
-    assert "No coach upgrades yet." in joined
+    assert "Available after game 3." in joined
+    assert "Two-Minute Drill" not in joined
     assert "Available after game 3." in joined
     assert all(
         upgrade.rarity.value.replace("_", " ").upper() in joined
@@ -1591,7 +1595,7 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     assert "CURRENT RUN SNAPSHOT" in " ".join(displayed)
     assert "OFFENSE" in " ".join(displayed)
     assert "DEFENSE" in " ".join(displayed)
-    assert "PURCHASED UPGRADE HISTORY" in " ".join(displayed)
+    assert "PURCHASED RUN UPGRADES" in " ".join(displayed)
     assert any("PLANNED / INACTIVE" in text for text in wrapped)
     assert any(shop.purchased_upgrades[0].name in text for text in wrapped)
     assert any(shop.purchased_upgrades[0].description in text for text in wrapped)
@@ -1638,6 +1642,106 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
         assert OFFENSIVE_PLAY_CATALOG[card.card_id].name in joined
     for card in current_shop.defensive_deck:
         assert DEFENSIVE_SCHEME_CATALOG[card.card_id].name in joined
+
+
+def test_coach_upgrade_text_and_bye_week_marker_are_visible(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    card = next(
+        card
+        for card in COACH_UPGRADE_CATALOG
+        if card.card_id == "two_minute_drill"
+    )
+    shop = FootballShop(
+        controller.state.shop.roster,
+        51,
+        game_number=4,
+        catalogs={FootballShopSection.COACH_UPGRADES: (card,)},
+    )
+    shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
+    screen = desktop.run_screen
+    area = pygame.Rect(20, 80, 1200, 580)
+    wrapped: list[str] = []
+    shop_labels: list[str] = []
+    original_shop_wrapped = football_shop_module.draw_wrapped_text
+    original_review_wrapped = football_review_module.draw_wrapped_text
+    original_shop_text = football_shop_module.draw_text
+
+    def capture_shop_wrapped(surface, text, rect, font, color, *, line_gap=6):
+        wrapped.append(text)
+        original_shop_wrapped(
+            surface, text, rect, font, color, line_gap=line_gap
+        )
+
+    def capture_shop_text(surface, text, position, font, color):
+        shop_labels.append(text)
+        original_shop_text(surface, text, position, font, color)
+
+    def capture_review_wrapped(surface, text, rect, font, color, *, line_gap=6):
+        wrapped.append(text)
+        original_review_wrapped(
+            surface, text, rect, font, color, line_gap=line_gap
+        )
+
+    monkeypatch.setattr(
+        football_shop_module, "draw_wrapped_text", capture_shop_wrapped
+    )
+    monkeypatch.setattr(football_shop_module, "draw_text", capture_shop_text)
+    monkeypatch.setattr(
+        football_review_module, "draw_wrapped_text", capture_review_wrapped
+    )
+    screen._shop_view().draw(
+        _surface(), area, shop.state, "Bye Week skipped scheduled game 3."
+    )
+    assert card.description in " ".join(wrapped)
+    assert "Bye Week skipped scheduled game 3." in " ".join(shop_labels)
+
+    shop.buy_card(FootballShopSection.COACH_UPGRADES, card.card_id)
+    state = replace(controller.state, shop=shop.state, game_number=4)
+    review = football_review_module.FootballReviewView(
+        screen.theme,
+        screen._small_font,
+        screen._label_font,
+        screen.shop_review,
+        lambda: None,
+        lambda _copy_id: None,
+    )
+    wrapped.clear()
+    review.draw_depth_chart(_surface(), area, state)
+    assert any(card.name in text and card.description in text for text in wrapped)
+
+    marker = replace(
+        state,
+        phase=FootballRunPhase.PLAYOFFS,
+        game_number=10,
+        games_played=9,
+        skipped_games=(10,),
+        transition_message=(
+            "Bye Week skipped scheduled game 10 without a match result. "
+            "You reached the playoffs marker."
+        ),
+        match=None,
+    )
+    displayed: list[str] = []
+    original_result_text = football_result_module.draw_text
+
+    def capture_result_text(surface, text, position, font, color):
+        displayed.append(text)
+        original_result_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(
+        football_result_module, "draw_text", capture_result_text
+    )
+    buttons = screen._result_view.draw(_surface(), area, marker, screen.theme)
+    assert any("SCHEDULED GAME 10 SKIPPED" in text for text in displayed)
+    assert any("9 actual regular-season games played." in text for text in displayed)
+    assert "RETURN TO MAIN MENU" == buttons[0].label
 
 
 def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(

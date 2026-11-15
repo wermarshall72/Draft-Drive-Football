@@ -10,7 +10,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass, replace
 from functools import lru_cache
-from math import isfinite
+from math import floor, isfinite
 from numbers import Real
 
 from src.engine.football import (
@@ -20,6 +20,8 @@ from src.engine.football import (
     FootballCardFamily,
     FootballCardCopy,
     FootballCoach,
+    FootballCoachUpgradeEffect,
+    FootballCoachUpgradeKind,
     FootballDeckState,
     FootballFourthDownAction,
     FootballMatchEvent,
@@ -92,6 +94,13 @@ MIN_PLAY_YARDAGE_SPREAD = 1.0
 VOLATILITY_SPREAD_MULTIPLIER = 6.0
 FATIGUE_RAMP_PLAYS = 30
 MAX_FATIGUE_POWER_REDUCTION = 0.10
+MAX_COACH_POWER_BONUS = 0.20
+MAX_COACH_VOLATILITY_REDUCTION = 0.30
+MAX_COACH_STAMINA_BONUS = 0.30
+MAX_COACH_YARDAGE_DELTA = 0.50
+MAX_COACH_RISK_REDUCTION = 0.75
+MIN_COACH_CLOCK_MULTIPLIER = 0.75
+MAX_COACH_CLOCK_MULTIPLIER = 1.25
 MATCHED_SCHEME_DEFENSE_MULTIPLIER = 1.12
 MATCHED_SCHEME_OFFENSE_MULTIPLIER = 0.96
 MATCHED_SCHEME_YARDAGE_PENALTY = 0.5
@@ -154,7 +163,9 @@ def field_goal_distance_for_position(field_position: float) -> float:
     return (GOAL_LINE_YARDS - field_position) + FIELD_GOAL_DISTANCE_BUFFER
 
 
-def field_goal_success_probability(distance: float) -> float:
+def field_goal_success_probability(
+    distance: float, bonus_percentage_points: float = 0.0
+) -> float:
     if (
         isinstance(distance, bool)
         or not isinstance(distance, Real)
@@ -162,8 +173,15 @@ def field_goal_success_probability(distance: float) -> float:
         or distance < 0
     ):
         raise ValueError("Field-goal distance must be a non-negative number.")
+    if (
+        isinstance(bonus_percentage_points, bool)
+        or not isinstance(bonus_percentage_points, Real)
+        or not isfinite(bonus_percentage_points)
+        or bonus_percentage_points < 0
+    ):
+        raise ValueError("Field-goal bonus must be a finite non-negative probability.")
     if distance <= _FIELD_GOAL_DISTANCE_RATES[0][0]:
-        return 0.97
+        return _clamp(0.97 + bonus_percentage_points, 0.0, 1.0)
     for (lower_distance, lower_rate), (upper_distance, upper_rate) in zip(
         _FIELD_GOAL_DISTANCE_RATES,
         _FIELD_GOAL_DISTANCE_RATES[1:],
@@ -172,8 +190,100 @@ def field_goal_success_probability(distance: float) -> float:
             fraction = (distance - lower_distance) / (
                 upper_distance - lower_distance
             )
-            return lower_rate + fraction * (upper_rate - lower_rate)
-    return _FIELD_GOAL_DISTANCE_RATES[-1][1]
+            return _clamp(
+                lower_rate + fraction * (upper_rate - lower_rate)
+                + bonus_percentage_points,
+                0.0,
+                1.0,
+            )
+    return _clamp(
+        _FIELD_GOAL_DISTANCE_RATES[-1][1] + bonus_percentage_points,
+        0.0,
+        1.0,
+    )
+
+
+def coach_upgrade_magnitude(
+    upgrades: tuple[FootballCoachUpgradeEffect, ...],
+    kind: FootballCoachUpgradeKind,
+    *,
+    family: FootballCardFamily | None = None,
+) -> float:
+    if (
+        not isinstance(upgrades, tuple)
+        or any(not isinstance(upgrade, FootballCoachUpgradeEffect) for upgrade in upgrades)
+        or not isinstance(kind, FootballCoachUpgradeKind)
+    ):
+        raise ValueError("Coach effect lookup requires typed immutable upgrades.")
+    return sum(
+        upgrade.magnitude
+        for upgrade in upgrades
+        if upgrade.kind is kind
+        and (family is None or upgrade.family is family)
+    )
+
+
+def field_goal_success_probability_for_team(
+    state: FootballMatchState,
+    team: FootballTeamSide,
+    distance: float,
+) -> float:
+    if not isinstance(state, FootballMatchState) or not isinstance(team, FootballTeamSide):
+        raise ValueError("Field-goal estimate requires a match and team side.")
+    upgrades = (
+        state.team_a_coach_upgrades
+        if team is FootballTeamSide.TEAM_A
+        else state.team_b_coach_upgrades
+    )
+    bonus = coach_upgrade_magnitude(
+        upgrades, FootballCoachUpgradeKind.FIELD_GOAL_ACCURACY_BONUS
+    )
+    return field_goal_success_probability(distance, bonus)
+
+
+def adjusted_offensive_play_clock_seconds(
+    base_seconds: int,
+    upgrades: tuple[FootballCoachUpgradeEffect, ...],
+) -> int:
+    if isinstance(base_seconds, bool) or not isinstance(base_seconds, int) or base_seconds < 1:
+        raise ValueError("Offensive play clock duration must be a positive integer.")
+    delta = coach_upgrade_magnitude(
+        upgrades, FootballCoachUpgradeKind.OFFENSIVE_PLAY_CLOCK_DELTA
+    )
+    multiplier = _clamp(
+        1.0 + delta,
+        MIN_COACH_CLOCK_MULTIPLIER,
+        MAX_COACH_CLOCK_MULTIPLIER,
+    )
+    return max(1, floor(base_seconds * multiplier + 0.5))
+
+
+def blocked_kick_probability(
+    state: FootballMatchState,
+    kicking_team: FootballTeamSide,
+    base_probability: float,
+) -> float:
+    if (
+        not isinstance(state, FootballMatchState)
+        or not isinstance(kicking_team, FootballTeamSide)
+        or isinstance(base_probability, bool)
+        or not isinstance(base_probability, Real)
+        or not isfinite(base_probability)
+        or not 0.0 <= base_probability <= 1.0
+    ):
+        raise ValueError("Blocked-kick estimate requires a valid match, team, and chance.")
+    upgrades = (
+        state.team_a_coach_upgrades
+        if kicking_team is FootballTeamSide.TEAM_A
+        else state.team_b_coach_upgrades
+    )
+    reduction = min(
+        MAX_COACH_RISK_REDUCTION,
+        coach_upgrade_magnitude(
+            upgrades, FootballCoachUpgradeKind.BLOCKED_KICK_RISK_REDUCTION
+        ),
+    )
+    return _clamp(base_probability * (1.0 - reduction), 0.0, 1.0)
 
 
 def _opponent(side: FootballTeamSide) -> FootballTeamSide:
@@ -263,6 +373,7 @@ def _play_risk_probabilities(
     *,
     incomplete_bonus: float = 0.0,
     turnover_bonus: float = 0.0,
+    interception_risk_reduction: float = 0.0,
 ) -> tuple[float, float]:
     power_total = max(1.0, matchup.offense + matchup.defense)
     defensive_edge = (matchup.defense - matchup.offense) / power_total
@@ -290,6 +401,12 @@ def _play_risk_probabilities(
         )
         incomplete = _clamp(incomplete, 0.12, 0.52)
         interception = _clamp(interception, 0.005, 0.10)
+        interception = _clamp(
+            interception
+            * (1.0 - min(interception_risk_reduction, MAX_COACH_RISK_REDUCTION)),
+            0.0,
+            0.10,
+        )
         return incomplete, interception
     fumble = (
         RUN_FUMBLE_PROBABILITIES[family]
@@ -427,15 +544,28 @@ def calculate_play_estimate(
     is_conversion: bool = False,
     yardage_bonus: float = 0.0,
     completion_bonus: float = 0.0,
+    offense_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = (),
+    defense_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = (),
 ) -> FootballPlayEstimate:
     if not isfinite(yardage_bonus) or not isfinite(completion_bonus):
         raise ValueError("Play bonuses must be finite numbers.")
+    if any(
+        not isinstance(upgrades, tuple)
+        or any(
+            not isinstance(upgrade, FootballCoachUpgradeEffect)
+            for upgrade in upgrades
+        )
+        for upgrades in (offense_coach_upgrades, defense_coach_upgrades)
+    ):
+        raise ValueError("Play estimates require typed immutable coach upgrades.")
     matchup = calculate_matchup_power(
         offense_roster,
         defense_roster,
         play,
         scheme,
         prior_plays=prior_plays,
+        offense_coach_upgrades=offense_coach_upgrades,
+        defense_coach_upgrades=defense_coach_upgrades,
     )
     (
         contextual_yardage_bonus,
@@ -460,15 +590,49 @@ def calculate_play_estimate(
         defense_roster.players[position]
         for position in DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors
     )
+    offense_volatility_reduction = min(
+        MAX_COACH_VOLATILITY_REDUCTION,
+        coach_upgrade_magnitude(
+            offense_coach_upgrades,
+            FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION,
+        ),
+    )
+    defense_volatility_reduction = min(
+        MAX_COACH_VOLATILITY_REDUCTION,
+        coach_upgrade_magnitude(
+            defense_coach_upgrades,
+            FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION,
+        ),
+    )
     spread = max(
         MIN_PLAY_YARDAGE_SPREAD,
         (
             sum(player.volatility for player in offense_players)
+            * (1.0 - offense_volatility_reduction)
             / len(offense_players)
             + sum(player.volatility for player in defense_players)
+            * (1.0 - defense_volatility_reduction)
             / len(defense_players)
         )
         * VOLATILITY_SPREAD_MULTIPLIER,
+    )
+    offensive_family = OFFENSIVE_PLAY_CATALOG[play.value].family
+    defensive_family = DEFENSIVE_SCHEME_FAMILIES[scheme]
+    family_yardage_delta = coach_upgrade_magnitude(
+        offense_coach_upgrades,
+        FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+        family=offensive_family,
+    )
+    if defensive_family is offensive_family:
+        family_yardage_delta -= coach_upgrade_magnitude(
+            defense_coach_upgrades,
+            FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
+            family=offensive_family,
+        )
+    family_yardage_multiplier = _clamp(
+        1.0 + family_yardage_delta,
+        1.0 - MAX_COACH_YARDAGE_DELTA,
+        1.0 + MAX_COACH_YARDAGE_DELTA,
     )
     yards = (
         _BASE_YARDAGE[play]
@@ -489,13 +653,18 @@ def calculate_play_estimate(
         + yardage_bonus
         + completion_bonus
         + contextual_yardage_bonus
-    )
+    ) * family_yardage_multiplier
     yards = _clamp(yards, MIN_PLAY_YARDAGE, MAX_PLAY_YARDAGE)
+    interception_risk_reduction = coach_upgrade_magnitude(
+        offense_coach_upgrades,
+        FootballCoachUpgradeKind.INTERCEPTION_RISK_REDUCTION,
+    )
     incomplete, conditional_turnover = _play_risk_probabilities(
         play,
         matchup,
         incomplete_bonus=incomplete_bonus,
         turnover_bonus=turnover_bonus,
+        interception_risk_reduction=interception_risk_reduction,
     )
     return FootballPlayEstimate(
         matchup,
@@ -595,6 +764,16 @@ def calculate_match_play_estimate(
         down=state.down,
         drive_events=_drive_events_for_state(state, side),
         is_conversion=is_conversion,
+        offense_coach_upgrades=(
+            state.team_a_coach_upgrades
+            if side is FootballTeamSide.TEAM_A
+            else state.team_b_coach_upgrades
+        ),
+        defense_coach_upgrades=(
+            state.team_b_coach_upgrades
+            if side is FootballTeamSide.TEAM_A
+            else state.team_a_coach_upgrades
+        ),
     )
 
 
@@ -632,9 +811,18 @@ def _play_perk_effect_messages(
     return tuple(effects)
 
 
-def _adjusted_player_power(player: FootballPlayer, prior_plays: int) -> float:
+def _adjusted_player_power(
+    player: FootballPlayer,
+    prior_plays: int,
+    *,
+    stamina_bonus: float = 0.0,
+) -> float:
     ramp = min(prior_plays / FATIGUE_RAMP_PLAYS, 1.0)
-    reduction = ramp * MAX_FATIGUE_POWER_REDUCTION * (1.0 - player.stamina)
+    effective_stamina = min(
+        1.0,
+        player.stamina + min(stamina_bonus, MAX_COACH_STAMINA_BONUS),
+    )
+    reduction = ramp * MAX_FATIGUE_POWER_REDUCTION * (1.0 - effective_stamina)
     return player.power * (1.0 - reduction)
 
 
@@ -645,6 +833,8 @@ def calculate_matchup_power(
     scheme: DefensiveSchemeAction,
     *,
     prior_plays: int = 0,
+    offense_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = (),
+    defense_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = (),
 ) -> FootballMatchupPower:
     if not isinstance(offense_roster, FootballRoster) or not isinstance(
         defense_roster, FootballRoster
@@ -667,8 +857,20 @@ def calculate_matchup_power(
     )
     offense_coach, _ = coaches_for_assignment(offense_roster.coach_assignment)
     _, defense_coach = coaches_for_assignment(defense_roster.coach_assignment)
+    offense_stamina_bonus = coach_upgrade_magnitude(
+        offense_coach_upgrades,
+        FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST,
+    )
+    defense_stamina_bonus = coach_upgrade_magnitude(
+        defense_coach_upgrades,
+        FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST,
+    )
     offense_power = sum(
-        _adjusted_player_power(player, prior_plays)
+        _adjusted_player_power(
+            player,
+            prior_plays,
+            stamina_bonus=offense_stamina_bonus,
+        )
         * player_contribution_modifier(
             player,
             offense_players,
@@ -679,7 +881,11 @@ def calculate_matchup_power(
         for player in offense_players
     )
     defense_power = sum(
-        _adjusted_player_power(player, prior_plays)
+        _adjusted_player_power(
+            player,
+            prior_plays,
+            stamina_bonus=defense_stamina_bonus,
+        )
         * player_contribution_modifier(
             player,
             defense_players,
@@ -693,6 +899,20 @@ def calculate_matchup_power(
     if matches:
         defense_power *= MATCHED_SCHEME_DEFENSE_MULTIPLIER
         offense_power *= MATCHED_SCHEME_OFFENSE_MULTIPLIER
+    offense_power *= 1.0 + min(
+        MAX_COACH_POWER_BONUS,
+        coach_upgrade_magnitude(
+            offense_coach_upgrades,
+            FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
+        ),
+    )
+    defense_power *= 1.0 + min(
+        MAX_COACH_POWER_BONUS,
+        coach_upgrade_magnitude(
+            defense_coach_upgrades,
+            FootballCoachUpgradeKind.DEFENSE_POWER_BOOST,
+        ),
+    )
     return FootballMatchupPower(offense_power, defense_power, matches)
 
 
@@ -1195,7 +1415,14 @@ class FootballMatchSimulator:
         clock_cost = (
             INCOMPLETE_PASS_CLOCK_SECONDS
             if incomplete
-            else play_definition.clock_seconds
+            else adjusted_offensive_play_clock_seconds(
+                play_definition.clock_seconds,
+                (
+                    self.state.team_a_coach_upgrades
+                    if offensive_side is FootballTeamSide.TEAM_A
+                    else self.state.team_b_coach_upgrades
+                ),
+            )
         )
         positive_gain = yards > 0
         if positive_gain:
@@ -1460,11 +1687,20 @@ class FootballMatchSimulator:
             description = "Kickoff touchback"
             return_touchdown = False
         else:
+            receiving_upgrades = (
+                state.team_a_coach_upgrades
+                if receiving_team is FootballTeamSide.TEAM_A
+                else state.team_b_coach_upgrades
+            )
+            return_bonus = coach_upgrade_magnitude(
+                receiving_upgrades,
+                FootballCoachUpgradeKind.KICKOFF_RETURN_YARDS_BONUS,
+            )
             return_yards = _clamp(
                 self.rng.gauss(
                     KICKOFF_RETURN_MEAN_YARDS,
                     KICKOFF_RETURN_STANDARD_DEVIATION,
-                ),
+                ) + return_bonus,
                 0.0,
                 100.0,
             )
@@ -1771,7 +2007,9 @@ class FootballMatchSimulator:
             return self.state
         elif decision is FootballFourthDownAction.PUNT:
             clock_cost = PUNT_CLOCK_SECONDS
-            blocked = self.rng.random() < PUNT_BLOCK_CHANCE
+            blocked = self.rng.random() < blocked_kick_probability(
+                state, state.possession, PUNT_BLOCK_CHANCE
+            )
             if blocked:
                 gross_yards = 0.0
                 (
@@ -1795,6 +2033,15 @@ class FootballMatchSimulator:
                         self.rng.gauss(
                             PUNT_RETURN_MEAN_YARDS,
                             PUNT_RETURN_STANDARD_DEVIATION,
+                        )
+                        + coach_upgrade_magnitude(
+                            (
+                                state.team_a_coach_upgrades
+                                if _opponent(state.possession)
+                                is FootballTeamSide.TEAM_A
+                                else state.team_b_coach_upgrades
+                            ),
+                            FootballCoachUpgradeKind.PUNT_RETURN_YARDS_BONUS,
                         ),
                         0.0,
                         40.0,
@@ -1825,10 +2072,15 @@ class FootballMatchSimulator:
         elif decision is FootballFourthDownAction.FIELD_GOAL:
             clock_cost = FIELD_GOAL_CLOCK_SECONDS
             distance = field_goal_distance_for_position(state.offense_field_position)
-            blocked = self.rng.random() < FIELD_GOAL_BLOCK_CHANCE
+            blocked = self.rng.random() < blocked_kick_probability(
+                state, state.possession, FIELD_GOAL_BLOCK_CHANCE
+            )
             made = (
                 not blocked
-                and self.rng.random() < field_goal_success_probability(distance)
+                and self.rng.random()
+                < field_goal_success_probability_for_team(
+                    state, state.possession, distance
+                )
             )
             if blocked:
                 (

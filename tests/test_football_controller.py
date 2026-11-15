@@ -11,6 +11,8 @@ from src.engine.football import (
     FootballFourthDownAction,
     FootballMatchResult,
     FootballMatchStatus,
+    FootballCoachUpgradeEffect,
+    FootballCoachUpgradeKind,
     FootballPosition,
     FootballTeamSide,
     OffensivePlayAction,
@@ -557,6 +559,11 @@ def test_coach_slot_unlock_becomes_optional_after_game_three(monkeypatch) -> Non
             cost=1,
             eligible=lambda _roster: True,
             effect=lambda roster: roster,
+            coach_upgrade_effect=FootballCoachUpgradeEffect(
+                f"coach-test-{index}",
+                FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
+                0.05,
+            ),
         )
         for index in range(2)
     )

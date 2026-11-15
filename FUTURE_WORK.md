@@ -58,9 +58,13 @@ or the design changes.
   resolution, Hard AI decisions, and desktop previews.
 - [x] Add shop Depth Chart and Playbook review screens and a match UI for the
   human hand, card selection, matchup previews, and drag/drop calls.
+- [x] Add the first named coach-upgrade catalog, run-unique purchase history,
+  typed effects in match resolution/estimates, future-shop AP bonuses, and a
+  one-time Bye Week purchase that skips a scheduled game without a match.
+- [ ] Expand the coach-upgrade catalog and tune its provisional costs and
+  effect magnitudes through balance measurement and playtesting.
 - [ ] Expand the play/scheme catalog toward 100+ named ideas without changing
-  the six-family invariants; create the coach-upgrade catalog and its unlocks.
-  Coach-upgrade offers remain unavailable.
+  the six-family invariants.
 - [ ] Design future player synergies, temporary upgrades, and AP-saving
   actions. Unspent AP currently expires at the end of each shop visit.
 - [ ] Implement a playoff bracket; the current run ends at the playoffs marker.

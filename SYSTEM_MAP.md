@@ -56,9 +56,11 @@ covers extracted interaction state.
   opens the playbook for explicit copy selection or cancellation; the
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
-  upgrades, decks, and removal validation. See
-  [test_football_shop.py](tests/test_football_shop.py) and the shop/review
-  cases in [test_football_desktop.py](tests/test_football_desktop.py).
+  player upgrades, the run-unique coach-upgrade catalog and effects, decks,
+  and removal validation. Coach-upgrade purchase history and descriptions are
+  shown in the Depth Chart. See [test_football_shop.py](tests/test_football_shop.py),
+  [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
+  the shop/review cases in [test_football_desktop.py](tests/test_football_desktop.py).
 - **Match and results:** [football_match_field.py](src/ui/football_match_field.py),
   [football_match_status.py](src/ui/football_match_status.py), and
   [football_match_decision_view.py](src/ui/football_match_decision_view.py)
@@ -85,17 +87,22 @@ covers extracted interaction state.
   owns matchup estimates, play resolution, clock, scoring, deck cycling, and
   special-teams/conversion outcomes. [football_ai.py](src/engine/football_ai.py)
   generates local opponents and selects actions; the controller advances AI
-  turns until a human decision or result. Match previews use the simulator's
-  estimate in the decision view. See
+  turns until a human decision or result. Typed coach-upgrade effects travel
+  in the match snapshot and are shared by resolution, previews, and relevant AI
+  field-goal estimates. See
   [test_football_simulator.py](tests/test_football_simulator.py),
-  [test_football_ai.py](tests/test_football_ai.py), and
+  [test_football_ai.py](tests/test_football_ai.py),
+  [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
   [test_football_models.py](tests/test_football_models.py).
 - **Run progression:** [football_controller.py](src/engine/football_controller.py)
   connects draft, shop, simulator, AI, results, and subsequent shops.
-  [test_football_controller.py](tests/test_football_controller.py) protects
-  phase transitions, seeded behavior, and error handling. Surviving game 10
-  currently reaches a playoffs marker, not a playable bracket; coach-upgrade
-  offers and player perk effects are also unfinished.
+  It tracks actual games played separately from scheduled games skipped by
+  Bye Week; [football_result.py](src/ui/football_result.py) renders the
+  game-10 skip as a marker without a fabricated score. Coach upgrades are
+  implemented as an initial catalog; player perk effects and a playable
+  playoff bracket remain unfinished. See
+  [test_football_controller.py](tests/test_football_controller.py) and
+  [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py).
 
 ## Persistence, legacy, and tooling
 

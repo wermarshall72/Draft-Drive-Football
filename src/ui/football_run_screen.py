@@ -245,7 +245,14 @@ class FootballRunScreen(Screen):
                 self._draw_buttons(surface)
             else:
                 shop_view = self._shop_view()
-                self._set_buttons(shop_view.draw(surface, content, state.shop))
+                self._set_buttons(
+                    shop_view.draw(
+                        surface,
+                        content,
+                        state.shop,
+                        state.transition_message,
+                    )
+                )
                 self._draw_buttons(surface)
         else:
             self._set_buttons(self._result_view.draw(surface, content, state, self.theme))

@@ -108,6 +108,58 @@ existing fixed 1% two-point-return chance. Ball-Hawk's field-position return
 yards are not applied there because a conversion has no subsequent field
 position; defining a conversion-specific Ball-Hawk effect remains open.
 
+## Initial coach-upgrade catalog
+
+The first catalog has 18 run-unique named upgrades. Coach-upgrade shop slots
+unlock after game 3: the first costs 4 AP and the second costs 6 AP. Each
+upgrade's purchase cost and rarity are separate from those slot-unlock costs.
+Purchased match effects remain active for later games in the run; future-shop
+AP bonuses apply only to later shops. These initial values are provisional
+gameplay assumptions, not empirically calibrated balance targets.
+
+| Upgrade | Rarity | Cost | Effect |
+|---|---|---:|---|
+| Two-Minute Drill | Uncommon | 3 AP | +5% relative power for offensive contributors; additive stacking, +20% cap |
+| Front Seven Film | Uncommon | 3 AP | +5% relative power for defensive contributors; additive stacking, +20% cap |
+| Rhythm Install | Rare | 3 AP | -15% offensive contributor volatility; additive stacking, 30% cap |
+| Disguise Package | Rare | 3 AP | -15% defensive contributor volatility; additive stacking, 30% cap |
+| Fourth-Quarter Conditioning | Uncommon | 3 AP | +0.10 effective offensive stamina after player training; +0.30 total and 1.00 per-player caps |
+| Iron Lungs | Uncommon | 3 AP | +0.10 effective defensive stamina after player training; +0.30 total and 1.00 per-player caps |
+| Booster Club Drive | Rare | 4 AP | +1 AP to every later shop this run; does not affect the current shop |
+| Facilities Fund | Rare | 5 AP | +1 AP to every later shop this run; future-shop bonuses cap at +2 AP |
+| Bye Week | Very Rare | 6 AP | Once per run, end the shop and skip its scheduled game without a match or record change |
+| Tempo Install | Rare | 3 AP | -10% relative clock for normal offensive card plays |
+| Huddle Up | Rare | 3 AP | +10% relative clock for normal offensive card plays |
+| Vertical Threat | Rare | 3 AP | +10% Deep Pass-family result-calculation yards |
+| Pattern-Match Shell | Rare | 3 AP | -10% opposing Medium Pass-family result-calculation yards when using a Medium Pass-family scheme |
+| Ball-Security Clinic | Rare | 3 AP | -20% relative conditional interception chance; fumble risk is unchanged |
+| Field-Goal Lab | Rare | 4 AP | +5 percentage points to field-goal success chance, capped at 100%; block risk is unchanged |
+| Clean-Pocket Protection | Uncommon | 3 AP | -25% relative punt and field-goal block chance; extra-point block chance is unchanged |
+| Punt Return Lane | Uncommon | 2 AP | +2 yards per punt return, subject to existing yardage limits |
+| Kickoff Return Lane | Uncommon | 2 AP | +2 yards per kickoff return, subject to existing yardage limits |
+
+Power bonuses apply after existing coach, partnership, fatigue, and scheme
+calculations; offense and defense upgrades use separate +20% caps. Volatility
+reductions combine additively to 30%, and stamina bonuses combine to +0.30
+while each player's effective stamina remains capped at 1.00. Family yardage
+changes combine additively after flat yardage bonuses, then apply a 0.50-1.50
+multiplier clamp before the existing -5 to 25 yard result clamp. They affect
+calculated result yards (and the shared expected-yardage estimate), not
+completion, interception, or fumble probabilities.
+
+Relative offensive-clock changes combine additively and clamp to a 0.75-1.25
+multiplier. Durations round half-up to whole seconds with a one-second
+minimum; incomplete passes remain 5 seconds, and conversions and special
+teams retain their existing clock rules. Interception and kick-block
+reductions are relative and capped at 75%. Field-goal accuracy is an additive
+five-percentage-point bonus. Return-yard bonuses leave return, touchback, and
+touchdown chances unchanged.
+
+A Bye Week preserves the current record and assets, marks one scheduled game
+skipped, and opens the next scheduled game's shop for games 1-9. Skipping
+scheduled game 10 reaches the existing playoffs marker without fabricating a
+match or score; no playable playoff bracket exists yet.
+
 The measured balance uses a 3.5-yard global offensive yardage bonus, a
 -3.75-yard run adjustment, a +1-yard pass adjustment, and a 0.5-yard matched
 scheme penalty. The results below use the command and seed above.

@@ -10,6 +10,9 @@ from types import MappingProxyType
 
 from src.engine.football import (
     FootballCardCopy,
+    FootballCardFamily,
+    FootballCoachUpgradeEffect,
+    FootballCoachUpgradeKind,
     FootballPlayer,
     FootballPosition,
     FootballRoster,
@@ -35,6 +38,8 @@ SHOP_OFFER_SIZE = PLAYER_UPGRADE_SLOT_COUNT
 MAX_PLAYER_UPGRADE_SLOTS = 4
 MAX_PLAY_SCHEME_SLOTS = 6
 MAX_COACH_UPGRADE_SLOTS = 2
+MAX_FUTURE_SHOP_AP_BONUS = 2
+REGULAR_SEASON_GAMES = 10
 CARD_REMOVAL_COST = 2
 MIN_PLAYBOOK_DECK_SIZE = 4
 class FootballShopSection(str, Enum):
@@ -98,6 +103,7 @@ class FootballShopCard:
     upgrade: FootballUpgrade | None = None
     football_card: FootballPlayDefinition | FootballSchemeDefinition | None = None
     is_removal: bool = False
+    coach_upgrade_effect: FootballCoachUpgradeEffect | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.card_id, str) or not self.card_id.strip():
@@ -139,6 +145,16 @@ class FootballShopCard:
             raise ValueError("Football playbook data is only valid for play/scheme cards.")
         if self.is_removal and self.section is not FootballShopSection.PLAYS_SCHEMES:
             raise ValueError("Removal offers are only valid in the play/scheme section.")
+        if self.section is FootballShopSection.COACH_UPGRADES:
+            if (
+                not isinstance(
+                    self.coach_upgrade_effect, FootballCoachUpgradeEffect
+                )
+                or self.card_id != self.coach_upgrade_effect.upgrade_id
+            ):
+                raise ValueError("Coach cards require a matching typed effect.")
+        elif self.coach_upgrade_effect is not None:
+            raise ValueError("Coach upgrade effects are only valid on coach cards.")
 
 
 @dataclass(frozen=True)
@@ -175,6 +191,8 @@ class FootballShopState:
     defensive_deck: tuple[FootballCardCopy, ...]
     pending_removal: FootballShopCard | None
     removal_unavailable_reason: str | None
+    owned_coach_upgrades: tuple[FootballShopCard, ...] = ()
+    future_shop_ap_bonus: int = 0
 
     @property
     def remaining_budget(self) -> int:
@@ -271,6 +289,8 @@ class FootballShop:
             tuple[FootballShopSection, str], FootballShopCard
         ] = {}
         self._run_purchased_upgrades: list[FootballUpgrade] = []
+        self._owned_coach_upgrades: list[FootballShopCard] = []
+        self._future_shop_ap_bonus = 0
         self._offensive_deck = starting_offensive_deck("human")
         self._defensive_deck = starting_defensive_deck("human")
         self._copy_sequence = 1
@@ -345,6 +365,8 @@ class FootballShop:
                 if self._removable_cards()
                 else "Both decks are at the 4-card minimum."
             ),
+            owned_coach_upgrades=tuple(self._owned_coach_upgrades),
+            future_shop_ap_bonus=self._future_shop_ap_bonus,
         )
 
     def buy_upgrade(self, upgrade: FootballUpgrade | int) -> FootballShopState:
@@ -410,6 +432,12 @@ class FootballShop:
         purchase_key = (section, selected.card_id)
         if purchase_key in self._purchased:
             raise ValueError("This card has already been purchased during this visit.")
+        effect = selected.coach_upgrade_effect
+        if effect is not None and any(
+            card.card_id == effect.upgrade_id
+            for card in self._owned_coach_upgrades
+        ):
+            raise ValueError("This coach upgrade has already been purchased this run.")
         if selected.cost > self._remaining_ap:
             raise ValueError("Card cost exceeds the remaining AP.")
         if not selected.eligible(self._roster):
@@ -436,6 +464,15 @@ class FootballShop:
         self._purchased[purchase_key] = selected
         if selected.upgrade is not None:
             self._run_purchased_upgrades.append(selected.upgrade)
+        if effect is not None:
+            self._owned_coach_upgrades.append(selected)
+            if effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP:
+                self._future_shop_ap_bonus = min(
+                    MAX_FUTURE_SHOP_AP_BONUS,
+                    self._future_shop_ap_bonus + int(effect.magnitude),
+                )
+            if effect.kind is FootballCoachUpgradeKind.BYE_WEEK:
+                self._finished = True
         if new_copy is not None:
             if isinstance(selected.football_card, FootballPlayDefinition):
                 self._offensive_deck += (new_copy,)
@@ -569,7 +606,7 @@ class FootballShop:
 
         self._game_number = game_number
         self._day = 1
-        self._remaining_ap = ACTION_POINT_BUDGET
+        self._remaining_ap = ACTION_POINT_BUDGET + self._future_shop_ap_bonus
         self._purchased.clear()
         self._finished = False
         self._reset_offers()
@@ -686,7 +723,7 @@ class FootballShop:
             for card in self._catalogs[section]
             if (section, card.card_id) not in self._purchased
             and card.card_id not in current_ids
-            and card.eligible(self._roster)
+            and self._card_is_available(card)
         ]
         if not eligible:
             return None
@@ -706,6 +743,21 @@ class FootballShop:
                 return self._rng.choice(by_rarity[rarity])
         return self._rng.choice(by_rarity[available_rarities[-1]])
 
+    def _card_is_available(self, card: FootballShopCard) -> bool:
+        effect = card.coach_upgrade_effect
+        if effect is not None:
+            if any(
+                owned.card_id == effect.upgrade_id
+                for owned in self._owned_coach_upgrades
+            ):
+                return False
+            if (
+                effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP
+                and self._game_number >= REGULAR_SEASON_GAMES
+            ):
+                return False
+        return card.eligible(self._roster)
+
     def _validated_catalogs(
         self,
         catalogs: Mapping[FootballShopSection, tuple[FootballShopCard, ...]] | None,
@@ -718,6 +770,8 @@ class FootballShop:
             provided[FootballShopSection.PLAYER_UPGRADES] = _player_upgrade_catalog()
         if FootballShopSection.PLAYS_SCHEMES not in provided:
             provided[FootballShopSection.PLAYS_SCHEMES] = _play_scheme_catalog()
+        if FootballShopSection.COACH_UPGRADES not in provided:
+            provided[FootballShopSection.COACH_UPGRADES] = COACH_UPGRADE_CATALOG
         validated: dict[FootballShopSection, tuple[FootballShopCard, ...]] = {}
         for section in FootballShopSection:
             cards = tuple(provided.get(section, ()))
@@ -870,3 +924,229 @@ def _player_upgrade_card(
         effect=apply,
         upgrade=upgrade,
     )
+
+
+def _coach_upgrade_card(
+    upgrade_id: str,
+    name: str,
+    description: str,
+    kind: FootballCoachUpgradeKind,
+    magnitude: float,
+    rarity: FootballShopRarity,
+    cost: int,
+    *,
+    family: FootballCardFamily | None = None,
+) -> FootballShopCard:
+    effect = FootballCoachUpgradeEffect(
+        upgrade_id=upgrade_id,
+        kind=kind,
+        magnitude=magnitude,
+        family=family,
+    )
+    return FootballShopCard(
+        card_id=upgrade_id,
+        name=name,
+        description=description,
+        section=FootballShopSection.COACH_UPGRADES,
+        rarity=rarity,
+        cost=cost,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        coach_upgrade_effect=effect,
+    )
+
+
+def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
+    uncommon = FootballShopRarity.UNCOMMON
+    rare = FootballShopRarity.RARE
+    return (
+        _coach_upgrade_card(
+            "two_minute_drill",
+            "Two-Minute Drill",
+            "Your QB, RB, WR, and O-line gain +5% power when they contribute. "
+            "Relative bonus; stacks additively, up to +20%.",
+            FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
+            0.05,
+            uncommon,
+            3,
+        ),
+        _coach_upgrade_card(
+            "front_seven_film",
+            "Front Seven Film",
+            "Your D-line, linebackers, cornerbacks, and safeties gain +5% power "
+            "when they contribute. Relative bonus; stacks additively, up to +20%.",
+            FootballCoachUpgradeKind.DEFENSE_POWER_BOOST,
+            0.05,
+            uncommon,
+            3,
+        ),
+        _coach_upgrade_card(
+            "rhythm_install",
+            "Rhythm Install",
+            "Reduce volatility of your offensive contributors by 15%, narrowing "
+            "play-result spread. Additive stacking is capped at 30%.",
+            FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION,
+            0.15,
+            rare,
+            3,
+        ),
+        _coach_upgrade_card(
+            "disguise_package",
+            "Disguise Package",
+            "Reduce volatility of your defensive contributors by 15%, narrowing "
+            "play-result spread. Additive stacking is capped at 30%.",
+            FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION,
+            0.15,
+            rare,
+            3,
+        ),
+        _coach_upgrade_card(
+            "fourth_quarter_conditioning",
+            "Fourth-Quarter Conditioning",
+            "Your offensive contributors gain +0.10 effective stamina after "
+            "player training, capped at 1.00; stacks to +0.30.",
+            FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST,
+            0.10,
+            uncommon,
+            3,
+        ),
+        _coach_upgrade_card(
+            "iron_lungs",
+            "Iron Lungs",
+            "Your defensive contributors gain +0.10 effective stamina after "
+            "player training, capped at 1.00; stacks to +0.30.",
+            FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST,
+            0.10,
+            uncommon,
+            3,
+        ),
+        _coach_upgrade_card(
+            "booster_club_drive",
+            "Booster Club Drive",
+            "Permanently add 1 AP to every later shop this run. Does not change "
+            "this shop; future-shop bonuses stack to +2 AP.",
+            FootballCoachUpgradeKind.FUTURE_SHOP_AP,
+            1,
+            rare,
+            4,
+        ),
+        _coach_upgrade_card(
+            "facilities_fund",
+            "Facilities Fund",
+            "Permanently add 1 AP to every later shop this run. Does not change "
+            "this shop; future-shop bonuses stack to +2 AP.",
+            FootballCoachUpgradeKind.FUTURE_SHOP_AP,
+            1,
+            rare,
+            5,
+        ),
+        _coach_upgrade_card(
+            "bye_week",
+            "Bye Week",
+            "Skip this scheduled game without a result. Immediately end this "
+            "shop; available once per run.",
+            FootballCoachUpgradeKind.BYE_WEEK,
+            0,
+            FootballShopRarity.VERY_RARE,
+            6,
+        ),
+        _coach_upgrade_card(
+            "tempo_install",
+            "Tempo Install",
+            "Your normal offensive card plays use 10% less clock (relative). "
+            "Round to nearest second, minimum 1; incomplete passes and "
+            "conversions keep their existing clock rules.",
+            FootballCoachUpgradeKind.OFFENSIVE_PLAY_CLOCK_DELTA,
+            -0.10,
+            rare,
+            3,
+        ),
+        _coach_upgrade_card(
+            "huddle_up",
+            "Huddle Up",
+            "Your normal offensive card plays use 10% more clock (relative). "
+            "Round to nearest second, minimum 1; incomplete passes and "
+            "conversions keep their existing clock rules.",
+            FootballCoachUpgradeKind.OFFENSIVE_PLAY_CLOCK_DELTA,
+            0.10,
+            rare,
+            3,
+        ),
+        _coach_upgrade_card(
+            "vertical_threat",
+            "Vertical Threat",
+            "Deep Pass-family plays multiply yards on the result calculation by "
+            "1.10 after additive perks, before the yardage cap. Risk is unchanged.",
+            FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+            0.10,
+            rare,
+            3,
+            family=FootballCardFamily.DEEP_PASS,
+        ),
+        _coach_upgrade_card(
+            "pattern_match",
+            "Pattern-Match Shell",
+            "When your defense selects a Medium Pass-family scheme, reduce "
+            "opposing Medium Pass-family result-calculation yards by 10% "
+            "relative, after additive perks and before the yardage cap.",
+            FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
+            0.10,
+            rare,
+            3,
+            family=FootballCardFamily.MEDIUM_PASS,
+        ),
+        _coach_upgrade_card(
+            "ball_security_clinic",
+            "Ball-Security Clinic",
+            "Reduce your offense's conditional interception chance by 20% "
+            "relative after matchup and coach adjustments; does not reduce "
+            "fumble risk.",
+            FootballCoachUpgradeKind.INTERCEPTION_RISK_REDUCTION,
+            0.20,
+            rare,
+            3,
+        ),
+        _coach_upgrade_card(
+            "field_goal_lab",
+            "Field-Goal Lab",
+            "Add 5 percentage points to your field-goal success chance at every "
+            "distance, capped at 100%; does not change block risk.",
+            FootballCoachUpgradeKind.FIELD_GOAL_ACCURACY_BONUS,
+            0.05,
+            rare,
+            4,
+        ),
+        _coach_upgrade_card(
+            "clean_pocket_protection",
+            "Clean-Pocket Protection",
+            "Reduce your punt and field-goal block chance by 25% relative. "
+            "Extra-point block chance is unchanged.",
+            FootballCoachUpgradeKind.BLOCKED_KICK_RISK_REDUCTION,
+            0.25,
+            uncommon,
+            3,
+        ),
+        _coach_upgrade_card(
+            "punt_return_lane",
+            "Punt Return Lane",
+            "Add 2 yards to each punt return your team makes; existing return "
+            "yardage limits still apply. Return chance is unchanged.",
+            FootballCoachUpgradeKind.PUNT_RETURN_YARDS_BONUS,
+            2,
+            uncommon,
+            2,
+        ),
+        _coach_upgrade_card(
+            "kickoff_return_lane",
+            "Kickoff Return Lane",
+            "Add 2 yards to each kickoff return your team makes; existing return "
+            "yardage limits still apply. Touchback and touchdown chances are unchanged.",
+            FootballCoachUpgradeKind.KICKOFF_RETURN_YARDS_BONUS,
+            2,
+            uncommon,
+            2,
+        ),
+    )
+
+
+COACH_UPGRADE_CATALOG = _coach_upgrade_catalog()

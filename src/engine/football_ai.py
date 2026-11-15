@@ -35,7 +35,7 @@ from src.engine.football_player_catalog import (
 from src.engine.football_simulator import (
     calculate_match_play_estimate,
     field_goal_distance_for_position,
-    field_goal_success_probability,
+    field_goal_success_probability_for_team,
 )
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
@@ -263,7 +263,9 @@ class FootballAI:
                     state.offense_field_position
                 )
                 if (
-                    field_goal_success_probability(distance)
+                    field_goal_success_probability_for_team(
+                        state, self.team_side, distance
+                    )
                     >= AI_MIN_FIELD_GOAL_SUCCESS_PROBABILITY
                 ):
                     actions.append(FootballFourthDownAction.FIELD_GOAL)
@@ -489,7 +491,9 @@ class FootballAI:
             state.offense_field_position
         )
         field_goal_is_reliable = (
-            field_goal_success_probability(field_goal_distance)
+            field_goal_success_probability_for_team(
+                state, self.team_side, field_goal_distance
+            )
             >= AI_MIN_FIELD_GOAL_SUCCESS_PROBABILITY
         )
         score_margin = self._score_margin(state)

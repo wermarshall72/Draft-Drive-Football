@@ -11,6 +11,7 @@ from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
     FootballDeckState,
+    FootballCoachUpgradeKind,
     FootballConversionAction,
     FootballFourthDownAction,
     FootballMatchState,
@@ -76,6 +77,9 @@ class FootballGameControllerState:
     game_number: int
     wins: int
     losses: int
+    games_played: int = 0
+    skipped_games: tuple[int, ...] = ()
+    transition_message: str | None = None
 
 
 class FootballGameController:
@@ -145,6 +149,9 @@ class FootballGameController:
         self._game_number = 1
         self._wins = 0
         self._losses = 0
+        self._games_played = 0
+        self._skipped_games: list[int] = []
+        self._transition_message: str | None = None
 
     @property
     def state(self) -> FootballGameControllerState:
@@ -161,6 +168,9 @@ class FootballGameController:
             game_number=self._game_number,
             wins=self._wins,
             losses=self._losses,
+            games_played=self._games_played,
+            skipped_games=tuple(self._skipped_games),
+            transition_message=self._transition_message,
         )
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
@@ -199,7 +209,26 @@ class FootballGameController:
         card_id: str | int,
     ) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
-        self._require_shop().buy_card(section, card_id)
+        shop = self._require_shop()
+        owned_before = {
+            card.card_id for card in shop.state.owned_coach_upgrades
+        }
+        shop.buy_card(section, card_id)
+        newly_owned = next(
+            (
+                card
+                for card in shop.state.owned_coach_upgrades
+                if card.card_id not in owned_before
+            ),
+            None,
+        )
+        if (
+            newly_owned is not None
+            and newly_owned.coach_upgrade_effect is not None
+            and newly_owned.coach_upgrade_effect.kind
+            is FootballCoachUpgradeKind.BYE_WEEK
+        ):
+            self._apply_bye_week()
         return self.state
 
     def remove_owned_card(self, copy_id: str) -> FootballGameControllerState:
@@ -230,6 +259,7 @@ class FootballGameController:
         self._require_phase(FootballRunPhase.PRE_MATCH_SHOP)
         self._require_shop().finish()
         self._start_match()
+        self._transition_message = None
         return self.state
 
     def enter_next_shop(self) -> FootballGameControllerState:
@@ -329,6 +359,11 @@ class FootballGameController:
             team_a_defense_deck=FootballDeckState(self._require_shop().defensive_deck),
             team_b_offense_deck=FootballDeckState(opponent_offense),
             team_b_defense_deck=FootballDeckState(opponent_defense),
+            team_a_coach_upgrades=tuple(
+                card.coach_upgrade_effect
+                for card in self._require_shop().state.owned_coach_upgrades
+                if card.coach_upgrade_effect is not None
+            ),
         )
         self._simulator = FootballMatchSimulator(match_state)
         self._phase = FootballRunPhase.MATCH
@@ -380,6 +415,7 @@ class FootballGameController:
             self._wins += 1
         else:
             self._losses += 1
+        self._games_played += 1
 
         if self._losses >= self.LOSSES_TO_BE_FIRED:
             self._phase = FootballRunPhase.FIRED
@@ -387,6 +423,32 @@ class FootballGameController:
             self._phase = FootballRunPhase.PLAYOFFS
         else:
             self._phase = FootballRunPhase.READY_FOR_NEXT_GAME
+
+    def _apply_bye_week(self) -> None:
+        scheduled_game = self._game_number
+        shop = self._require_shop()
+        if not shop.finished:
+            raise RuntimeError("Bye Week must finish the current shop before advancing.")
+        if scheduled_game in self._skipped_games:
+            raise RuntimeError("A scheduled game cannot be skipped twice.")
+        self._skipped_games.append(scheduled_game)
+        if scheduled_game == self.REGULAR_SEASON_GAMES:
+            self._phase = FootballRunPhase.PLAYOFFS
+            self._transition_message = (
+                "Bye Week skipped scheduled game 10 without a match result. "
+                "The regular season is complete; you reached the playoffs marker. "
+                "No playoff games are available yet."
+            )
+            return
+
+        next_game = scheduled_game + 1
+        shop.open_next_visit(next_game)
+        self._game_number = next_game
+        self._phase = FootballRunPhase.PRE_MATCH_SHOP
+        self._transition_message = (
+            f"Bye Week skipped scheduled game {scheduled_game} without a win or "
+            f"loss. Next up: the shop before scheduled game {next_game}."
+        )
 
     def _human_decision(
         self, match: FootballMatchState | None

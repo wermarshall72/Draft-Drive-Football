@@ -65,7 +65,10 @@ class FootballReviewView:
         player_row_height = 92
         player_panel_height = 36 + 4 * player_row_height
         upgrade_row_height = 42
-        upgrade_height = 52 + max(1, len(shop.purchased_upgrades)) * upgrade_row_height
+        run_upgrade_count = (
+            len(shop.purchased_upgrades) + len(shop.owned_coach_upgrades)
+        )
+        upgrade_height = 52 + max(1, run_upgrade_count) * upgrade_row_height
         coach_top = body_rect.top
         player_top = coach_top + coach_height + 12
         upgrade_top = player_top + player_panel_height + 12
@@ -245,12 +248,12 @@ class FootballReviewView:
         draw_panel(surface, upgrade_rect, self.theme, fill=self.theme.panel)
         draw_text(
             surface,
-            "PURCHASED UPGRADE HISTORY  /  CURRENT STATS ABOVE INCLUDE THESE",
+            "PURCHASED RUN UPGRADES  /  EFFECTS AND PLAYER TRAINING",
             (upgrade_rect.left + 12, upgrade_rect.top + 8),
             self._small_font,
             self.theme.text,
         )
-        if shop.purchased_upgrades:
+        if run_upgrade_count:
             for index, upgrade in enumerate(shop.purchased_upgrades):
                 row_rect = pygame.Rect(
                     upgrade_rect.left + 10,
@@ -268,10 +271,27 @@ class FootballReviewView:
                     self.theme.secondary_accent,
                     line_gap=1,
                 )
+            for index, card in enumerate(shop.owned_coach_upgrades):
+                row_rect = pygame.Rect(
+                    upgrade_rect.left + 10,
+                    upgrade_rect.top
+                    + 30
+                    + (len(shop.purchased_upgrades) + index) * upgrade_row_height,
+                    upgrade_rect.width - 20,
+                    upgrade_row_height,
+                )
+                draw_wrapped_text(
+                    surface,
+                    f"COACH  /  {card.name}: {card.description}",
+                    row_rect,
+                    self._small_font,
+                    self.theme.secondary_accent,
+                    line_gap=1,
+                )
         else:
             draw_text(
                 surface,
-                "No player upgrades purchased.",
+                "No run upgrades purchased.",
                 (upgrade_rect.left + 12, upgrade_rect.top + 30),
                 self._small_font,
                 self.theme.muted,
@@ -440,4 +460,3 @@ class FootballReviewView:
             )
         )
         return buttons
-

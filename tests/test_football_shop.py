@@ -7,6 +7,8 @@ from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
     FootballCoach,
+    FootballCoachUpgradeEffect,
+    FootballCoachUpgradeKind,
     FootballMatchState,
     FootballPlayer,
     FootballPosition,
@@ -358,6 +360,15 @@ def _future_catalog_card(
         cost=1,
         eligible=eligible,
         effect=lambda roster: roster,
+        coach_upgrade_effect=(
+            FootballCoachUpgradeEffect(
+                card_id,
+                FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
+                0.05,
+            )
+            if section is FootballShopSection.COACH_UPGRADES
+            else None
+        ),
     )
 
 
@@ -402,8 +413,18 @@ def test_three_sections_start_with_requested_slots_and_playbook_cards() -> None:
     coach_slot = after_game_three.state.section(
         FootballShopSection.COACH_UPGRADES
     ).slots[0]
-    assert not coach_slot.can_unlock
-    assert "not available yet" in coach_slot.disabled_reason
+    assert coach_slot.can_unlock
+    assert coach_slot.disabled_reason is None
+    assert after_game_three.state.section(
+        FootballShopSection.COACH_UPGRADES
+    ).catalog_available
+    unlocked_coach = after_game_three.unlock_slot(
+        FootballShopSection.COACH_UPGRADES, 1
+    )
+    assert (
+        unlocked_coach.section(FootballShopSection.COACH_UPGRADES).slots[0].card
+        is not None
+    )
 
 
 @pytest.mark.parametrize(

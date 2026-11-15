@@ -75,6 +75,68 @@ class FootballCardFamily(str, Enum):
         }[self]
 
 
+class FootballCoachUpgradeKind(str, Enum):
+    OFFENSE_POWER_BOOST = "offense_power_boost"
+    DEFENSE_POWER_BOOST = "defense_power_boost"
+    OFFENSE_VOLATILITY_REDUCTION = "offense_volatility_reduction"
+    DEFENSE_VOLATILITY_REDUCTION = "defense_volatility_reduction"
+    OFFENSE_STAMINA_BOOST = "offense_stamina_boost"
+    DEFENSE_STAMINA_BOOST = "defense_stamina_boost"
+    FUTURE_SHOP_AP = "future_shop_ap"
+    OFFENSIVE_PLAY_CLOCK_DELTA = "offensive_play_clock_delta"
+    OFFENSIVE_FAMILY_YARDAGE_DELTA = "offensive_family_yardage_delta"
+    DEFENSIVE_FAMILY_YARDAGE_REDUCTION = "defensive_family_yardage_reduction"
+    INTERCEPTION_RISK_REDUCTION = "interception_risk_reduction"
+    FIELD_GOAL_ACCURACY_BONUS = "field_goal_accuracy_bonus"
+    BLOCKED_KICK_RISK_REDUCTION = "blocked_kick_risk_reduction"
+    PUNT_RETURN_YARDS_BONUS = "punt_return_yards_bonus"
+    KICKOFF_RETURN_YARDS_BONUS = "kickoff_return_yards_bonus"
+    BYE_WEEK = "bye_week"
+
+
+@dataclass(frozen=True)
+class FootballCoachUpgradeEffect:
+    """A typed, run-owned coach effect consumed by the shop and match engine."""
+
+    upgrade_id: str
+    kind: FootballCoachUpgradeKind
+    magnitude: float
+    family: FootballCardFamily | None = None
+
+    def __post_init__(self) -> None:
+        _validate_name(self.upgrade_id, "Coach upgrade identifier")
+        if not isinstance(self.kind, FootballCoachUpgradeKind):
+            raise ValueError("Coach upgrade kind must be a FootballCoachUpgradeKind.")
+        if isinstance(self.magnitude, bool):
+            raise ValueError("Coach upgrade magnitude must be numeric.")
+        _validate_finite_number(self.magnitude, "Coach upgrade magnitude")
+        if self.kind is FootballCoachUpgradeKind.BYE_WEEK:
+            if self.magnitude != 0:
+                raise ValueError("Bye Week must not have a numeric match effect.")
+        elif self.kind in (
+            FootballCoachUpgradeKind.OFFENSIVE_PLAY_CLOCK_DELTA,
+            FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+        ):
+            if self.magnitude == 0:
+                raise ValueError("Coach upgrade magnitude must not be zero.")
+        elif self.magnitude <= 0:
+            raise ValueError("Coach upgrade magnitude must be positive.")
+        if self.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP and (
+            self.magnitude <= 0 or int(self.magnitude) != self.magnitude
+        ):
+            raise ValueError("Future-shop AP bonuses must be positive whole numbers.")
+        family_required = self.kind in (
+            FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+            FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
+        )
+        if family_required != (self.family is not None):
+            raise ValueError(
+                "Only family-specific coach upgrades may specify a card family."
+            )
+        if self.family is not None and not isinstance(self.family, FootballCardFamily):
+            raise ValueError("Coach upgrade family must be a FootballCardFamily.")
+
+
 class OffensivePlayAction(str, Enum):
     RB_RUN = "rb_run"
     SCREEN_PASS = "screen_pass"
@@ -631,6 +693,8 @@ class FootballMatchState:
     team_b_offense_deck: FootballDeckState | None = None
     team_b_defense_deck: FootballDeckState | None = None
     conversion_team: FootballTeamSide | None = None
+    team_a_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = ()
+    team_b_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.team_a, FootballRoster) or not isinstance(
@@ -704,6 +768,21 @@ class FootballMatchState:
             )
         ):
             raise ValueError("Match decks must be FootballDeckState instances or None.")
+        if any(
+            not isinstance(upgrades, tuple)
+            or any(
+                not isinstance(upgrade, FootballCoachUpgradeEffect)
+                for upgrade in upgrades
+            )
+            or len({upgrade.upgrade_id for upgrade in upgrades}) != len(upgrades)
+            for upgrades in (
+                self.team_a_coach_upgrades,
+                self.team_b_coach_upgrades,
+            )
+        ):
+            raise ValueError(
+                "Match coach upgrades must be unique immutable effect tuples."
+            )
         if any(event.sequence != index for index, event in enumerate(self.match_events, 1)):
             raise ValueError("Match event sequence numbers must be contiguous.")
         if self.status is FootballMatchStatus.COMPLETED:

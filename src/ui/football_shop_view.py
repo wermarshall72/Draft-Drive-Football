@@ -12,7 +12,7 @@ from src.engine.football_simulator import calculate_standardized_play_estimate
 from src.ui.football_display import _POSITION_LABELS
 from src.ui.text import fit_text as _fit_text
 from src.ui.theme import Theme
-from src.ui.widgets import Button, draw_panel, draw_text
+from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
 _RARITY_COLORS = {
     FootballShopRarity.COMMON: pygame.Color("#a8b2a1"),
@@ -45,6 +45,7 @@ class FootballShopView:
         surface: pygame.Surface,
         content: pygame.Rect,
         shop: FootballShopState | None,
+        transition_message: str | None = None,
     ) -> list[Button]:
         if shop is None:
             raise RuntimeError("The controller did not provide the active shop state.")
@@ -55,7 +56,14 @@ class FootballShopView:
             self._label_font,
             self.theme.text,
         )
-        points_label = f"{shop.remaining_ap} ACTION POINTS"
+        points_label = (
+            f"{shop.remaining_ap} ACTION POINTS"
+            + (
+                f"  /  NEXT SHOP +{shop.future_shop_ap_bonus} AP"
+                if shop.future_shop_ap_bonus
+                else ""
+            )
+        )
         points_width = self._label_font.size(points_label)[0] + 24
         points_rect = pygame.Rect(
             content.right - points_width,
@@ -73,10 +81,10 @@ class FootballShopView:
         )
         draw_text(
             surface,
-            "Unspent AP expires when you finish the shop.",
+            transition_message or "Unspent AP expires when you finish the shop.",
             (content.left + 2, content.top + 27),
             self._small_font,
-            self.theme.muted,
+            self.theme.secondary_accent if transition_message else self.theme.muted,
         )
         gap = 10
         panel_top = content.top + 50
@@ -342,13 +350,46 @@ class FootballShopView:
         else:
             reason = _fit_text(card.description, self._small_font, text_width)
         if rect.height >= (34 if tiny else 42 if compact else 58):
-            draw_text(
-                surface,
-                _fit_text(reason, self._small_font, text_width),
-                (text_left, rect.top + (18 if tiny else 30 if compact else 41)),
-                self._small_font,
-                self.theme.secondary_accent if not purchased else self.theme.muted,
-            )
+            reason_top = rect.top + (18 if tiny else 30 if compact else 41)
+            if card.coach_upgrade_effect is not None and not compact:
+                status = (
+                    "PURCHASED"
+                    if purchased
+                    else slot.disabled_reason
+                    or (
+                        f"NEED {card.cost - remaining_ap} MORE AP"
+                        if card.cost > remaining_ap
+                        else "READY TO BUY"
+                    )
+                )
+                draw_text(
+                    surface,
+                    _fit_text(status, self._small_font, text_width),
+                    (text_left, reason_top),
+                    self._small_font,
+                    self.theme.muted if purchased else self.theme.secondary_accent,
+                )
+                draw_wrapped_text(
+                    surface,
+                    card.description,
+                    pygame.Rect(
+                        text_left,
+                        reason_top + 17,
+                        text_width,
+                        rect.bottom - reason_top - 22,
+                    ),
+                    self._small_font,
+                    self.theme.muted if purchased else self.theme.text,
+                    line_gap=2,
+                )
+            else:
+                draw_text(
+                    surface,
+                    _fit_text(reason, self._small_font, text_width),
+                    (text_left, reason_top),
+                    self._small_font,
+                    self.theme.secondary_accent if not purchased else self.theme.muted,
+                )
         if (
             rect.height >= 75
             and isinstance(football_card, FootballPlayDefinition)
@@ -431,4 +472,3 @@ class FootballShopView:
                 variant="primary" if not purchased else "quiet",
             )
         )
-
