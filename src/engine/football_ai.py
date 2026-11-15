@@ -31,7 +31,7 @@ from src.engine.football_player_catalog import (
     player_type_offer,
 )
 from src.engine.football_simulator import (
-    calculate_play_estimate,
+    calculate_match_play_estimate,
     field_goal_distance_for_position,
     field_goal_success_probability,
 )
@@ -270,6 +270,28 @@ class FootballAI:
         deck = self._deck_for_state(state, offensive=False)
         return tuple(DEFENSIVE_SCHEME_CATALOG[card.card_id].action for card in deck.hand)
 
+    def choose_conversion_card(self, state: FootballMatchState) -> str | None:
+        if (
+            state.awaited_action is not FootballAwaitedAction.CONVERSION
+            or state.conversion_team is not self.team_side
+            or state.possession is not self.team_side
+        ):
+            raise ValueError("AI can choose a card only for its own conversion.")
+        deck = self._deck_for_state(state, offensive=True)
+        if not deck.hand:
+            return None
+        plays = tuple(OFFENSIVE_PLAY_CATALOG[card.card_id].action for card in deck.hand)
+        play = (
+            self._rng.choice(plays)
+            if self.difficulty is FootballAIDifficulty.EASY
+            else self._choose_offensive_play(state, plays)
+        )
+        return next(
+            card.copy_id
+            for card in deck.hand
+            if OFFENSIVE_PLAY_CATALOG[card.card_id].action is play
+        )
+
     def _deck_for_state(
         self, state: FootballMatchState, *, offensive: bool
     ) -> FootballDeckState:
@@ -337,20 +359,17 @@ class FootballAI:
     def _hard_play_score(
         self, state: FootballMatchState, play: OffensivePlayAction
     ) -> float:
-        offense = self._roster_for_side(state, self.team_side)
-        defense = self._roster_for_side(state, self._opponent(self.team_side))
         scheme = state.current_drive_defensive_scheme
         if scheme is None:
             raise ValueError("Hard offensive evaluation requires the active defensive scheme.")
-        prior_plays = sum(
-            event.play_result is not None for event in state.match_events
-        )
-        estimate = calculate_play_estimate(
-            offense,
-            defense,
+        estimate = calculate_match_play_estimate(
+            state,
             play,
-            scheme,
-            prior_plays=prior_plays,
+            scheme=scheme,
+            offense_side=self.team_side,
+            is_conversion=(
+                state.awaited_action is FootballAwaitedAction.CONVERSION
+            ),
         )
         probability = estimate.first_down_probability(state.yards_to_go)
         return (
@@ -425,15 +444,11 @@ class FootballAI:
             counters,
             key=lambda action: self._situational_play_score(state, action),
         )
-        prior_plays = sum(
-            event.play_result is not None for event in state.match_events
-        )
-        estimate = calculate_play_estimate(
-            offense,
-            defense,
+        estimate = calculate_match_play_estimate(
+            state,
             play,
-            scheme,
-            prior_plays=prior_plays,
+            scheme=scheme,
+            offense_side=self._opponent(self.team_side),
         )
         return (
             self._likely_offensive_play_score(state, scheme)

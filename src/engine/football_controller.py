@@ -282,12 +282,20 @@ class FootballGameController:
         return self.state
 
     def choose_conversion(
-        self, action: FootballConversionAction
+        self,
+        action: FootballConversionAction,
+        play: OffensivePlayAction | str | None = None,
     ) -> FootballGameControllerState:
         if not isinstance(action, FootballConversionAction):
             raise ValueError("Action must be a FootballConversionAction.")
+        if (
+            play is not None
+            and not isinstance(play, OffensivePlayAction)
+            and type(play) is not str
+        ):
+            raise ValueError("Play must be an OffensivePlayAction or card copy id.")
         self._require_decision(FootballHumanDecision.CONVERSION)
-        self._require_simulator().resolve_conversion(action)
+        self._require_simulator().resolve_conversion(action, play)
         self._advance_match()
         return self.state
 
@@ -349,7 +357,12 @@ class FootballGameController:
             elif awaited is FootballAwaitedAction.CONVERSION:
                 if not isinstance(action, FootballConversionAction):
                     raise RuntimeError("AI returned an invalid conversion action.")
-                simulator.resolve_conversion(action)
+                play = (
+                    self._ai.choose_conversion_card(simulator.state)
+                    if action is FootballConversionAction.TWO_POINT
+                    else None
+                )
+                simulator.resolve_conversion(action, play)
             else:
                 raise RuntimeError(
                     f"AI cannot act while awaiting {simulator.state.awaited_action!r}."

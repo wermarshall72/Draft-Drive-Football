@@ -47,7 +47,7 @@ from src.engine.football_team_builder import (
     PLAYER_DRAFT_ORDER,
     FootballPlayerCandidate,
 )
-from src.engine.football_simulator import calculate_play_estimate
+from src.engine.football_simulator import calculate_match_play_estimate
 from src.ui.coach_art import draw_playbook_mark, draw_recruiting_table
 from src.ui.coach_fonts import coach_font, staff_font
 from src.ui.layout import Layout
@@ -1049,15 +1049,37 @@ class FootballRunScreen(Screen):
                         )
                     ),
                 ),
-                (
-                    "TWO-POINT TRY",
-                    lambda: self._submit_match_action(
-                        lambda: self._require_controller().choose_conversion(
-                            FootballConversionAction.TWO_POINT
-                        )
-                    ),
-                ),
             ]
+            match = state.match
+            if match is None:
+                raise RuntimeError("The controller did not provide an active match state.")
+            deck = match.team_a_offense_deck
+            if deck is None:
+                raise RuntimeError("The human offensive deck is not initialized.")
+            if deck.hand:
+                actions.extend(
+                    (
+                        f"2PT: {OFFENSIVE_PLAY_CATALOG[card.card_id].name}",
+                        lambda card_id=card.copy_id: self._submit_match_action(
+                            lambda: self._require_controller().choose_conversion(
+                                FootballConversionAction.TWO_POINT,
+                                card_id,
+                            )
+                        ),
+                    )
+                    for card in deck.hand
+                )
+            else:
+                actions.append(
+                    (
+                        "2PT: BASIC RUN",
+                        lambda: self._submit_match_action(
+                            lambda: self._require_controller().choose_conversion(
+                                FootballConversionAction.TWO_POINT
+                            )
+                        ),
+                    )
+                )
         else:
             heading = "LOCAL AI IS RESOLVING ITS DRIVE"
             actions = []
@@ -1251,16 +1273,9 @@ class FootballRunScreen(Screen):
                     _MATCH_MUTED,
                 )
                 if offensive and match.current_drive_defensive_scheme is not None:
-                    prior_plays = sum(
-                        event.play_result is not None
-                        for event in match.match_events
-                    )
-                    estimate = calculate_play_estimate(
-                        match.team_a,
-                        match.team_b,
+                    estimate = calculate_match_play_estimate(
+                        match,
                         definition.action,
-                        match.current_drive_defensive_scheme,
-                        prior_plays=prior_plays,
                     )
                     preview = (
                         f"~{estimate.expected_yards:.1f} YDS"
@@ -3067,12 +3082,46 @@ class FootballRunScreen(Screen):
             ]
         elif decision is FootballHumanDecision.CONVERSION:
             heading = "TOUCHDOWN  /  CHOOSE YOUR CONVERSION"
+            match = state.match
+            if match is None:
+                raise RuntimeError("The controller did not provide an active match state.")
+            deck = match.team_a_offense_deck
+            if deck is None:
+                raise RuntimeError("The human offensive deck is not initialized.")
             actions = [
-                (action.value.replace("_", " ").upper(), lambda action=action: self._submit(
-                    lambda: self._require_controller().choose_conversion(action)
-                ))
-                for action in FootballConversionAction
+                (
+                    "EXTRA POINT",
+                    lambda: self._submit(
+                        lambda: self._require_controller().choose_conversion(
+                            FootballConversionAction.EXTRA_POINT
+                        )
+                    ),
+                )
             ]
+            if deck.hand:
+                actions.extend(
+                    (
+                        f"2PT: {OFFENSIVE_PLAY_CATALOG[card.card_id].name}",
+                        lambda card_id=card.copy_id: self._submit(
+                            lambda: self._require_controller().choose_conversion(
+                                FootballConversionAction.TWO_POINT,
+                                card_id,
+                            )
+                        ),
+                    )
+                    for card in deck.hand
+                )
+            else:
+                actions.append(
+                    (
+                        "2PT: BASIC RUN",
+                        lambda: self._submit(
+                            lambda: self._require_controller().choose_conversion(
+                                FootballConversionAction.TWO_POINT
+                            )
+                        ),
+                    )
+                )
         else:
             heading = "LOCAL AI IS RESOLVING ITS DRIVE"
             actions = []

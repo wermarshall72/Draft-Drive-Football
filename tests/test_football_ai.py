@@ -565,3 +565,35 @@ def test_ai_uses_only_its_hand_or_basic_fallback() -> None:
         team_b_offense_deck=empty_hand,
     )
     assert ai.choose_action(fallback_state) is OffensivePlayAction.RB_RUN
+
+
+@pytest.mark.parametrize("difficulty", tuple(FootballAIDifficulty))
+def test_ai_two_point_card_choice_is_from_its_current_hand(
+    difficulty: FootballAIDifficulty,
+) -> None:
+    legal = FootballCardCopy("conversion:legal", OffensivePlayAction.SHORT_PASS.value)
+    deck = FootballDeckState((legal,), hand=(legal,))
+    state = _state(
+        possession=FootballTeamSide.TEAM_B,
+        conversion_team=FootballTeamSide.TEAM_B,
+        awaited_action=FootballAwaitedAction.CONVERSION,
+        down=1,
+        yards_to_go=2.0,
+        offense_field_position=98.0,
+        current_drive_defensive_scheme=DefensiveSchemeAction.GOAL_LINE_FRONT,
+        team_b_offense_deck=deck,
+    )
+    ai = FootballAI(FootballTeamSide.TEAM_B, difficulty, 14)
+    assert ai.choose_conversion_card(state) == legal.copy_id
+
+    empty_state = _state(
+        possession=FootballTeamSide.TEAM_B,
+        conversion_team=FootballTeamSide.TEAM_B,
+        awaited_action=FootballAwaitedAction.CONVERSION,
+        down=1,
+        yards_to_go=2.0,
+        offense_field_position=98.0,
+        current_drive_defensive_scheme=DefensiveSchemeAction.GOAL_LINE_FRONT,
+        team_b_offense_deck=FootballDeckState((legal,)),
+    )
+    assert ai.choose_conversion_card(empty_state) is None

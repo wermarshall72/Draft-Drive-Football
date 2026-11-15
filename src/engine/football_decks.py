@@ -73,7 +73,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "O-line and running back attack the interior; run-focused coaches apply.",
                 FootballPlayFamily.RUN,
                 4.0,
-                18,
+                26,
             ),
             _play(
                 OffensivePlayAction.SCREEN_PASS,
@@ -81,7 +81,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "O-line and receiver set up a quick screen against edge coverage.",
                 FootballPlayFamily.PASS,
                 3.5,
-                18,
+                24,
             ),
             _play(
                 OffensivePlayAction.PA_PASS,
@@ -89,7 +89,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Quarterback and running back sell the run before a pass.",
                 FootballPlayFamily.PASS,
                 5.0,
-                18,
+                28,
             ),
             _play(
                 OffensivePlayAction.SHORT_PASS,
@@ -97,7 +97,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Running back and receiver work underneath against linebackers and corners.",
                 FootballPlayFamily.PASS,
                 5.5,
-                18,
+                24,
             ),
             _play(
                 OffensivePlayAction.MEDIUM_PASS,
@@ -105,7 +105,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Quarterback and O-line hold up for an intermediate route.",
                 FootballPlayFamily.PASS,
                 6.5,
-                18,
+                26,
             ),
             _play(
                 OffensivePlayAction.DEEP_PASS,
@@ -113,7 +113,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Quarterback and receiver challenge the safeties and corners downfield.",
                 FootballPlayFamily.PASS,
                 8.0,
-                18,
+                28,
             ),
             _play(
                 OffensivePlayAction.QB_SNEAK,
@@ -121,7 +121,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Quarterback follows the O-line into a short-yardage gap.",
                 FootballPlayFamily.RUN,
                 2.8,
-                18,
+                26,
             ),
             _play(
                 OffensivePlayAction.JET_SWEEP,
@@ -129,7 +129,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Receiver takes a handoff behind the O-line toward the edge.",
                 FootballPlayFamily.RUN,
                 4.0,
-                18,
+                26,
             ),
             _play(
                 OffensivePlayAction.QUICK_OUT,
@@ -137,7 +137,7 @@ OFFENSIVE_PLAY_CATALOG = MappingProxyType(
                 "Quarterback targets a receiver outside before underneath coverage closes.",
                 FootballPlayFamily.PASS,
                 4.5,
-                18,
+                24,
             ),
         )
     }

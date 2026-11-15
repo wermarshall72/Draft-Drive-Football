@@ -1694,6 +1694,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     seen_offense = False
     seen_defense = False
     seen_ai_play = False
+    seen_two_point = False
     for _ in range(1200):
         state = controller.state
         if state.phase is not FootballRunPhase.MATCH:
@@ -1733,8 +1734,21 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
             }
             labels["PUNT"].action()
         elif state.human_decision is FootballHumanDecision.CONVERSION:
-            expected = FootballConversionAction.EXTRA_POINT
-            labels["EXTRA POINT"].action()
+            if not seen_two_point:
+                deck = state.match.team_a_offense_deck
+                assert deck is not None
+                if deck.hand:
+                    card = deck.hand[0]
+                    label = f"2PT: {OFFENSIVE_PLAY_CATALOG[card.card_id].name}"
+                    assert label in labels
+                    labels[label].action()
+                else:
+                    labels["2PT: BASIC RUN"].action()
+                expected = FootballConversionAction.TWO_POINT
+                seen_two_point = True
+            else:
+                expected = FootballConversionAction.EXTRA_POINT
+                labels["EXTRA POINT"].action()
         else:
             pytest.fail(f"Unexpected match decision: {state.human_decision}")
 
@@ -1760,7 +1774,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     assert final.match is not None
     assert final.match.status is FootballMatchStatus.COMPLETED
     assert final.match.final_result is not None
-    assert seen_offense and seen_defense and seen_ai_play
+    assert seen_offense and seen_defense and seen_ai_play and seen_two_point
     desktop.router.draw(_surface())
     assert any(
         button.label in {"OPEN NEXT GAME SHOP", "RETURN TO MAIN MENU"}

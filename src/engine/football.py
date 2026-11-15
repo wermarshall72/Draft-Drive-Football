@@ -514,8 +514,8 @@ class FootballMatchEvent:
                 self.action is FootballFourthDownAction.FIELD_GOAL
             ) != (self.field_goal_distance is not None):
                 raise ValueError("Only field-goal events must record field-goal distance.")
-            if self.action is FootballFourthDownAction.FIELD_GOAL and self.points_scored not in (0, 3):
-                raise ValueError("Field-goal events can score zero or three points.")
+            if self.action is FootballFourthDownAction.FIELD_GOAL and self.points_scored not in (0, 3, 6):
+                raise ValueError("Field-goal events can score zero, three, or six points.")
         elif self.field_goal_distance is not None:
             raise ValueError("Only field-goal events can record field-goal distance.")
         if (

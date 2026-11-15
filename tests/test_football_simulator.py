@@ -495,16 +495,32 @@ def test_matching_scheme_changes_power_but_mismatching_scheme_does_not(play):
 def test_normal_run_and_completed_pass_advance_clock_and_down():
     run = _sim_with_scheme(rng=SequenceRNG((0.99,), (0.0,)))
     run_state = run.resolve_offensive_play(OffensivePlayAction.RB_RUN)
-    assert run_state.offense_field_position == 32.5
+    assert run_state.offense_field_position == 28.75
     assert run_state.down == 2
-    assert run_state.yards_to_go == 2.5
-    assert run_state.game_clock_seconds == 882
+    assert run_state.yards_to_go == 6.25
+    assert run_state.game_clock_seconds == 874
 
     pass_sim = _sim_with_scheme(rng=SequenceRNG((0.99,), (0.0,)))
     pass_state = pass_sim.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
-    assert pass_state.offense_field_position == 36.5
+    assert pass_state.offense_field_position == 37.5
     assert pass_state.down == 1
-    assert pass_state.game_clock_seconds == 882
+    assert pass_state.game_clock_seconds == 872
+
+
+@pytest.mark.parametrize("play", tuple(OffensivePlayAction))
+def test_completed_offensive_card_uses_its_catalog_clock_duration(
+    play: OffensivePlayAction,
+) -> None:
+    simulator = _sim_with_scheme(
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+        rng=SequenceRNG((0.99,), (0.0,)),
+    )
+    result = simulator.resolve_offensive_play(play)
+    event = result.match_events[-1]
+    assert event.play_result is not None
+    expected = OFFENSIVE_PLAY_CATALOG[play.value].clock_seconds
+    assert event.clock_seconds_used == event.play_result.clock_seconds_used == expected
+    assert result.game_clock_seconds == 900 - expected
 
 
 def test_incomplete_pass_is_lossless_and_uses_less_clock_than_a_completion():
@@ -521,7 +537,7 @@ def test_incomplete_pass_is_lossless_and_uses_less_clock_than_a_completion():
 
     complete_sim = _sim_with_scheme(rng=SequenceRNG((0.99,), (0.0,)))
     completed = complete_sim.resolve_offensive_play(OffensivePlayAction.SHORT_PASS)
-    assert completed.game_clock_seconds == 882
+    assert completed.game_clock_seconds == 876
 
 
 def test_first_down_and_goal_to_go_use_the_shorter_distance():
@@ -531,11 +547,11 @@ def test_first_down_and_goal_to_go_use_the_shorter_distance():
     )
     first_down = first_down_sim.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
     assert first_down.down == 1
-    assert first_down.offense_field_position == 36.5
+    assert first_down.offense_field_position == 37.5
     assert first_down.yards_to_go == 10.0
 
     goal_sim = _sim_with_scheme(
-        rng=SequenceRNG((0.99,), (-1.0,)),
+        rng=SequenceRNG((0.99,), (-0.5,)),
         offense_field_position=97.0,
         yards_to_go=10.0,
     )
@@ -548,8 +564,8 @@ def test_first_down_and_goal_to_go_use_the_shorter_distance():
 def test_negative_yardage_increases_distance_and_turnover_flips_field_position():
     negative_sim = _sim_with_scheme(rng=SequenceRNG((0.99,), (-10.0,)))
     negative = negative_sim.resolve_offensive_play(OffensivePlayAction.RB_RUN)
-    assert negative.offense_field_position == 22.5
-    assert negative.yards_to_go == 12.5
+    assert negative.offense_field_position == 18.75
+    assert negative.yards_to_go == 16.25
     assert negative.down == 2
 
     turnover_sim = _sim_with_scheme(
@@ -572,15 +588,15 @@ def test_long_yardage_requires_the_actual_distance_on_later_downs() -> None:
     )
     negative = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     assert negative.down == 2
-    assert negative.yards_to_go == 12.5
+    assert negative.yards_to_go == 16.25
 
     simulator.rng = SequenceRNG((0.99,), (6.0,))
     short = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     result = short.match_events[-1].play_result
     assert result is not None
-    assert result.yards_gained == 13.5
-    assert short.down == 1
-    assert short.yards_to_go == 10.0
+    assert result.yards_gained == 9.75
+    assert short.down == 3
+    assert short.yards_to_go == 6.5
 
 
 @pytest.mark.parametrize(
@@ -599,7 +615,7 @@ def test_fourth_and_fifteen_requires_fifteen_yards(
             current_drive_defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
         )
     )
-    simulator.rng = SequenceRNG((0.99,), (gain - 7.5,))
+    simulator.rng = SequenceRNG((0.99,), (gain - 3.75,))
     simulator.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
     state = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     result = state.match_events[-1].play_result
@@ -619,7 +635,7 @@ def test_fourth_and_fifteen_requires_fifteen_yards(
 
 def test_goal_to_go_exact_line_gain_scores_and_updates_possession() -> None:
     simulator = _sim_with_scheme(
-        rng=SequenceRNG((0.99,), (-2.0,)),
+        rng=SequenceRNG((0.99,), (-1.75,)),
         yards_to_go=2.0,
         offense_field_position=98.0,
     )
@@ -728,7 +744,7 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
         if defensive_touchdown
         else min(100.0, 100.0 - field_position + expected_return)
     )
-    assert state.game_clock_seconds == 882
+    assert state.game_clock_seconds == 872
     assert state.current_drive_defensive_scheme is (
         DefensiveSchemeAction.DEEP_PASS if defensive_touchdown else None
     )
@@ -745,7 +761,7 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
         if defensive_touchdown
         else FootballAwaitedAction.DEFENSIVE_SCHEME
     )
-    assert state.match_events[-1].clock_seconds_used == 18
+    assert state.match_events[-1].clock_seconds_used == 28
     assert state.match_events[-1].action is OffensivePlayAction.DEEP_PASS
     assert sum(
         event.action is OffensivePlayAction.DEEP_PASS
@@ -772,10 +788,10 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
 @pytest.mark.parametrize(
     ("period", "clock", "expected_period", "expected_clock", "status"),
     (
-        (1, 900, 1, 882, FootballMatchStatus.IN_PROGRESS),
+        (1, 900, 1, 872, FootballMatchStatus.IN_PROGRESS),
         (1, 18, 1, 0, FootballMatchStatus.IN_PROGRESS),
         (2, 18, 2, 0, FootballMatchStatus.IN_PROGRESS),
-        (3, 300, 3, 282, FootballMatchStatus.IN_PROGRESS),
+        (3, 300, 3, 272, FootballMatchStatus.IN_PROGRESS),
     ),
 )
 @pytest.mark.parametrize(
@@ -816,7 +832,7 @@ def test_ball_hawk_touchdown_uses_match_score_and_clock_conventions(
     assert state.period == event.period == expected_period
     assert state.game_clock_seconds == event.game_clock_seconds == expected_clock
     assert state.status is event.status is status
-    assert result.clock_seconds_used == event.clock_seconds_used == 18
+    assert result.clock_seconds_used == event.clock_seconds_used == min(clock, 28)
     assert state.current_drive_defensive_scheme is DefensiveSchemeAction.DEEP_PASS
     assert state.conversion_team is defense_side
     assert state.awaited_action is FootballAwaitedAction.CONVERSION
@@ -868,8 +884,8 @@ def test_negative_yardage_from_goal_to_go_uses_actual_line_to_gain():
         yards_to_go=10.0,
     )
     result = sim.resolve_offensive_play(OffensivePlayAction.PA_PASS)
-    assert result.offense_field_position == 90.5
-    assert result.yards_to_go == 9.5
+    assert result.offense_field_position == 91.5
+    assert result.yards_to_go == 8.5
 
 
 def test_incomplete_play_at_goal_line_does_not_score_without_positive_gain():
@@ -945,7 +961,7 @@ def test_go_for_it_uses_a_normal_card_play_and_converts_fourth_down():
     assert converted.offense_field_position > 25.0
     assert converted.awaited_action is FootballAwaitedAction.OFFENSIVE_PLAY
     assert converted.current_drive_defensive_scheme is DefensiveSchemeAction.RB_RUN
-    assert converted.game_clock_seconds == 882
+    assert converted.game_clock_seconds == 874
     result = converted.match_events[-1].play_result
     assert result is not None and not result.turnover_on_downs
     assert result.defensive_scheme is DefensiveSchemeAction.RB_RUN
@@ -1058,7 +1074,7 @@ def test_fourth_down_failure_turns_over_at_play_spot_and_incomplete_pass_uses_no
     assert flipped.offense_field_position == pytest.approx(
         100.0 - (25.0 + result.yards_gained)
     )
-    assert flipped.game_clock_seconds == 882
+    assert flipped.game_clock_seconds == 874
     assert flipped.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
     assert flipped.current_drive_defensive_scheme is None
 
@@ -1098,7 +1114,7 @@ def test_fourth_down_turnover_and_touchdown_follow_normal_play_resolution():
     result = turned.match_events[-1].play_result
     assert result is not None and result.turnover and not result.turnover_on_downs
     assert turned.possession is FootballTeamSide.TEAM_B
-    assert turned.game_clock_seconds == 882
+    assert turned.game_clock_seconds == 872
 
     safety = FootballMatchSimulator(
         _match_state(
@@ -1182,10 +1198,122 @@ def test_punt_records_gross_and_return_yardage_and_touchback():
             awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
         )
     )
-    blocked.rng = SequenceRNG((0.0,))
+    blocked.rng = SequenceRNG((0.0, 0.0), gauss_values=(15.0,))
     blocked_state = blocked.resolve_fourth_down(FootballFourthDownAction.PUNT)
     assert blocked_state.match_events[-1].blocked
-    assert blocked_state.offense_field_position == 75.0
+    assert blocked_state.possession is FootballTeamSide.TEAM_B
+    assert blocked_state.offense_field_position == 90.0
+
+
+@pytest.mark.parametrize(
+    "decision",
+    (FootballFourthDownAction.PUNT, FootballFourthDownAction.FIELD_GOAL),
+)
+@pytest.mark.parametrize(
+    "kicking_team",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+def test_blocked_kick_defensive_recovery_returns_from_both_sides(
+    decision: FootballFourthDownAction,
+    kicking_team: FootballTeamSide,
+) -> None:
+    simulator = FootballMatchSimulator(
+        _match_state(
+            possession=kicking_team,
+            down=4,
+            offense_field_position=25.0,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        )
+    )
+    simulator.rng = SequenceRNG((0.0, 0.0), gauss_values=(15.0,))
+    result = simulator.resolve_fourth_down(decision)
+    event = result.match_events[-1]
+
+    assert event.blocked
+    assert event.return_yards == 15.0
+    assert "returned 15.0 yards" in event.description
+    assert result.possession is (
+        FootballTeamSide.TEAM_B
+        if kicking_team is FootballTeamSide.TEAM_A
+        else FootballTeamSide.TEAM_A
+    )
+    assert result.offense_field_position == 90.0
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+    expected_clock_cost = (
+        10 if decision is FootballFourthDownAction.PUNT else 5
+    )
+    assert result.game_clock_seconds == 900 - expected_clock_cost
+
+
+@pytest.mark.parametrize(
+    "decision",
+    (FootballFourthDownAction.PUNT, FootballFourthDownAction.FIELD_GOAL),
+)
+def test_blocked_kick_can_be_recovered_by_the_kicking_team(
+    decision: FootballFourthDownAction,
+) -> None:
+    simulator = FootballMatchSimulator(
+        _match_state(
+            down=4,
+            offense_field_position=25.0,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        )
+    )
+    simulator.rng = SequenceRNG((0.0, 0.99), gauss_values=(4.0,))
+    result = simulator.resolve_fourth_down(decision)
+
+    assert result.possession is FootballTeamSide.TEAM_A
+    assert result.offense_field_position == 21.0
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+    assert result.current_drive_defensive_scheme is None
+    assert result.match_events[-1].description == (
+        "Blocked kick recovered by kicking team"
+    )
+
+
+@pytest.mark.parametrize(
+    ("return_yards", "touchdown"),
+    ((97.0, False), (98.0, True)),
+)
+@pytest.mark.parametrize(
+    "decision",
+    (FootballFourthDownAction.PUNT, FootballFourthDownAction.FIELD_GOAL),
+)
+def test_blocked_kick_return_respects_goal_line_and_conversion_flow(
+    return_yards: float,
+    touchdown: bool,
+    decision: FootballFourthDownAction,
+) -> None:
+    simulator = FootballMatchSimulator(
+        _match_state(
+            down=4,
+            offense_field_position=98.0,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+        )
+    )
+    simulator.rng = SequenceRNG(
+        (0.0, 0.0, 0.99, 0.0, 0.0),
+        gauss_values=(return_yards,),
+    )
+    result = simulator.resolve_fourth_down(decision)
+    event = result.match_events[-1]
+    assert event.blocked
+    if not touchdown:
+        assert event.points_scored == 0
+        assert result.possession is FootballTeamSide.TEAM_B
+        assert result.offense_field_position == 99.0
+        assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+        return
+
+    assert event.points_scored == 6
+    assert event.scoring_team is FootballTeamSide.TEAM_B
+    assert result.team_b_score == 6
+    assert result.conversion_team is FootballTeamSide.TEAM_B
+    assert result.awaited_action is FootballAwaitedAction.CONVERSION
+    converted = simulator.resolve_conversion(FootballConversionAction.EXTRA_POINT)
+    assert converted.team_b_score == 7
+    assert converted.possession is FootballTeamSide.TEAM_A
+    assert converted.match_events[-1].action is FootballAutomaticAction.KICKOFF
 
 
 def test_field_goal_distance_is_goal_distance_plus_ten_and_made_or_missed():
@@ -1233,7 +1361,7 @@ def test_field_goal_distance_is_goal_distance_plus_ten_and_made_or_missed():
 def test_conversion_at_expired_clock_is_untimed_and_completes_after_touchdown():
     simulator = _sim_with_scheme(
         scheme=DefensiveSchemeAction.RB_RUN,
-        rng=SequenceRNG((0.99, 0.99, 0.0), (0.0,)),
+        rng=SequenceRNG((0.99, 0.99, 0.0), (0.5,)),
         period=2,
         game_clock_seconds=18,
         offense_field_position=97.0,
@@ -1267,7 +1395,14 @@ def test_two_point_attempt_uses_and_cycles_an_offensive_hand_card():
         )
     )
     simulator.rng = SequenceRNG((0.99, 0.0), (0.0,))
-    result = simulator.resolve_conversion(FootballConversionAction.TWO_POINT)
+    before_invalid = simulator.state
+    with pytest.raises(ValueError, match="fallback is available only"):
+        simulator.resolve_conversion(FootballConversionAction.TWO_POINT)
+    assert simulator.state is before_invalid
+    result = simulator.resolve_conversion(
+        FootballConversionAction.TWO_POINT,
+        run.copy_id,
+    )
     conversion_event = next(
         event
         for event in result.match_events
@@ -1284,6 +1419,140 @@ def test_two_point_attempt_uses_and_cycles_an_offensive_hand_card():
     updated_deck = result.team_a_offense_deck
     assert updated_deck is not None
     assert updated_deck.hand == (pass_card, run)
+    assert updated_deck.discard_pile == ()
+
+
+def test_two_point_attempt_uses_basic_run_when_the_hand_is_empty() -> None:
+    basic_run = FootballCardCopy(
+        "conversion:empty-hand-basic-run",
+        OffensivePlayAction.RB_RUN.value,
+    )
+    deck = FootballDeckState((basic_run,), discard_pile=(basic_run,))
+    simulator = FootballMatchSimulator(
+        _match_state(
+            team_a_score=6,
+            awaited_action=FootballAwaitedAction.CONVERSION,
+            conversion_team=FootballTeamSide.TEAM_A,
+            team_a_offense_deck=deck,
+        )
+    )
+    simulator.rng = SequenceRNG((0.99,), (0.0,))
+    result = simulator.resolve_conversion(FootballConversionAction.TWO_POINT)
+    event = next(
+        event
+        for event in result.match_events
+        if event.action is FootballConversionAction.TWO_POINT
+    )
+
+    assert event.points_scored == 2
+    assert "two-point rb run successful" in event.description.lower()
+    assert result.team_a_offense_deck == deck
+
+
+def test_two_point_turnover_without_a_return_scores_no_points() -> None:
+    run = FootballCardCopy("conversion:turnover-run", OffensivePlayAction.RB_RUN.value)
+    deck = FootballDeckState((run,), hand=(run,))
+    simulator = FootballMatchSimulator(
+        _match_state(
+            team_a_score=6,
+            awaited_action=FootballAwaitedAction.CONVERSION,
+            conversion_team=FootballTeamSide.TEAM_A,
+            team_a_offense_deck=deck,
+        )
+    )
+    simulator.rng = SequenceRNG((0.0, 0.99, 0.0))
+    result = simulator.resolve_conversion(
+        FootballConversionAction.TWO_POINT,
+        run.copy_id,
+    )
+    event = next(
+        event
+        for event in result.match_events
+        if event.action is FootballConversionAction.TWO_POINT
+    )
+
+    assert event.points_scored == 0
+    assert "fumbled" in event.description
+    assert result.team_a_score == 6
+    assert result.possession is FootballTeamSide.TEAM_B
+
+
+@pytest.mark.parametrize(
+    "conversion",
+    (
+        FootballConversionAction.EXTRA_POINT,
+        FootballConversionAction.TWO_POINT,
+    ),
+)
+@pytest.mark.parametrize(
+    "touchdown_team",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+def test_conversion_defensive_return_kicks_off_for_original_touchdown_team(
+    conversion: FootballConversionAction,
+    touchdown_team: FootballTeamSide,
+) -> None:
+    run = FootballCardCopy("conversion:return-run", OffensivePlayAction.RB_RUN.value)
+    score_a = 6 if touchdown_team is FootballTeamSide.TEAM_A else 0
+    score_b = 6 if touchdown_team is FootballTeamSide.TEAM_B else 0
+    deck = FootballDeckState((run,), hand=(run,))
+    simulator = FootballMatchSimulator(
+        _match_state(
+            team_a_score=score_a,
+            team_b_score=score_b,
+            possession=touchdown_team,
+            conversion_team=touchdown_team,
+            awaited_action=FootballAwaitedAction.CONVERSION,
+            team_a_offense_deck=(
+                deck if touchdown_team is FootballTeamSide.TEAM_A else None
+            ),
+            team_b_offense_deck=(
+                deck if touchdown_team is FootballTeamSide.TEAM_B else None
+            ),
+        )
+    )
+    simulator.rng = SequenceRNG((0.0, 0.0, 0.0))
+    result = simulator.resolve_conversion(conversion, run.copy_id if conversion is FootballConversionAction.TWO_POINT else None)
+
+    return_team = (
+        FootballTeamSide.TEAM_B
+        if touchdown_team is FootballTeamSide.TEAM_A
+        else FootballTeamSide.TEAM_A
+    )
+    assert result.team_a_score == score_a + (2 if return_team is FootballTeamSide.TEAM_A else 0)
+    assert result.team_b_score == score_b + (2 if return_team is FootballTeamSide.TEAM_B else 0)
+    assert result.match_events[-1].action is FootballAutomaticAction.KICKOFF
+    assert result.possession is return_team
+
+
+def test_conversion_attempt_is_untimed_at_regulation_boundary() -> None:
+    run = FootballCardCopy("conversion:boundary-run", OffensivePlayAction.RB_RUN.value)
+    deep_pass = FootballCardCopy(
+        "conversion:boundary-pass",
+        OffensivePlayAction.DEEP_PASS.value,
+    )
+    deck = FootballDeckState((run, deep_pass), hand=(run, deep_pass))
+    simulator = FootballMatchSimulator(
+        _match_state(
+            period=2,
+            game_clock_seconds=1,
+            awaited_action=FootballAwaitedAction.CONVERSION,
+            conversion_team=FootballTeamSide.TEAM_A,
+            team_a_offense_deck=deck,
+        )
+    )
+    simulator.state = replace(simulator.state, game_clock_seconds=0)
+    simulator.rng = SequenceRNG((0.0,))
+    result = simulator.resolve_conversion(
+        FootballConversionAction.TWO_POINT,
+        deep_pass.copy_id,
+    )
+
+    assert result.match_events[-1].clock_seconds_used == 0
+    assert result.period == 3
+    assert result.game_clock_seconds == 300
+    assert result.status is FootballMatchStatus.IN_PROGRESS
+    assert result.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
 
 
 def test_scoring_kickoff_can_be_returned_for_a_touchdown():
@@ -1318,14 +1587,14 @@ def test_field_goal_block_turns_possession_over_without_scoring():
             awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
         )
     )
-    simulator.rng = SequenceRNG((0.0,))
+    simulator.rng = SequenceRNG((0.0, 0.0), gauss_values=(15.0,))
     result = simulator.resolve_fourth_down(FootballFourthDownAction.FIELD_GOAL)
     field_goal = result.match_events[-1]
     assert field_goal.blocked
-    assert field_goal.description == "Field goal blocked"
+    assert "returned 15.0 yards" in field_goal.description
     assert result.team_a_score == 0
     assert result.possession is FootballTeamSide.TEAM_B
-    assert result.offense_field_position == 75.0
+    assert result.offense_field_position == 90.0
 
 
 def test_scheme_is_fixed_for_drive_and_cleared_on_all_possession_changes():
@@ -1385,7 +1654,7 @@ def test_clock_is_capped_and_first_period_expiry_preserves_drive_state():
     assert capped_state.game_clock_seconds == REGULATION_PERIOD_SECONDS
     assert capped_state.possession is FootballTeamSide.TEAM_A
     assert capped_state.down == 2
-    assert capped_state.offense_field_position == 32.5
+    assert capped_state.offense_field_position == 28.75
     assert capped_state.current_drive_defensive_scheme is DefensiveSchemeAction.SHORT_PASS
 
 

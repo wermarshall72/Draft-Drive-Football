@@ -9,6 +9,7 @@ from src.engine.football import (
     FootballCardCopy,
     FootballCoach,
     FootballCoachAssignment,
+    FootballConversionAction,
     FootballFourthDownAction,
     FootballDeckState,
     FootballMatchState,
@@ -33,6 +34,7 @@ from src.engine.football_coaches import (
 )
 from src.engine.football_simulator import (
     FootballMatchSimulator,
+    calculate_match_play_estimate,
     calculate_play_estimate,
 )
 
@@ -120,6 +122,10 @@ def _simulator(
         current_drive_defensive_scheme=scheme if down == 4 else None,
         team_a_offense_deck=offense_deck,
         team_b_offense_deck=away_offense_deck,
+        team_a_defense_deck=_test_deck(
+            DefensiveSchemeAction,
+            "home-defense",
+        ),
         team_b_defense_deck=defense_deck,
     )
     simulator = FootballMatchSimulator(state)
@@ -359,6 +365,183 @@ def test_ground_and_pound_triggers_only_on_first_rb_run_attempt() -> None:
     assert not result.match_events[-1].play_result.perk_effects
 
 
+@pytest.mark.parametrize(
+    "possession",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+def test_match_estimate_matches_ground_and_pound_first_use_and_spent_state(
+    possession: FootballTeamSide,
+) -> None:
+    simulator = _simulator(
+        offense_assignment=_assignment("ground_and_pound"),
+        possession=possession,
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+        uniforms=(0.0, 0.0),
+    )
+    estimate = calculate_match_play_estimate(
+        simulator.state,
+        OffensivePlayAction.RB_RUN,
+    )
+    assert FootballCoachPerkKind.FIRST_RUN_YARDS in estimate.active_perks
+    first = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    first_result = first.match_events[-1].play_result
+    assert first_result is not None
+    assert first_result.yards_gained == pytest.approx(estimate.yards_on_success)
+    assert any("Ground and Pound: +3 yards" in item for item in first_result.perk_effects)
+
+    next_estimate = calculate_match_play_estimate(
+        simulator.state,
+        OffensivePlayAction.RB_RUN,
+    )
+    assert FootballCoachPerkKind.FIRST_RUN_YARDS not in next_estimate.active_perks
+    second = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    second_result = second.match_events[-1].play_result
+    assert second_result is not None
+    assert second_result.yards_gained == pytest.approx(
+        next_estimate.yards_on_success
+    )
+    assert not second_result.perk_effects
+
+
+@pytest.mark.parametrize(
+    "possession",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+def test_match_estimate_and_resolution_include_defensive_run_stop(
+    possession: FootballTeamSide,
+) -> None:
+    simulator = _simulator(
+        defense_assignment=_assignment("balanced_offense", "run_stop"),
+        possession=possession,
+        scheme=DefensiveSchemeAction.RB_RUN,
+        uniforms=(0.0,),
+    )
+    estimate = calculate_match_play_estimate(
+        simulator.state,
+        OffensivePlayAction.RB_RUN,
+    )
+    assert FootballCoachPerkKind.MATCHED_RUN_YARDS_REDUCTION in estimate.active_perks
+    result_state = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    result = result_state.match_events[-1].play_result
+    assert result is not None
+    assert result.yards_gained == pytest.approx(estimate.yards_on_success)
+    assert any("Run Stop" in item for item in result.perk_effects)
+
+
+@pytest.mark.parametrize(
+    ("defense_id", "perk_kind"),
+    (
+        ("coverage", FootballCoachPerkKind.MATCHED_PASS_INCOMPLETE_BONUS),
+        ("pressure_blitz", FootballCoachPerkKind.MATCHED_PASS_INTERCEPTION_BONUS),
+    ),
+)
+@pytest.mark.parametrize(
+    "possession",
+    (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B),
+)
+def test_contextual_pass_estimate_matches_defensive_completion_and_turnover(
+    defense_id: str,
+    perk_kind: FootballCoachPerkKind,
+    possession: FootballTeamSide,
+) -> None:
+    simulator = _simulator(
+        defense_assignment=_assignment("balanced_offense", defense_id),
+        possession=possession,
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+    )
+    state = simulator.state
+    estimate = calculate_match_play_estimate(
+        state,
+        OffensivePlayAction.DEEP_PASS,
+    )
+    assert perk_kind in estimate.active_perks
+
+    if perk_kind is FootballCoachPerkKind.MATCHED_PASS_INCOMPLETE_BONUS:
+        roll = estimate.incomplete_probability / 2
+    else:
+        roll = estimate.incomplete_probability + (
+            1.0 - estimate.incomplete_probability
+        ) * estimate.turnover_probability / 2
+
+    simulator.rng = FixedRNG((roll,), (0.0,))
+    result_state = simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+    result = result_state.match_events[-1].play_result
+    assert result is not None
+    assert (
+        result.incomplete
+        if perk_kind is FootballCoachPerkKind.MATCHED_PASS_INCOMPLETE_BONUS
+        else result.turnover
+    )
+    assert result.perk_effects
+
+
+def test_conversion_estimates_apply_eligible_run_perks_but_not_first_down_perks() -> None:
+    ground = _simulator(
+        offense_assignment=_assignment("ground_and_pound"),
+        scheme=DefensiveSchemeAction.GOAL_LINE_FRONT,
+        uniforms=(0.0,),
+    )
+    ground_state = replace(
+        ground.state,
+        awaited_action=FootballAwaitedAction.CONVERSION,
+        conversion_team=FootballTeamSide.TEAM_A,
+        yards_to_go=2.0,
+        offense_field_position=98.0,
+    )
+    ground = FootballMatchSimulator(ground_state)
+    ground.rng = FixedRNG((0.99,), (0.0,))
+    run_estimate = calculate_match_play_estimate(
+        ground.state,
+        OffensivePlayAction.RB_RUN,
+        is_conversion=True,
+    )
+    assert FootballCoachPerkKind.FIRST_RUN_YARDS in run_estimate.active_perks
+    run_result = ground.resolve_conversion(
+        FootballConversionAction.TWO_POINT,
+        OffensivePlayAction.RB_RUN,
+    )
+    run_event = next(
+        event
+        for event in run_result.match_events
+        if event.action is FootballConversionAction.TWO_POINT
+    )
+    assert any("Ground and Pound: +3 yards" in item for item in run_event.perk_effects)
+
+    pro_style = _simulator(
+        offense_assignment=_assignment("pro_style"),
+        scheme=DefensiveSchemeAction.DEEP_PASS,
+        uniforms=(0.0,),
+    )
+    pro_state = replace(
+        pro_style.state,
+        awaited_action=FootballAwaitedAction.CONVERSION,
+        conversion_team=FootballTeamSide.TEAM_A,
+        yards_to_go=2.0,
+        offense_field_position=98.0,
+    )
+    pro_style = FootballMatchSimulator(pro_state)
+    pro_style.rng = FixedRNG((0.99,), (0.0,))
+    pass_estimate = calculate_match_play_estimate(
+        pro_style.state,
+        OffensivePlayAction.SHORT_PASS,
+        is_conversion=True,
+    )
+    assert (
+        FootballCoachPerkKind.FIRST_DOWN_PASS_YARDS
+        not in pass_estimate.active_perks
+    )
+    pass_result = pro_style.resolve_conversion(
+        FootballConversionAction.TWO_POINT,
+        OffensivePlayAction.SHORT_PASS,
+    )
+    pass_event = next(
+        event
+        for event in pass_result.match_events
+        if event.action is FootballConversionAction.TWO_POINT
+    )
+    assert not any("Pro Style" in item for item in pass_event.perk_effects)
+
+
 def test_air_raid_first_completed_pass_skips_incomplete_and_applies_once() -> None:
     simulator = _simulator(
         offense_assignment=_assignment("air_raid"),
@@ -398,7 +581,7 @@ def test_pro_style_first_down_pass_and_option_spread_fourth_down_perk() -> None:
         offense_assignment=_assignment("option_spread"),
         down=4,
         yards_to_go=15.0,
-        uniforms=(10.0,),
+        uniforms=(10.5,),
     )
     option_state = option.resolve_fourth_down(
         FootballFourthDownAction.GO_FOR_IT
@@ -411,16 +594,12 @@ def test_pro_style_first_down_pass_and_option_spread_fourth_down_perk() -> None:
     result = played.match_events[-1].play_result
     assert result is not None
     state = option_state
-    scheme = state.current_drive_defensive_scheme
-    assert scheme is not None
-    estimate = calculate_play_estimate(
-        state.team_a,
-        state.team_b,
+    estimate = calculate_match_play_estimate(
+        state,
         OffensivePlayAction.RB_RUN,
-        scheme,
     )
     assert result.yards_gained == pytest.approx(
-        estimate.yards_on_success + 10.0 + 1.0
+        estimate.yards_on_success + 10.5
     )
     assert result.perk_effects == (
         "Option / Spread: +1 yard on a fourth-down play",
@@ -484,7 +663,7 @@ def test_option_spread_fourth_down_bonus_applies_for_either_team_and_can_score()
         yards_to_go=1.0,
         field_position=99.0,
         scheme=DefensiveSchemeAction.RB_RUN,
-        uniforms=(-3.0,),
+        uniforms=(-2.0,),
     )
     away.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
     scored = away.resolve_offensive_play(OffensivePlayAction.RB_RUN)
@@ -502,7 +681,7 @@ def test_option_spread_fourth_down_bonus_applies_for_either_team_and_can_score()
     no_perk.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
     failed = no_perk.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     assert failed.match_events[-1].play_result is not None
-    assert failed.match_events[-1].play_result.yards_gained == pytest.approx(14.5)
+    assert failed.match_events[-1].play_result.yards_gained == pytest.approx(10.75)
     assert failed.match_events[-1].play_result.turnover_on_downs
 
 

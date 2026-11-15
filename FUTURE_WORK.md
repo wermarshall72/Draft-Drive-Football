@@ -43,6 +43,16 @@ or the design changes.
 - [x] Resolve "Go For It" through a normal offensive card play using the active
   defensive scheme; failed fourth-down plays turn the ball over at the play
   spot, while punts and field goals remain separate special-teams actions.
+- [x] Restore two 900-second regulation periods and apply each offensive card's
+  clock duration; incomplete passes, turnovers, untimed conversions, special
+  teams, and actions without a duration have explicit clock behavior.
+- [x] Make two-point attempts use a legal current-hand card for both the human
+  and AI, preserving deck cycling and the empty-hand basic-run fallback.
+- [x] Resolve blocked punts and field goals through deterministic-seedable
+  recovery and return outcomes, including return touchdowns and conversion
+  sequences.
+- [x] Use the same context-aware coach-perk matchup estimates in play
+  resolution, Hard AI decisions, and desktop previews.
 - [x] Add shop Depth Chart and Playbook review screens and a match UI for the
   human hand, card selection, matchup previews, and drag/drop calls.
 - [ ] Expand the initial play/scheme catalog and create the coach-upgrade

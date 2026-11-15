@@ -13,58 +13,100 @@ Run from the repository root:
 python scripts/measure_football_balance.py --samples 5000 --games 300 --seed 20261114
 ```
 
-The current tuned prototype uses two 650-second regulation periods, an
-offensive baseline yardage bonus of 3.5 yards, and a 1.5-yard penalty when
-the defensive scheme counters the play. The results below use that command
-and seed. Play-yardage intervals are normal-approximation 95% confidence
-intervals; binary rates and game win rates use Wilson 95% intervals.
+Regulation uses two 900-second periods. Offensive card durations are
+play-specific (24-28 seconds); an incomplete pass uses 5 seconds, while an
+interception or fumble uses its card's duration. Punts and kickoffs use 10
+seconds, field goals use 5 seconds, and conversions are untimed. Defensive
+scheme choices and other actions without an assigned duration do not consume
+the game clock.
+
+On two-point attempts, the human chooses a card from the current offensive
+hand and the AI chooses one from its own hand; an empty hand uses the basic
+inside-run fallback and played cards cycle normally. The team that scored the
+touchdown kicks after a defensive conversion return. Blocked punts and field
+goals resolve an automatic recovery and, for defensive recoveries, a return
+that can score a touchdown and trigger a conversion. Those recovery and return
+rates are provisional gameplay assumptions, not empirically calibrated.
+On two-point plays, drive-based run perks and matched-scheme pass effects use
+the normal context-aware estimate; first-down and fourth-down perks do not
+trigger on a conversion down. A defensive return on a conversion uses the
+existing fixed 1% two-point-return chance. Ball-Hawk's field-position return
+yards are not applied there because a conversion has no subsequent field
+position; defining a conversion-specific Ball-Hawk effect remains open.
+
+The measured balance uses a 3.5-yard global offensive yardage bonus, a
+-3.75-yard run adjustment, a +1-yard pass adjustment, and a 0.5-yard matched
+scheme penalty. The results below use the command and seed above.
+Play-yardage intervals are normal-approximation 95% confidence intervals;
+binary rates use Wilson 95% intervals.
 
 ## Play matchup samples
 
 Each row contains 5,000 independently seeded resolutions. `4+` is the share
-that gained at least four yards; it is a simple usefulness measure, not a
+that gained at least four yards; it is a simple usefulness threshold, not a
 first-down rate. The equal-rating countered row uses a defense scheme that
 counters the play. The offensive-edge row uses offense power 65 vs defense
 power 55; the countered version uses the same ratings with a countering scheme.
 
 | Matchup | Play | Mean yards (95% CI) | 4+ yards (95% CI) |
 |---|---|---:|---:|
-| Equal, uncountered | RB run | 7.38 [7.35, 7.41] | 98.5% [98.1%, 98.8%] |
-| Equal, countered | RB run | 3.37 [3.35, 3.39] | 25.0% [23.8%, 26.2%] |
-| Offense 65 vs defense 55, uncountered | RB run | 10.59 [10.56, 10.63] | 99.1% [98.8%, 99.3%] |
-| Offense 65 vs defense 55, countered | RB run | 6.13 [6.11, 6.16] | 98.3% [97.9%, 98.6%] |
-| Offense 40 vs defense 60, uncountered | RB run | 1.08 [1.06, 1.10] | 0.0% [0.0%, 0.1%] |
-| Equal, uncountered | Medium pass | 6.84 [6.71, 6.97] | 68.4% [67.1%, 69.7%] |
-| Equal, countered | Medium pass | 3.77 [3.69, 3.85] | 63.4% [62.1%, 64.7%] |
+| Equal, uncountered | RB run | 3.68 [3.66, 3.71] | 38.6% [37.2%, 39.9%] |
+| Equal, countered | RB run | 0.67 [0.66, 0.69] | 0.0% [0.0%, 0.1%] |
+| Offense 65 vs defense 55, uncountered | RB run | 6.88 [6.85, 6.90] | 99.1% [98.8%, 99.3%] |
+| Offense 65 vs defense 55, countered | RB run | 3.43 [3.41, 3.45] | 28.2% [27.0%, 29.5%] |
+| Offense 40 vs defense 60, uncountered | RB run | -2.65 [-2.67, -2.63] | 0.0% [0.0%, 0.1%] |
+| Equal, uncountered | Medium pass | 7.53 [7.38, 7.67] | 68.4% [67.1%, 69.7%] |
+| Equal, countered | Medium pass | 5.04 [4.93, 5.15] | 63.4% [62.1%, 64.7%] |
 
-Counters materially suppress equal-rated runs, while a large power edge can
-still overcome a counter. The high uncountered run success rate is a deliberate
-arcade tuning choice, but also a remaining balance risk: in equal matchups,
-an uncountered run reaches four yards almost every time. These are game-model
-measurements, not calibrated predictions for real players.
+The prior equal-rated uncountered run result was 7.38 yards on average and
+gained at least four yards 98.5% of the time. That strongly favored offense
+and did not meet the approved design goal. The measured adjustment reduces
+that rate to 38.6% (95% CI 37.2%-39.9%) and the mean to 3.68 yards, so equal
+uncountered runs now generally fall short of four yards. A +30% offensive
+power edge retains a strong uncountered result, while the run counter reduces
+that edge to a 3.43-yard mean and a 28.2% 4+ rate. This is a deliberate
+defense-favoring adjustment; the especially low 0.67-yard mean against a run
+counter remains a balance risk for human playtesting.
 
 ## Seeded full-game samples
 
 Each difficulty has 300 games: Standard AI on Team A against the named
-opponent on Team B. Points are pooled across both teams (600 team-game
-observations per row). Win intervals are over the 300 Team A results. Plays
-count offensive snaps by both teams. Drives are counted from defensive-scheme
-events and divided by games times two.
+opponent on Team B. All metrics are per full game; results include overtime
+where played.
 
-| Opponent | Team A wins (95% CI) | Points / team-game (mean; median; 10th-90th pct) | Snaps / game | Drives / team-game |
-|---|---:|---:|---:|---:|
-| Easy | 76.7% [71.6%, 81.1%] | 18.26; 18; 7-28 | 83.9 | 5.11 |
-| Standard | 59.7% [54.0%, 65.1%] | 19.23; 20; 10-28 | 84.1 | 5.00 |
-| Hard | 38.0% [32.7%, 43.6%] | 19.66; 21; 10-28 | 83.3 | 5.04 |
+| Opponent | Games | Combined points/game (mean; median; 10th-90th pct) | Offensive snaps/game | Total drives/game | 2-point attempts/game | Overtime games |
+|---|---:|---:|---:|---:|---:|---:|
+| Easy | 300 | 35.96; 36; 27-45 | 84.6 | 10.74 | 0.31 | 10 |
+| Standard | 300 | 37.53; 38; 28-49 | 85.5 | 10.37 | 0.38 | 17 |
+| Hard | 300 | 39.53; 41; 28-50 | 85.0 | 10.72 | 0.41 | 9 |
 
-An independent 300-game run with seed `20261115` reproduced the result:
-83.9/84.0/83.3 snaps, 5.11/5.00/5.03 drives, and 18.25/19.26/19.68
-points for Easy/Standard/Hard. This is close to the targets of 80 snaps and
-18 points, but the model is consistently about one drive per team short of
-six. Scoring drives account for roughly 54-58% of recorded drive endings,
-slightly above the desired under-half expectation. The Standard matchup is
-also somewhat favorable to Team A in these seeded samples; difficulty and
-scoring should be rechecked after any further tuning.
+Combined points are both teams' final scores, including overtime and all
+scoring types, including two-point conversions and defensive or kickoff
+returns. Offensive snaps count events with a `play_result`; they include
+overtime scrimmage plays but exclude conversion attempts, which do not have a
+`play_result`. Two-point attempts are counted separately from conversion
+events. Total drives count defensive-scheme events (one per drive start by
+either team); they include overtime and do not count a conversion as a drive.
+The overtime column counts games with any event in period 3 or later.
+
+The results are close to the targets of about 84 snaps, 10 drives, and 36-40
+combined points. Easy is just below 36 points/game; Hard remains within the
+target band. These are seeded AI-vs-AI model measurements, not a completed
+human playtest or evidence of real-world scoring rates.
+
+A separate 300-game-per-difficulty run with seed `20261115` reproduced the
+pattern: Easy 35.90 points, 84.7 snaps, and 10.73 drives; Standard 37.50,
+85.5, and 10.37; Hard 39.57, 84.9, and 10.71. The two seeds give 600 games
+per difficulty for this validation, but remain simulations of the same AI
+model rather than independent real-world or human-playtest evidence.
+
+A third 300-game-per-difficulty run with seed `20261116` also reproduced the
+pattern: Easy 35.94 points, 84.7 snaps, and 10.75 drives; Standard 37.48,
+85.5, and 10.36; Hard 39.62, 84.9, and 10.71. Across these three seeds, the
+equal, uncountered RB run remained 3.68 yards on average and gained at least
+four yards 38.6% of the time (95% Wilson CI: 37.3%-40.0%) in the 5,000-play
+sample. These additional samples improve repeatability checks but do not
+replace human playtesting or independently validate the model assumptions.
 
 ## Historical references and limits
 

@@ -22,7 +22,6 @@ from src.engine.football import (
     FootballRoster,
     FootballSpecialTeams,
     FootballTeamSide,
-    FootballTurnoverType,
     OffensivePlayAction,
 )
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
@@ -327,7 +326,12 @@ def _full_game(seed: int, difficulty: FootballAIDifficulty) -> tuple[object, tup
         elif current.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
             simulator.resolve_fourth_down(action)
         elif current.awaited_action is FootballAwaitedAction.CONVERSION:
-            simulator.resolve_conversion(action)
+            play = (
+                ais[actor].choose_conversion_card(current)
+                if action is FootballConversionAction.TWO_POINT
+                else None
+            )
+            simulator.resolve_conversion(action, play)
         else:
             raise RuntimeError(f"Unexpected action state: {current.awaited_action!r}")
         actions += 1
@@ -339,25 +343,16 @@ def _full_game(seed: int, difficulty: FootballAIDifficulty) -> tuple[object, tup
 def measure_games(games: int, seed: int) -> None:
     print("\nSEEDED FULL-GAME AI SAMPLES")
     print(
-        "opponent difficulty | games | Team A win% (95% CI) | points/team-game "
-        "(mean; median; 10th-90th pct) | plays/game | drives/team-game | pass INT/attempt | "
-        "run fumbles lost/rush | fumbles lost/team-game | drive endings"
+        "opponent difficulty | games | combined points/game (mean; median; "
+        "10th-90th pct) | offensive snaps/game | total drives/game | "
+        "2-point attempts/game | overtime games"
     )
     for difficulty in FootballAIDifficulty:
-        wins: list[float] = []
-        points: list[float] = []
+        combined_points: list[float] = []
         plays: list[float] = []
+        two_point_attempts = 0
+        overtime_games = 0
         drive_count = 0
-        pass_attempts = interceptions = rushes = lost_fumbles = 0
-        drive_endings = {
-            "touchdown": 0,
-            "field goal": 0,
-            "punt": 0,
-            "pass interception": 0,
-            "lost fumble": 0,
-            "downs": 0,
-            "other": 0,
-        }
         for index in range(games):
             state, _ = _full_game(
                 seed + (list(FootballAIDifficulty).index(difficulty) * 1_000_000)
@@ -367,77 +362,26 @@ def measure_games(games: int, seed: int) -> None:
             result = state.final_result
             if result is None:
                 raise RuntimeError("A sampled game has no final result.")
-            wins.append(1.0 if result.winner is FootballTeamSide.TEAM_A else 0.0)
-            points.extend((float(result.team_a_score), float(result.team_b_score)))
+            combined_points.append(float(result.team_a_score + result.team_b_score))
             plays.append(float(sum(event.play_result is not None for event in state.match_events)))
-            drive_events: list[object] = []
-
-            def finish_drive() -> None:
-                if not drive_events:
-                    return
-                ending = drive_events[-1]
-                if any(event.points_scored in (6, 7) for event in drive_events):
-                    drive_endings["touchdown"] += 1
-                elif any(event.action.value == "field_goal" and event.points_scored == 3 for event in drive_events):
-                    drive_endings["field goal"] += 1
-                elif ending.action.value == "punt":
-                    drive_endings["punt"] += 1
-                elif ending.play_result is not None and ending.play_result.turnover:
-                    key = "pass interception" if ending.play_result.offensive_play in (
-                        OffensivePlayAction.SCREEN_PASS,
-                        OffensivePlayAction.PA_PASS,
-                        OffensivePlayAction.SHORT_PASS,
-                        OffensivePlayAction.MEDIUM_PASS,
-                        OffensivePlayAction.DEEP_PASS,
-                        OffensivePlayAction.QUICK_OUT,
-                    ) else "lost fumble"
-                    drive_endings[key] += 1
-                elif ending.play_result is not None and ending.play_result.turnover_on_downs:
-                    drive_endings["downs"] += 1
-                else:
-                    drive_endings["other"] += 1
-
-            for event in state.match_events:
-                if isinstance(event.action, DefensiveSchemeAction):
-                    drive_count += 1
-                    if drive_events:
-                        finish_drive()
-                    drive_events = []
-                else:
-                    drive_events.append(event)
-            finish_drive()
-            for event in state.match_events:
-                play_result = event.play_result
-                if play_result is None:
-                    continue
-                family = OFFENSIVE_PLAY_CATALOG[event.action.value].family
-                if family is FootballPlayFamily.PASS:
-                    pass_attempts += 1
-                    interceptions += (
-                        play_result.turnover_type
-                        is FootballTurnoverType.INTERCEPTION
-                    )
-                else:
-                    rushes += 1
-                    lost_fumbles += (
-                        play_result.turnover_type is FootballTurnoverType.FUMBLE
-                    )
-        win_count = int(sum(wins))
-        low, high = _wilson(win_count, games)
-        ordered_points = sorted(points)
+            drive_count += sum(
+                isinstance(event.action, DefensiveSchemeAction)
+                for event in state.match_events
+            )
+            two_point_attempts += sum(
+                event.action is FootballConversionAction.TWO_POINT
+                for event in state.match_events
+            )
+            overtime_games += any(event.period >= 3 for event in state.match_events)
+        ordered_points = sorted(combined_points)
         median = ordered_points[len(ordered_points) // 2]
         p10 = ordered_points[int((len(ordered_points) - 1) * 0.10)]
         p90 = ordered_points[int((len(ordered_points) - 1) * 0.90)]
         print(
-            f"{difficulty.value} | {games} | {win_count / games:.3f} "
-            f"[{low:.3f}, {high:.3f}] | {sum(points) / len(points):.2f}; "
-            f"{median}; {p10}-{p90} | "
-            f"{sum(plays) / len(plays):.1f} | "
-            f"{drive_count / (games * 2):.2f} | "
-            f"{interceptions}/{pass_attempts} = {interceptions / max(1, pass_attempts):.4f} | "
-            f"{lost_fumbles}/{rushes} = {lost_fumbles / max(1, rushes):.4f} | "
-            f"{lost_fumbles}/{games * 2} = {lost_fumbles / (games * 2):.3f} | "
-            + ", ".join(f"{key}={value}" for key, value in drive_endings.items())
+            f"{difficulty.value} | {games} | "
+            f"{sum(combined_points) / games:.2f}; {median:.0f}; {p10:.0f}-{p90:.0f} | "
+            f"{sum(plays) / games:.1f} | {drive_count / games:.2f} | "
+            f"{two_point_attempts / games:.2f} | {overtime_games}"
         )
 
 
