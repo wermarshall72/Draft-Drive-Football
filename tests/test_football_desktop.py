@@ -1724,6 +1724,8 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     buttons = view.draw(
         _surface(), area, shop.state, "Bye Week skipped scheduled game 3."
     )
+    assert "SELECT DETAILS" in shop_labels
+    assert "FOCUS DETAILS" not in shop_labels
     details_index = next(
         index for index, button in enumerate(buttons) if button.label == "DETAILS"
     )

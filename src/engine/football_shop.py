@@ -1121,9 +1121,9 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
             "field_goal_lab",
             "Field-Goal Lab",
             "Add 5 percentage points to conditional make probability given an "
-            "unblocked field goal, at every distance, capped at 100%. The "
-            "0.5% field-goal block chance is unchanged, so overall make chance "
-            "still accounts for the possibility of a block.",
+            "unblocked field goal, at every distance, capped at 100%. "
+            "Field-Goal Lab does not change block chance; other upgrades can. "
+            "Overall make chance still accounts for the possibility of a block.",
             FootballCoachUpgradeKind.FIELD_GOAL_ACCURACY_BONUS,
             0.05,
             rare,

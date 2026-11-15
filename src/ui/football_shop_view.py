@@ -422,7 +422,7 @@ class FootballShopView:
                 )
                 draw_text(
                     surface,
-                    "FOCUS DETAILS",
+                    "SELECT DETAILS",
                     (text_left, reason_top + 17),
                     self._small_font,
                     self.theme.muted if purchased else self.theme.text,

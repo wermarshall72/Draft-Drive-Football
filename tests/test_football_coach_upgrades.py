@@ -777,7 +777,13 @@ def test_normal_play_clock_matches_live_upgrade_calculation(
 
 
 def test_field_goal_lab_is_conditional_on_an_unblocked_kick() -> None:
-    upgrade = _coach_card("field_goal_lab").coach_upgrade_effect
+    card = _coach_card("field_goal_lab")
+    assert "conditional make probability" in card.description
+    assert "unblocked field goal" in card.description
+    assert "capped at 100%" in card.description
+    assert "Field-Goal Lab does not change block chance" in card.description
+    assert "other upgrades can" in card.description
+    upgrade = card.coach_upgrade_effect
     assert upgrade is not None
     state = _match_state(team_a_coach_upgrades=(upgrade,))
     distance = 42.0
@@ -798,6 +804,21 @@ def test_field_goal_lab_is_conditional_on_an_unblocked_kick() -> None:
     assert blocked_kick_probability(
         state, FootballTeamSide.TEAM_A, FIELD_GOAL_BLOCK_CHANCE
     ) == FIELD_GOAL_BLOCK_CHANCE
+    protection = _coach_card("clean_pocket_protection").coach_upgrade_effect
+    assert protection is not None
+    protected = replace(state, team_a_coach_upgrades=(upgrade, protection))
+    protection_only = replace(state, team_a_coach_upgrades=(protection,))
+    assert blocked_kick_probability(
+        protected, FootballTeamSide.TEAM_A, FIELD_GOAL_BLOCK_CHANCE
+    ) == pytest.approx(FIELD_GOAL_BLOCK_CHANCE * 0.75)
+    assert blocked_kick_probability(
+        protected, FootballTeamSide.TEAM_A, FIELD_GOAL_BLOCK_CHANCE
+    ) == blocked_kick_probability(
+        protection_only, FootballTeamSide.TEAM_A, FIELD_GOAL_BLOCK_CHANCE
+    )
+    assert field_goal_success_probability_for_team(
+        protected, FootballTeamSide.TEAM_A, distance
+    ) == pytest.approx(upgraded_conditional)
     assert field_goal_success_probability(17.0, upgrade.magnitude) == 1.0
 
 
