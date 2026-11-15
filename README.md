@@ -9,12 +9,17 @@ python -m src.desktop
 ```
 
 The desktop shell reads the same saved team profile and color palette as the
-terminal client. If no profile exists, the menu explains how to create one.
+terminal client. If no profile exists, choose **Create Profile** from the menu,
+enter a team name, and choose different primary and secondary colors. Use
+**Settings** to edit an existing profile. Changes are saved only when you
+select **Save Profile**; canceling leaves the saved profile unchanged. If a
+profile cannot be loaded, the desktop does not overwrite it.
 Start an offline run by choosing a local AI difficulty, selecting a coach, and
-drafting one player at each of the eight positions. Spend the six Training
-Points in the one-time shop, then call offensive plays and defensive schemes
-during matches. Three losses end the run; surviving all ten regular-season
-games reaches a playoffs marker, without a playoff bracket.
+drafting one player at each of the eight positions. Before each game, visit
+the shop with 12 Action Points shared across its sections; unspent points
+expire when the visit ends. Call offensive plays and defensive schemes during
+matches. Three losses end the run; surviving all ten regular-season games
+reaches a playoffs marker, without a playoff bracket.
 
 On the coach screen, hover over a coach or tab to their name to inspect that
 side's position modifiers and perk in a scouting popup. Move between the X and
@@ -47,6 +52,22 @@ Desktop run state is in memory only. The desktop gameplay flow uses
 `FootballGameController` and does not initialize or write to the legacy game
 database.
 
+The run UI is coordinated by `src/ui/football_run_screen.py`. Coach selection,
+player draft, shop, depth-chart/playbook review, and completed-game results have
+dedicated renderers in `football_coach_view.py`, `football_player_draft_view.py`,
+`football_shop_view.py`, `football_review_view.py`, and `football_result.py`
+under `src/ui/`. Match field, scoreboard/history, and hand/decision rendering
+live in `football_match_field.py`, `football_match_status.py`, and
+`football_match_decision_view.py`. The coordinator connects these views to
+controller actions and shared navigation; `football_match_palette.py` holds
+their shared colors.
+
+Match hand input, scrolling and field animation state live in
+`src/ui/football_match_interaction.py`; shop review mode and scrolling live in
+`src/ui/football_shop_review.py`. Coach and player inspection input state lives
+in `src/ui/football_draft_interaction.py`. Shared display labels and text
+fitting live in `src/ui/football_display.py` and `src/ui/text.py`.
+
 ## Run the terminal client
 
 From the project directory, start the game with:
@@ -59,7 +80,7 @@ The first launch asks for a team name and two different colors. The saved
 profile is stored outside the project in
 `~/.cfb-auto-battler/profile.json` (under the current user's home directory),
 so it is not tied to the current working directory or the game's SQLite
-snapshot database. Choose **Settings** from the main menu to edit the profile.
+snapshot database. Profiles can also be created or edited in the desktop app.
 
 ## Application boundary
 

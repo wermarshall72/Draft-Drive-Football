@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -152,19 +153,28 @@ def save_profile(
 ) -> None:
     path = Path(profile_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "profile_id": profile.profile_id,
-                "team_name": profile.team_name,
-                "primary_color_id": profile.primary_color_id,
-                "secondary_color_id": profile.secondary_color_id,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(
+                {
+                    "profile_id": profile.profile_id,
+                    "team_name": profile.team_name,
+                    "primary_color_id": profile.primary_color_id,
+                    "secondary_color_id": profile.secondary_color_id,
+                },
+                temporary,
+                indent=2,
+            )
+            temporary.write("\n")
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def supports_ansi_color(

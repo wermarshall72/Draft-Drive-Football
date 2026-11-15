@@ -4,7 +4,7 @@ import pygame
 
 from src.ui.layout import Layout
 from src.ui.theme import Theme
-from src.ui.widgets import Button, draw_panel, draw_text
+from src.ui.widgets import Button, draw_text
 
 Navigate = Callable[[str], None]
 Quit = Callable[[], None]
@@ -243,95 +243,3 @@ class Screen:
                 hovered=self.hover_index == index,
                 pressed=self.pressed_index == index,
             )
-
-
-class SettingsScreen(Screen):
-    def __init__(
-        self,
-        theme: Theme,
-        team_name: str,
-        navigate: Navigate,
-        quit_application: Quit,
-    ) -> None:
-        super().__init__(theme, navigate, quit_application)
-        self.team_name = team_name
-
-    def draw(self, surface: pygame.Surface) -> None:
-        layout = self._header(surface, "Team settings", "TEAM PROFILE", self.team_name)
-        content = layout.content
-        panel = pygame.Rect(content.left, content.top, content.width, content.height)
-        draw_panel(surface, panel, self.theme, fill=self.theme.panel)
-        draw_text(
-            surface,
-            "SAVED TEAM COLORS",
-            (panel.left + 26, panel.top + 23),
-            self._small_font,
-            self.theme.secondary_accent,
-        )
-        draw_text(
-            surface,
-            "Your saved profile sets the team palette.",
-            (panel.left + 26, panel.top + 50),
-            self._body_font,
-            self.theme.muted,
-        )
-
-        swatches = (
-            ("PRIMARY", self.theme.primary, self.theme.primary_accent),
-            ("SECONDARY", self.theme.secondary, self.theme.secondary_accent),
-        )
-        row_width = (panel.width - 64) // 2
-        for index, (label, color, accent) in enumerate(swatches):
-            row = pygame.Rect(
-                panel.left + 26 + index * (row_width + 12),
-                panel.top + 91,
-                row_width,
-                120,
-            )
-            draw_panel(surface, row, self.theme, fill=self.theme.panel_alt)
-            pygame.draw.rect(
-                surface,
-                color,
-                pygame.Rect(row.left + 16, row.top + 16, 54, row.height - 32),
-                border_radius=7,
-            )
-            draw_text(
-                surface,
-                label,
-                (row.left + 86, row.top + 25),
-                self._small_font,
-                self.theme.muted,
-            )
-            pygame.draw.rect(
-                surface,
-                accent,
-                pygame.Rect(row.left + 86, row.top + 53, row.width - 104, 8),
-                border_radius=4,
-            )
-            draw_text(
-                surface,
-                "INTERFACE ACCENT",
-                (row.left + 86, row.top + 71),
-                self._small_font,
-                self.theme.text,
-            )
-
-        draw_text(
-            surface,
-            "PROFILE EDITING",
-            (panel.left + 26, panel.top + 239),
-            self._small_font,
-            self.theme.secondary_accent,
-        )
-        draw_text(
-            surface,
-            "Edit your team name and colors from the terminal client.",
-            (panel.left + 26, panel.top + 262),
-            self._body_font,
-            self.theme.muted,
-        )
-        back_rect = pygame.Rect(panel.right - 174, panel.bottom - 54, 148, 38)
-        self._set_buttons(
-            [Button("MAIN MENU", lambda: self.navigate("main_menu"), back_rect)]
-        )
-        self._draw_buttons(surface)

@@ -66,7 +66,7 @@ class FootballMainMenuScreen(Screen):
         )
         draw_wrapped_text(
             surface,
-            "Eight picks. One training stop. Every snap is yours.",
+            "Eight picks. A shop before each game. Every snap is yours.",
             pygame.Rect(hero.left + 34, hero.top + 165, copy_width - 54, 46),
             self._body_font,
             self.theme.muted,
@@ -97,7 +97,7 @@ class FootballMainMenuScreen(Screen):
         elif self.profile_error is not None:
             draw_wrapped_text(
                 surface,
-                "Team profile could not load. Repair it from the terminal client.",
+                "Team profile could not load. Resolve the saved file before continuing.",
                 pygame.Rect(hero.left + 34, hero.bottom - 58, copy_width - 54, 42),
                 self._small_font,
                 self.theme.danger,
@@ -156,9 +156,10 @@ class FootballMainMenuScreen(Screen):
         buttons.extend(
             (
                 Button(
-                    "SETTINGS",
+                    "SETTINGS" if self.menu_state is not None else "CREATE PROFILE",
                     lambda: self.navigate("settings"),
                     pygame.Rect(action.left + 18, utility_y, utility_width, 34),
+                    enabled=self.profile_error is None,
                 ),
                 Button(
                     "QUIT",
@@ -188,7 +189,7 @@ class FootballMainMenuScreen(Screen):
         draw_panel(surface, overview, self.theme, fill=self.theme.panel_alt)
         stages = (
             ("01", "DRAFT", "8 positions"),
-            ("02", "TRAIN", "Spend 6 points"),
+            ("02", "SHOP", "Spend 12 AP"),
             ("03", "KICK OFF", "Call every play"),
         )
         column_width = overview.width // len(stages)

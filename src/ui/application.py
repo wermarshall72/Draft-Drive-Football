@@ -1,4 +1,6 @@
 from collections.abc import Callable, Iterable
+from dataclasses import replace
+from pathlib import Path
 import secrets
 
 import pygame
@@ -6,12 +8,12 @@ import pygame
 from src.application import ApplicationController
 from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_controller import FootballGameController
-from src.profile import ProfileError, TeamProfile
+from src.profile import ProfileError, TeamProfile, validate_team_name
 from src.ui.football_run_screen import FootballRunScreen
 from src.ui.layout import LOGICAL_SIZE
 from src.ui.main_menu import FootballMainMenuScreen
 from src.ui.navigation import ScreenManager
-from src.ui.screens import SettingsScreen
+from src.ui.profile_screen import ProfileScreen
 from src.ui.theme import Theme
 
 EventSource = Callable[[], Iterable[pygame.event.Event]]
@@ -57,10 +59,10 @@ class DesktopApplication:
             self.start_new_run,
         )
         self.router.register("main_menu", self.menu_screen)
-        self.router.register(
-            "settings",
-            SettingsScreen(self.theme, team_name, navigate, self.quit),
+        self.profile_screen = ProfileScreen(
+            self.theme, self.profile, navigate, self.quit, self.save_profile
         )
+        self.router.register("settings", self.profile_screen)
         self.run_screen = FootballRunScreen(
             self.theme,
             team_name,
@@ -79,6 +81,35 @@ class DesktopApplication:
         self.router.show(screen_id)
         if self.running and pygame.display.get_surface() is not None:
             self._transition_started = pygame.time.get_ticks()
+
+    def save_profile(self, name: str, primary: str, secondary: str) -> None:
+        if self.profile is None:
+            if Path(self.controller.profile_path).exists():
+                raise ProfileError(
+                    "A profile file already exists. Resolve it outside the game before saving."
+                )
+            profile = self.controller.create_profile(name, primary, secondary)
+        else:
+            profile = replace(
+                self.profile,
+                team_name=validate_team_name(name),
+                primary_color_id=primary,
+                secondary_color_id=secondary,
+            )
+            self.controller.save_profile(profile)
+
+        self.profile = profile
+        self.profile_error = None
+        self.menu_state = self.controller.main_menu_state()
+        self.theme = Theme.from_profile(profile)
+        self.menu_screen.menu_state = self.menu_state
+        self.menu_screen.profile_error = None
+        self.menu_screen.theme = self.theme
+        self.profile_screen.profile = profile
+        self.profile_screen.theme = self.theme
+        self.run_screen.team_name = profile.team_name
+        self.run_screen.theme = self.theme
+        self.navigate("main_menu")
 
     def start_new_run(self, difficulty: FootballAIDifficulty) -> None:
         if self.menu_state is None:
@@ -103,6 +134,7 @@ class DesktopApplication:
         try:
             pygame.display.set_caption("CFB Auto-Battler")
             window = pygame.display.set_mode(self.window_size, pygame.RESIZABLE)
+            pygame.key.start_text_input()
             canvas = pygame.Surface(LOGICAL_SIZE)
             clock = pygame.time.Clock()
             self.running = True

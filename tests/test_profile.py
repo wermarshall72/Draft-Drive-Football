@@ -50,6 +50,23 @@ def test_saved_profile_reloads_without_prompting(tmp_path: Path) -> None:
     )
 
 
+def test_failed_profile_replacement_preserves_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_path = tmp_path / "team.json"
+    original = new_team_profile("Original Team", "navy", "gold")
+    save_profile(original, profile_path)
+
+    def fail_replace(_source: object, _destination: object) -> None:
+        raise OSError("replacement failed")
+
+    monkeypatch.setattr("src.profile.os.replace", fail_replace)
+    with pytest.raises(OSError, match="replacement failed"):
+        save_profile(new_team_profile("New Team", "crimson", "gold"), profile_path)
+    assert load_profile(profile_path) == original
+    assert list(tmp_path.iterdir()) == [profile_path]
+
+
 def test_settings_edit_name_and_both_colors(tmp_path: Path) -> None:
     profile_path = tmp_path / "team.json"
     original = new_team_profile("Old Team", "crimson", "scarlet")
