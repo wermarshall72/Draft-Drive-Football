@@ -166,7 +166,7 @@ class FootballRunScreen(Screen):
                 self.hover_index = None
                 self.pressed_index = None
         if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
-            self.player_inspection.handle_event(event, self.buttons)
+            self.player_inspection.handle_event(event)
             if event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
                 self.pressed_index = None
@@ -544,8 +544,10 @@ class FootballRunScreen(Screen):
             self.theme, self.player_inspection, self.focus_index,
             self._draft_title_font, self._draft_name_font, self._draft_label_font,
             self._draft_small_font, self._draft_stat_font, self._draft_detail_font,
-            lambda position, choice: self._submit(
-                lambda: self._require_controller().choose_player(position, choice)
+            lambda position, choice, appearance: self._submit(
+                lambda: self._require_controller().choose_player(
+                    position, choice, appearance=appearance
+                )
             ),
         )
 

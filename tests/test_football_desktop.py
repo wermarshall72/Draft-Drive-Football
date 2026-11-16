@@ -41,6 +41,7 @@ from src.engine.football_coaches import (
 )
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
+from src.engine.football_appearance import POSITION_ART
 from src.engine.football_team_builder import FootballPlayerCandidate
 from src.engine.football_player_catalog import (
     PLAYER_TYPES_BY_POSITION,
@@ -355,6 +356,81 @@ def test_draft_card_stats_and_partners_are_visible_without_interaction(
         assert football_player_draft_module._draft_percentage(candidate.player.stamina) in texts
 
 
+def test_each_card_uses_its_actual_candidate_position(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    screen = desktop.run_screen
+    state = screen.state
+    candidates = tuple(
+        FootballPlayerCandidate(player_from_type(PLAYER_TYPES_BY_POSITION[position][0]), "test")
+        for position in (FootballPosition.WR, FootballPosition.QB, FootballPosition.RB)
+    )
+    screen.state = replace(state, team_builder=replace(
+        state.team_builder, current_offer=candidates))
+    drawn = []
+    original = football_player_draft_module.draw_draft_player
+
+    def capture(surface, rect, appearance, active=False):
+        drawn.append(appearance)
+        original(surface, rect, appearance, active)
+
+    monkeypatch.setattr(football_player_draft_module, "draw_draft_player", capture)
+    desktop.router.draw(_surface())
+    assert [item.asset_key for item in drawn] == ["wide_receiver", "quarterback", "running_back"]
+    assert [item.skin for item in drawn] == list(screen.player_inspection.skin_tones)
+
+
+def test_resized_draft_preserves_smooth_text_and_crisp_portraits(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    canvas = _surface()
+    desktop.router.draw(canvas)
+    window = pygame.Surface((960, 540))
+    monkeypatch.setattr(pygame.display, "flip", lambda: None)
+    desktop._present(canvas, window, portraits=desktop.run_screen.player_inspection.portraits)
+    smooth = pygame.transform.smoothscale(canvas, window.get_size())
+    assert pygame.image.tobytes(window.subsurface((0, 0, 960, 100)), "RGB") == (
+        pygame.image.tobytes(smooth.subsurface((0, 0, 960, 100)), "RGB")
+    )
+    portrait = desktop.run_screen.player_inspection.portraits[0][0]
+    rect = pygame.Rect(round(portrait.x * 0.75), round(portrait.y * 0.75),
+                       round(portrait.width * 0.75), round(portrait.height * 0.75))
+    assert pygame.image.tobytes(window.subsurface(rect), "RGB") != (
+        pygame.image.tobytes(smooth.subsurface(rect), "RGB")
+    )
+
+
+def test_identically_named_candidates_keep_their_own_appearance(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    controller = desktop.football_controller
+    assert controller is not None
+    offers = tuple(
+        replace(candidate, player=replace(candidate.player, name="Same Name"))
+        for candidate in controller.state.team_builder.current_offer
+    )
+    controller._builder._current_offer = offers
+    desktop.run_screen.state = controller.state
+    tones = iter(player_art.SKIN_TONES)
+    monkeypatch.setattr("src.ui.football_draft_interaction.secrets.choice", lambda _: next(tones))
+    desktop.router.draw(_surface())
+    button = desktop.run_screen.buttons[2]
+    button.action()
+    assert controller.state.team_builder.selected_players[FootballPosition.QB] is offers[2].player
+    assert controller.state.player_appearances[FootballPosition.QB].skin == player_art.SKIN_TONES[2]
+    before = controller.state
+    button.action()
+    assert controller.state == before
+    assert desktop.run_screen.last_error is not None
+
+
 @pytest.mark.parametrize("window_size", [(1280, 720), (960, 540), (1024, 768)])
 def test_draft_button_events_activate_correct_card_at_scaled_sizes(
     tmp_path: Path, monkeypatch, window_size,
@@ -370,9 +446,9 @@ def test_draft_button_events_activate_correct_card_at_scaled_sizes(
     poses = []
     original = football_player_draft_module.draw_draft_player
 
-    def capture(surface, rect, primary, secondary, skin, active):
-        poses.append((primary, secondary, skin, active))
-        original(surface, rect, primary, secondary, skin, active)
+    def capture(surface, rect, appearance, active=False):
+        poses.append((appearance, active))
+        original(surface, rect, appearance, active)
 
     monkeypatch.setattr(football_player_draft_module, "draw_draft_player", capture)
     canvas = _surface()
@@ -390,8 +466,11 @@ def test_draft_button_events_activate_correct_card_at_scaled_sizes(
     mouse(pygame.MOUSEMOTION, button.rect.center)
     poses.clear()
     desktop.router.draw(canvas)
-    assert [pose[3] for pose in poses] == [False, False, True]
-    assert all(pose[:2] == (desktop.theme.primary, desktop.theme.secondary) for pose in poses)
+    assert all(pose.asset_key == "quarterback" for pose, _ in poses)
+    assert all(pose.primary == tuple(desktop.theme.primary[:3])
+               and pose.secondary == tuple(desktop.theme.secondary[:3]) for pose, _ in poses)
+    assert [active for _, active in poses] == [False, False, True]
+    selected_appearance = poses[2][0]
     rect = screen.player_inspection.card_rects[2]
     assert canvas.get_at((rect.left, rect.centery)) == desktop.theme.primary
     assert canvas.get_at((button.rect.left + 12, button.rect.top + 10)) == desktop.theme.primary
@@ -401,7 +480,7 @@ def test_draft_button_events_activate_correct_card_at_scaled_sizes(
     assert not controller.state.team_builder.selected_players
     poses.clear()
     desktop.router.draw(canvas)
-    assert not any(pose[3] for pose in poses)
+    assert poses[2] == (selected_appearance, False)
     mouse(pygame.MOUSEBUTTONDOWN, button.rect.center, button=1)
     mouse(pygame.MOUSEBUTTONUP, (1, 1), button=1)
     assert not controller.state.team_builder.selected_players
@@ -409,6 +488,7 @@ def test_draft_button_events_activate_correct_card_at_scaled_sizes(
     mouse(pygame.MOUSEBUTTONDOWN, button.rect.center, button=1)
     mouse(pygame.MOUSEBUTTONUP, button.rect.center, button=1)
     assert controller.state.team_builder.selected_players[FootballPosition.QB] is selected
+    assert controller.state.player_appearances[FootballPosition.QB] == selected_appearance
 
 
 def test_draft_keyboard_focus_and_skin_tone_lifetime(tmp_path: Path, monkeypatch) -> None:
@@ -432,42 +512,86 @@ def test_draft_keyboard_focus_and_skin_tone_lifetime(tmp_path: Path, monkeypatch
     selected = desktop.football_controller.state.team_builder.current_offer[1].player
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
     assert desktop.football_controller.state.team_builder.selected_players[FootballPosition.QB] is selected
+    assert desktop.football_controller.state.player_appearances[FootballPosition.QB].skin == first[1]
     desktop.router.draw(canvas)
     assert screen.player_inspection.skin_tones != first
     assert screen.player_inspection.skin_tones == player_art.SKIN_TONES[3:]
 
 
-def test_sprite_layers_separate_skin_uniform_and_background() -> None:
-    primary = (20, 70, 180)
-    secondary = (245, 180, 30)
-    skin = player_art.SKIN_TONES[1]
-    for active in (False, True):
-        base, primary_mask, secondary_mask, skin_mask = player_art._player_layers(active)
-        image = player_art._tinted_player(primary, secondary, skin, active)
-        changed_skin = player_art._tinted_player(primary, secondary, player_art.SKIN_TONES[5], active)
-        changed_primary = player_art._tinted_player((200, 30, 50), secondary, skin, active)
-        changed_secondary = player_art._tinted_player(primary, (40, 200, 80), skin, active)
-        for mask, other in ((skin_mask, changed_skin), (primary_mask, changed_primary),
-                            (secondary_mask, changed_secondary)):
-            points = [(x, y) for x in range(mask.get_width()) for y in range(mask.get_height())
-                      if mask.get_at((x, y)).a]
-            assert points
-            assert any(image.get_at(point) != other.get_at(point) for point in points)
-        points = [(x, y) for x in range(base.get_width()) for y in range(base.get_height())
-                  if base.get_at((x, y)).a]
-        assert points
-        assert all(image.get_at(point) == changed_skin.get_at(point) ==
-                   changed_primary.get_at(point) == changed_secondary.get_at(point)
-                   for point in points)
-    base, primary_mask, secondary_mask, skin_mask = player_art._player_layers(True)
-    # Representative pixels on the hand, football, and grass in the active pose.
-    assert skin_mask.get_at((36, 104)).a
-    for point in ((44, 85), (29, 180)):
-        assert base.get_at(point).a
-        assert not any(mask.get_at(point).a for mask in
-                       (primary_mask, secondary_mask, skin_mask))
+def test_heisman_pose_tracks_card_hover_and_keyboard_for_every_position(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    screen = desktop.run_screen
+    controller = desktop.football_controller
+    assert controller is not None
+    seen = []
+    original = football_player_draft_module.draw_draft_player
+
+    def capture(surface, rect, appearance, active=False):
+        seen.append((appearance, active))
+        original(surface, rect, appearance, active)
+
+    monkeypatch.setattr(football_player_draft_module, "draw_draft_player", capture)
+    canvas = _surface()
+    for position in PLAYER_DRAFT_ORDER:
+        desktop.router.draw(canvas)
+        tones = screen.player_inspection.skin_tones
+        before = controller.state
+        for index, card in enumerate(screen.player_inspection.card_rects):
+            point = (card.centerx, card.top + 100)
+            desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": point}))
+            seen.clear()
+            desktop.router.draw(canvas)
+            assert [active for _, active in seen] == [i == index for i in range(3)]
+            assert [art.skin for art, _ in seen] == list(tones)
+            assert all(art.asset_key == POSITION_ART[position] for art, _ in seen)
+            assert screen.player_inspection.portraits[index][2]
+        desktop.router.handle_event(pygame.event.Event(pygame.WINDOWLEAVE))
+        seen.clear()
+        desktop.router.draw(canvas)
+        assert not any(active for _, active in seen)
+        screen._focus(1)
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB}))
+        seen.clear()
+        desktop.router.draw(canvas)
+        assert [active for _, active in seen] == [False, False, True]
+        assert controller.state == before
+        chosen = seen[2][0]
+        _activate(desktop, f"DRAFT {position.value}", index=2, keyboard=True)
+        assert controller.state.player_appearances[position] == chosen
+    assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
 
 
+def test_heisman_pose_is_preserved_in_resized_presentation(tmp_path: Path, monkeypatch) -> None:
+    from src.ui import application as application_module
+
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    canvas = _surface()
+    desktop.router.draw(canvas)
+    card = desktop.run_screen.player_inspection.card_rects[1]
+    desktop.router.handle_event(pygame.event.Event(
+        pygame.MOUSEMOTION, {"pos": (card.centerx, card.top + 100)}))
+    desktop.router.draw(canvas)
+    seen = []
+    original = application_module.draw_draft_player
+
+    def capture(surface, rect, appearance, active=False):
+        seen.append((appearance, active))
+        original(surface, rect, appearance, active)
+
+    monkeypatch.setattr(application_module, "draw_draft_player", capture)
+    monkeypatch.setattr(pygame.display, "flip", lambda: None)
+    desktop._present(canvas, pygame.Surface((960, 540)),
+                     portraits=desktop.run_screen.player_inspection.portraits)
+    assert [active for _, active in seen] == [False, True, False]
+    assert [appearance for appearance, _ in seen] == [
+        appearance for _, appearance, _ in desktop.run_screen.player_inspection.portraits
+    ]
 
 
 def test_draft_progress_uses_selected_players_and_selection_actions(
@@ -478,6 +602,7 @@ def test_draft_progress_uses_selected_players_and_selection_actions(
     _activate(desktop, "CHOOSE STAFF 01")
     controller = desktop.football_controller
     assert controller is not None
+    screen = desktop.run_screen
     displayed: list[str] = []
     original_text = football_run_screen_module.draw_text
     original_wrapped = football_run_screen_module.draw_wrapped_text
@@ -492,6 +617,7 @@ def test_draft_progress_uses_selected_players_and_selection_actions(
 
     monkeypatch.setattr(football_player_draft_module, "draw_text", capture_text)
     chosen = []
+    appearances = {}
     for index, position in enumerate(PLAYER_DRAFT_ORDER):
         displayed.clear()
         canvas = _surface()
@@ -506,10 +632,18 @@ def test_draft_progress_uses_selected_players_and_selection_actions(
             )
             assert canvas.get_at((180, 171 + row * 57 + 40)) == pygame.Color(expected)
         candidate = controller.state.team_builder.current_offer[1]
+        appearance = screen.player_inspection.skin_tones[1]
         chosen.append(candidate.name)
         _activate(desktop, f"DRAFT {position.value}", index=1, keyboard=index % 2 == 0)
         assert controller.state.team_builder.selected_players[position] is candidate.player
+        appearances[position] = controller.state.player_appearances[position]
+        assert appearances[position].asset_key == POSITION_ART[position]
+        assert appearances[position].skin == appearance
     assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+    assert controller.state.player_appearances == appearances
+    _activate(desktop, "DEPTH CHART")
+    desktop.router.draw(_surface())
+    assert controller.state.player_appearances == appearances
 
 
 
@@ -2562,14 +2696,14 @@ def test_result_return_then_new_run_uses_updated_profile(
     drawn_colors: list[tuple[pygame.Color, pygame.Color]] = []
     original_art = football_player_draft_module.draw_draft_player
 
-    def capture_art(surface, rect, primary, secondary, skin, active):
-        drawn_colors.append((primary, secondary))
-        original_art(surface, rect, primary, secondary, skin, active)
+    def capture_art(surface, rect, appearance, active=False):
+        drawn_colors.append((appearance.primary, appearance.secondary))
+        original_art(surface, rect, appearance, active)
 
     monkeypatch.setattr(football_player_draft_module, "draw_draft_player", capture_art)
     _activate(desktop, "CHOOSE STAFF 01")
     desktop.router.draw(_surface())
-    assert drawn_colors == [(desktop.theme.primary, desktop.theme.secondary)] * 3
+    assert drawn_colors == [(tuple(desktop.theme.primary[:3]), tuple(desktop.theme.secondary[:3]))] * 3
     for position in PLAYER_DRAFT_ORDER:
         _activate(desktop, f"DRAFT {position.value}")
     assert desktop.football_controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
@@ -2637,19 +2771,23 @@ def test_repeated_draws_do_not_change_state_or_consume_gameplay_rng(
     for position in PLAYER_DRAFT_ORDER:
         _activate(first, f"DRAFT {position.value}")
         _activate(replay, f"DRAFT {position.value}")
-        assert first_controller.state == replay_controller.state
+        assert replace(first_controller.state, player_appearances={}) == replace(
+            replay_controller.state, player_appearances={})
+    before = first_controller.state
     for _ in range(30):
         first.router.draw(_surface())
-    assert first_controller.state == replay_controller.state
+    assert first_controller.state == before
 
     _activate(first, "FINISH SHOP / START MATCH")
     _activate(replay, "FINISH SHOP / START MATCH")
     for _ in range(30):
         first.router.draw(_surface())
-    assert first_controller.state == replay_controller.state
+    assert replace(first_controller.state, player_appearances={}) == replace(
+        replay_controller.state, player_appearances={})
     _play_first_match_card(first)
     _play_first_match_card(replay)
-    assert first_controller.state == replay_controller.state
+    assert replace(first_controller.state, player_appearances={}) == replace(
+        replay_controller.state, player_appearances={})
     assert not (tmp_path / "first" / "legacy-game.db").exists()
     assert not (tmp_path / "replay" / "legacy-game.db").exists()
 

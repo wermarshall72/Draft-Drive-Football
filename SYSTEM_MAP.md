@@ -45,8 +45,13 @@ covers extracted interaction state.
   tracks coach pair highlighting and player-card interaction and cosmetic skin tones.
   Coach cards show position modifiers and active perks inline; the fixed portraits
   and primary-color clothing masks are in `assets/draft_coaches`.
-  Player cards display complete inactive perk details without a popup; their
-  two team-colored pixel poses are in `assets/draft_players`. Choices pass through the controller to
+  Player cards display complete inactive perk details without a popup. Six
+  position-mapped, team-colored sprites and a shared Heisman hover/focus pose
+  and their masks are in
+  `assets/draft_players`; [process_player_art.py](scripts/process_player_art.py)
+  prepares the supplied source images. [football_appearance.py](src/engine/football_appearance.py)
+  defines appearance descriptors, and the controller retains selected appearances
+  by roster position for the current run. Choices pass through the controller to
   [football_team_builder.py](src/engine/football_team_builder.py), using
   [football_coaches.py](src/engine/football_coaches.py) and
   [football_player_catalog.py](src/engine/football_player_catalog.py).
@@ -57,7 +62,8 @@ covers extracted interaction state.
   [test_football_team_builder.py](tests/test_football_team_builder.py),
   [test_football_coaches.py](tests/test_football_coaches.py), and
   [test_coach_draft_redesign.py](tests/test_coach_draft_redesign.py), and
-  [test_football_player_catalog.py](tests/test_football_player_catalog.py).
+  [test_football_player_catalog.py](tests/test_football_player_catalog.py), and
+  [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
   renders offers; [football_review_view.py](src/ui/football_review_view.py)
   renders the depth chart and playbook, with review/scroll state in

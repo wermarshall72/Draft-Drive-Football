@@ -6,6 +6,7 @@ from decimal import Decimal
 import pygame
 
 from src.engine.football import FootballPosition
+from src.engine.football_appearance import FootballPlayerAppearance, POSITION_ART
 from src.engine.football_controller import FootballGameControllerState
 from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerCandidate
@@ -28,7 +29,7 @@ class FootballPlayerDraftView:
         title_font: pygame.font.Font, name_font: pygame.font.Font,
         label_font: pygame.font.Font, small_font: pygame.font.Font,
         stat_font: pygame.font.Font, detail_font: pygame.font.Font,
-        choose_player: Callable[[FootballPosition, int], None],
+        choose_player: Callable[[FootballPosition, FootballPlayerCandidate, FootballPlayerAppearance], None],
     ) -> None:
         self.theme = theme
         self.player_inspection = inspection
@@ -100,6 +101,7 @@ class FootballPlayerDraftView:
         ]
         active = self.player_inspection.active_index(self.focus_index)
         buttons = []
+        self.player_inspection.portraits = []
         for index, (candidate, rect) in enumerate(zip(offers, self.player_inspection.card_rects)):
             pygame.draw.rect(surface, "#13283b", rect, border_radius=8)
             pygame.draw.rect(surface, self.theme.primary if active == index else _EDGE,
@@ -116,8 +118,12 @@ class FootballPlayerDraftView:
             draw_text(surface, _draft_position_label(candidate.position).upper(),
                       (rect.left + 12, rect.top + 39), self._draft_small_font, _MUTED)
             portrait = pygame.Rect(rect.left + 15, rect.top + 57, rect.width - 30, 190)
-            draw_draft_player(surface, portrait, self.theme.primary, self.theme.secondary,
-                              self.player_inspection.skin_tones[index], active == index)
+            appearance = FootballPlayerAppearance(
+                POSITION_ART[candidate.position], self.player_inspection.skin_tones[index],
+                tuple(self.theme.primary[:3]), tuple(self.theme.secondary[:3]),
+            )
+            draw_draft_player(surface, portrait, appearance, active == index)
+            self.player_inspection.portraits.append((portrait, appearance, active == index))
             strip = pygame.Rect(rect.left + 10, rect.top + 252, rect.width - 20, 52)
             pygame.draw.rect(surface, "#0b1c2b", strip, border_radius=4)
             for column, (label, value) in enumerate((
@@ -158,7 +164,7 @@ class FootballPlayerDraftView:
             draw_complete_wrapped_text(surface, text, text_rect, font, _TEXT, line_gap=0)
             buttons.append(Button(
                 f"DRAFT {candidate.position.value}",
-                lambda choice=index, position=candidate.position: self.choose_player(position, choice),
+                lambda player=candidate, art=appearance: self.choose_player(player.position, player, art),
                 pygame.Rect(rect.left + 10, rect.bottom - 42, rect.width - 20, 32),
                 variant="draft-select",
             ))

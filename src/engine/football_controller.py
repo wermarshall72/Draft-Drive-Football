@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import random
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 
 from src.engine.football import (
     DefensiveSchemeAction,
@@ -21,6 +22,7 @@ from src.engine.football import (
     OffensivePlayAction,
 )
 from src.engine.football_coaches import FootballCoachPair
+from src.engine.football_appearance import FootballPlayerAppearance, POSITION_ART
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
 from src.engine.football_shop import (
     FootballShop,
@@ -80,6 +82,9 @@ class FootballGameControllerState:
     games_played: int = 0
     skipped_games: tuple[int, ...] = ()
     transition_message: str | None = None
+    player_appearances: Mapping[FootballPosition, FootballPlayerAppearance] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 class FootballGameController:
@@ -152,6 +157,7 @@ class FootballGameController:
         self._games_played = 0
         self._skipped_games: list[int] = []
         self._transition_message: str | None = None
+        self._player_appearances: dict[FootballPosition, FootballPlayerAppearance] = {}
 
     @property
     def state(self) -> FootballGameControllerState:
@@ -171,6 +177,7 @@ class FootballGameController:
             games_played=self._games_played,
             skipped_games=tuple(self._skipped_games),
             transition_message=self._transition_message,
+            player_appearances=MappingProxyType(dict(self._player_appearances)),
         )
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
@@ -183,9 +190,18 @@ class FootballGameController:
         self,
         position: FootballPosition,
         choice: FootballPlayerCandidate | int,
+        *,
+        appearance: FootballPlayerAppearance | None = None,
     ) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.PLAYER_DRAFT)
+        if appearance is not None:
+            if not isinstance(appearance, FootballPlayerAppearance):
+                raise ValueError("Appearance must be a FootballPlayerAppearance.")
+            if not isinstance(position, FootballPosition) or appearance.asset_key != POSITION_ART[position]:
+                raise ValueError("Appearance artwork must match the draft position.")
         self._builder.choose_player(position, choice)
+        if appearance is not None:
+            self._player_appearances[position] = appearance
         if self._builder.completed:
             self._shop = FootballShop(
                 self._builder.build_roster(),

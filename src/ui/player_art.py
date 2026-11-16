@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pygame
 
+from src.engine.football_appearance import FootballPlayerAppearance
+
 _ASSET_DIR = Path(__file__).parent / "assets" / "draft_players"
 SKIN_TONES = (
     (255, 213, 180), (235, 181, 139), (201, 143, 102),
@@ -12,11 +14,10 @@ SKIN_TONES = (
 )
 
 
-@lru_cache(maxsize=2)
-def _player_layers(active: bool) -> tuple[pygame.Surface, ...]:
-    pose = "active" if active else "standing"
+@lru_cache(maxsize=7)
+def _player_layers(asset_key: str) -> tuple[pygame.Surface, ...]:
     return tuple(
-        pygame.image.load(_ASSET_DIR / f"{pose}_{layer}.png")
+        pygame.image.load(_ASSET_DIR / f"{asset_key}_{layer}.png")
         for layer in ("base", "primary", "secondary", "skin")
     )
 
@@ -26,9 +27,9 @@ def _tinted_player(
     primary: tuple[int, int, int],
     secondary: tuple[int, int, int],
     skin: tuple[int, int, int],
-    active: bool,
+    asset_key: str,
 ) -> pygame.Surface:
-    base, *masks = _player_layers(active)
+    base, *masks = _player_layers(asset_key)
     sprite = base.copy()
     for mask, color in zip(masks, (primary, secondary, skin)):
         tint = pygame.Surface(mask.get_size(), pygame.SRCALPHA)
@@ -41,12 +42,13 @@ def _tinted_player(
 def draw_draft_player(
     surface: pygame.Surface,
     rect: pygame.Rect,
-    primary: pygame.Color,
-    secondary: pygame.Color,
-    skin: tuple[int, int, int] = SKIN_TONES[2],
+    appearance: FootballPlayerAppearance,
     active: bool = False,
 ) -> None:
-    sprite = _tinted_player(tuple(primary[:3]), tuple(secondary[:3]), skin, active)
+    sprite = _tinted_player(
+        appearance.primary, appearance.secondary, appearance.skin,
+        "heisman" if active else appearance.asset_key,
+    )
     scale = min(rect.width / sprite.get_width(), rect.height / sprite.get_height())
     size = (max(1, round(sprite.get_width() * scale)),
             max(1, round(sprite.get_height() * scale)))

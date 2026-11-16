@@ -7,7 +7,8 @@ import pygame
 
 from src.application import ApplicationController
 from src.engine.football_ai import FootballAIDifficulty
-from src.engine.football_controller import FootballGameController
+from src.engine.football_controller import FootballGameController, FootballRunPhase
+from src.engine.football_appearance import FootballPlayerAppearance
 from src.profile import ProfileError, TeamProfile, validate_team_name
 from src.ui.football_run_screen import FootballRunScreen
 from src.ui.layout import LOGICAL_SIZE
@@ -15,6 +16,7 @@ from src.ui.main_menu import FootballMainMenuScreen
 from src.ui.main_menu_art import draw_menu_stadium
 from src.ui.navigation import ScreenManager
 from src.ui.profile_screen import ProfileScreen
+from src.ui.player_art import draw_draft_player
 from src.ui.theme import Theme
 
 EventSource = Callable[[], Iterable[pygame.event.Event]]
@@ -167,7 +169,18 @@ class DesktopApplication:
                     and not self._transition_is_active(now)
                     else None
                 )
-                self._present(canvas, window, menu_overlay=menu_overlay, theme=self.theme)
+                self._present(
+                    canvas, window, menu_overlay=menu_overlay, theme=self.theme,
+                    portraits=(
+                        self.run_screen.player_inspection.portraits
+                        if self.router.current_id == "football_run"
+                        and self.run_screen.state is not None
+                        and self.run_screen.state.phase is FootballRunPhase.PLAYER_DRAFT
+                        and not self.run_screen.confirm_exit
+                        and not self._transition_is_active(now)
+                        else ()
+                    ),
+                )
                 clock.tick(60)
         finally:
             self.running = False
@@ -276,6 +289,7 @@ class DesktopApplication:
     def _present(
         canvas: pygame.Surface, window: pygame.Surface, *,
         menu_overlay: pygame.Surface | None = None, theme: Theme | None = None,
+        portraits: Iterable[tuple[pygame.Rect, FootballPlayerAppearance, bool]] = (),
     ) -> None:
         window.fill((0, 0, 0))
         logical_width, logical_height = LOGICAL_SIZE
@@ -293,6 +307,13 @@ class DesktopApplication:
             scaled.blit(pygame.transform.smoothscale(menu_overlay, size), (0, 0))
         else:
             scaled = pygame.transform.smoothscale(canvas, size)
+            for rect, appearance, active in portraits:
+                portrait = pygame.Rect(
+                    round(rect.left * scale), round(rect.top * scale),
+                    round(rect.width * scale), round(rect.height * scale),
+                )
+                pygame.draw.rect(scaled, "#13283b", portrait)
+                draw_draft_player(scaled, portrait, appearance, active)
         window.blit(
             scaled,
             ((window_width - size[0]) // 2, (window_height - size[1]) // 2),

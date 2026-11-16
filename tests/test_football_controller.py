@@ -29,6 +29,7 @@ from src.engine.football_controller import (
 )
 from src.engine.football_simulator import REGULATION_PERIOD_SECONDS
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerCandidate
+from src.engine.football_appearance import FootballPlayerAppearance, POSITION_ART
 from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_shop import (
     FootballShopCard,
@@ -53,6 +54,46 @@ def _controller(
         ai_seed=ai_seed,
         match_seed=match_seed,
     )
+
+
+def test_appearance_is_run_local_and_does_not_change_gameplay_streams() -> None:
+    first, second = _controller(), _controller()
+    first.choose_coach(0)
+    second.choose_coach(0)
+    saved = {}
+    for index, position in enumerate(PLAYER_DRAFT_ORDER):
+        assert first.state.team_builder.current_offer == second.state.team_builder.current_offer
+        candidate = first.state.team_builder.current_offer[1]
+        appearance = FootballPlayerAppearance(
+            POSITION_ART[position], (90 + index, 80, 60), (1, 2, 3), (4, 5, 6)
+        )
+        first.choose_player(position, candidate, appearance=appearance)
+        second.choose_player(position, 1)
+        saved[position] = appearance
+        assert first.state.player_appearances == saved
+    assert first.state.team_builder.selected_players == second.state.team_builder.selected_players
+    assert first.state.shop == second.state.shop
+    assert first._builder._rng.getstate() == second._builder._rng.getstate()
+    assert first._shop_rng.getstate() == second._shop_rng.getstate()
+    assert first._ai._rng.getstate() == second._ai._rng.getstate()
+    assert first._match_seed_rng.getstate() == second._match_seed_rng.getstate()
+    first.finish_shop()
+    second.finish_shop()
+    assert first.state.match == second.state.match
+    assert first.state.player_appearances == saved
+
+
+def test_invalid_appearance_and_choice_do_not_change_run() -> None:
+    controller = _controller()
+    controller.choose_coach(0)
+    before = controller.state
+    wrong = FootballPlayerAppearance("lineman", (1, 2, 3), (4, 5, 6), (7, 8, 9))
+    with pytest.raises(ValueError, match="match the draft position"):
+        controller.choose_player(FootballPosition.QB, 0, appearance=wrong)
+    correct = replace(wrong, asset_key="quarterback")
+    with pytest.raises(ValueError):
+        controller.choose_player(FootballPosition.QB, 99, appearance=correct)
+    assert controller.state == before
 
 
 def _draft_to_shop(controller: FootballGameController) -> None:

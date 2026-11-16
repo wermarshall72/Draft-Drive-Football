@@ -1,12 +1,11 @@
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 import secrets
 
 import pygame
 
-from src.ui.widgets import Button
 from src.ui.player_art import SKIN_TONES
 from src.engine.football_team_builder import FootballPlayerCandidate
+from src.engine.football_appearance import FootballPlayerAppearance
 
 
 @dataclass
@@ -47,6 +46,7 @@ class PlayerInspection:
     card_rects: list[pygame.Rect] = field(default_factory=list)
     offers: tuple[FootballPlayerCandidate, ...] = ()
     skin_tones: tuple[tuple[int, int, int], ...] = ()
+    portraits: list[tuple[pygame.Rect, FootballPlayerAppearance, bool]] = field(default_factory=list)
 
     def set_offers(self, offers: tuple[FootballPlayerCandidate, ...]) -> None:
         if len(offers) != len(self.offers) or any(
@@ -55,7 +55,7 @@ class PlayerInspection:
             self.offers = offers
             self.skin_tones = tuple(secrets.choice(SKIN_TONES) for _ in offers)
 
-    def handle_event(self, event: pygame.event.Event, buttons: Sequence[Button]) -> None:
+    def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.KEYDOWN:
             self.keyboard = True
             self.hover_index = None
@@ -65,8 +65,8 @@ class PlayerInspection:
             self.window_left = False
             self.keyboard = False
             self.hover_index = next(
-                (index for index, button in enumerate(buttons)
-                 if button.variant == "draft-select" and button.rect.collidepoint(event.pos)),
+                (index for index, rect in enumerate(self.card_rects)
+                 if rect.collidepoint(event.pos)),
                 None,
             )
         elif event.type == pygame.WINDOWLEAVE:
