@@ -15,13 +15,17 @@ auto-battler is a separate legacy reference.
   screens; [screens.py](src/ui/screens.py), [layout.py](src/ui/layout.py),
   [widgets.py](src/ui/widgets.py), and [theme.py](src/ui/theme.py) provide
   shared screen, layout, input, and visual components.
-- [main_menu.py](src/ui/main_menu.py) selects difficulty and starts a run;
+- [main_menu.py](src/ui/main_menu.py) presents profile status and selects
+  difficulty to start a run; [main_menu_art.py](src/ui/main_menu_art.py)
+  draws its procedural stadium and tints the user-supplied helmet layers in
+  `src/ui/assets/menu_helmet_*.png` to the team's primary color.
   [profile_screen.py](src/ui/profile_screen.py) creates or edits the profile.
   Saving flows through `DesktopApplication` and the profile methods of
   [ApplicationController](src/application.py) to validation and JSON storage
   in [profile.py](src/profile.py); the application refreshes the theme and
   screen data. See [test_desktop.py](tests/test_desktop.py) and
-  [test_profile.py](tests/test_profile.py).
+  [test_profile.py](tests/test_profile.py), and
+  [test_main_menu.py](tests/test_main_menu.py).
 
 ## Follow a run or change a screen
 

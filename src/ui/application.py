@@ -12,6 +12,7 @@ from src.profile import ProfileError, TeamProfile, validate_team_name
 from src.ui.football_run_screen import FootballRunScreen
 from src.ui.layout import LOGICAL_SIZE
 from src.ui.main_menu import FootballMainMenuScreen
+from src.ui.main_menu_art import draw_menu_stadium
 from src.ui.navigation import ScreenManager
 from src.ui.profile_screen import ProfileScreen
 from src.ui.theme import Theme
@@ -158,8 +159,15 @@ class DesktopApplication:
                 if not self.running:
                     break
                 self.router.draw(canvas)
-                self._draw_transition(canvas, pygame.time.get_ticks())
-                self._present(canvas, window)
+                now = pygame.time.get_ticks()
+                self._draw_transition(canvas, now)
+                menu_overlay = (
+                    self.menu_screen.overlay
+                    if self.router.current_id == "main_menu"
+                    and not self._transition_is_active(now)
+                    else None
+                )
+                self._present(canvas, window, menu_overlay=menu_overlay, theme=self.theme)
                 clock.tick(60)
         finally:
             self.running = False
@@ -265,7 +273,10 @@ class DesktopApplication:
         )
 
     @staticmethod
-    def _present(canvas: pygame.Surface, window: pygame.Surface) -> None:
+    def _present(
+        canvas: pygame.Surface, window: pygame.Surface, *,
+        menu_overlay: pygame.Surface | None = None, theme: Theme | None = None,
+    ) -> None:
         window.fill((0, 0, 0))
         logical_width, logical_height = LOGICAL_SIZE
         window_width, window_height = window.get_size()
@@ -274,7 +285,14 @@ class DesktopApplication:
             max(1, round(logical_width * scale)),
             max(1, round(logical_height * scale)),
         )
-        scaled = pygame.transform.smoothscale(canvas, size)
+        if menu_overlay is not None:
+            if theme is None:
+                raise ValueError("A theme is required to present the menu.")
+            scaled = pygame.Surface(size)
+            draw_menu_stadium(scaled, theme.primary, theme.secondary)
+            scaled.blit(pygame.transform.smoothscale(menu_overlay, size), (0, 0))
+        else:
+            scaled = pygame.transform.smoothscale(canvas, size)
         window.blit(
             scaled,
             ((window_width - size[0]) // 2, (window_height - size[1]) // 2),
