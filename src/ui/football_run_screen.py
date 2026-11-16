@@ -13,7 +13,6 @@ from src.engine.football_controller import (
     FootballRunPhase,
 )
 from src.engine.football_shop import FootballShopSection
-from src.engine.football_team_builder import FootballPlayerCandidate
 from src.ui.coach_fonts import coach_font, staff_font
 from src.ui.football_result import FootballResultView
 from src.ui.football_display import (
@@ -38,11 +37,6 @@ from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
-
-_DRAFT_PURPLE = pygame.Color("#a600e8")
-_DRAFT_PURPLE_PRESSED = pygame.Color("#7800b5")
-
-
 
 class FootballRunScreen(Screen):
     """Render the current immutable controller state and submit human choices."""
@@ -166,11 +160,10 @@ class FootballRunScreen(Screen):
             if inspection.consumed:
                 return
         if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
-            inspection = self.player_inspection.handle_event(event, self.focus_index)
-            if inspection.update_hover:
-                self.hover_index = inspection.hover_index
-            if inspection.consumed:
-                return
+            self.player_inspection.handle_event(event, self.buttons)
+            if event.type == pygame.WINDOWLEAVE:
+                self.hover_index = None
+                self.pressed_index = None
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             if self.shop_review.mode is not None:
                 self._leave_shop_review()
@@ -244,7 +237,7 @@ class FootballRunScreen(Screen):
                 content = pygame.Rect(38, 122, 1204, 558)
             else:
                 self._player_draft_view().draw_backdrop(surface)
-                content = pygame.Rect(38, 91, 1204, 599)
+                content = pygame.Rect(20, 20, 1240, 674)
         else:
             layout = self._header(surface, title, eyebrow, self.team_name)
             content = pygame.Rect(
@@ -311,7 +304,7 @@ class FootballRunScreen(Screen):
         exit_rect = (
             pygame.Rect(1097, 37, 145, 32)
             if state.phase is FootballRunPhase.COACH_DRAFT
-            else pygame.Rect(1097, 10, 145, 32)
+            else pygame.Rect(38, 647, 254, 32)
             if state.phase is FootballRunPhase.PLAYER_DRAFT
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
         )
@@ -322,26 +315,6 @@ class FootballRunScreen(Screen):
         self._draw_buttons(surface)
         if state.phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
             self._coach_view().draw_inspection(surface, state, self.buttons)
-        elif state.phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
-            inspected_index = (
-                self.focus_index if self.player_inspection.keyboard
-                else self.player_inspection.hover_index
-            )
-            offers = state.team_builder.current_offer
-            if (
-                inspected_index is not None
-                and 0 <= inspected_index < len(offers)
-                and self.player_inspection.detail_rect is not None
-            ):
-                candidate = offers[inspected_index]
-                if not isinstance(candidate, FootballPlayerCandidate):
-                    raise RuntimeError("The controller returned a non-player draft offer.")
-                self._player_draft_view().draw_details(
-                    surface,
-                    self.player_inspection.detail_rect,
-                    candidate,
-                    keyboard_inspected=self.player_inspection.keyboard,
-                )
 
         if self.last_error is not None:
             error_rect = pygame.Rect(
@@ -516,12 +489,11 @@ class FootballRunScreen(Screen):
                 continue
             if button.variant == "draft-select":
                 pressed = self.pressed_index == index and button.enabled
-                hovered = self.hover_index == index and button.enabled
+                active = self.player_inspection.active_index(self.focus_index) == index
                 rect = button.rect.move(0, 2) if pressed else button.rect
-                fill = (
-                    _DRAFT_PURPLE_PRESSED
-                    if pressed else _DRAFT_PURPLE
-                ) if button.enabled else pygame.Color("#b9beb9")
+                fill = self.theme.primary if active else pygame.Color("#234b70")
+                if pressed:
+                    fill = self.theme.primary_dark
                 pygame.draw.rect(surface, fill, rect, border_radius=8)
                 pygame.draw.rect(
                     surface,
@@ -530,7 +502,7 @@ class FootballRunScreen(Screen):
                     1,
                     border_radius=8,
                 )
-                if hovered:
+                if active:
                     pygame.draw.rect(
                         surface,
                         pygame.Color("#f5ead1"),
@@ -538,7 +510,7 @@ class FootballRunScreen(Screen):
                         2,
                         border_radius=6,
                     )
-                if button.focused:
+                if button.focused and self.player_inspection.keyboard:
                     pygame.draw.rect(surface, "#111416", rect.inflate(7, 7), 3,
                                      border_radius=11)
                     pygame.draw.rect(surface, "#ffffff", rect.inflate(3, 3), 1,

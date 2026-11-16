@@ -38,7 +38,9 @@ covers extracted interaction state.
 - **Coach and player draft:** [football_coach_view.py](src/ui/football_coach_view.py)
   and [football_player_draft_view.py](src/ui/football_player_draft_view.py)
   render choices and details; [football_draft_interaction.py](src/ui/football_draft_interaction.py)
-  tracks inspection input. Choices pass through the controller to
+  tracks coach inspection and player-card interaction and cosmetic skin tones.
+  Player cards display complete inactive perk details without a popup; their
+  two team-colored pixel poses are in `assets/draft_players`. Choices pass through the controller to
   [football_team_builder.py](src/engine/football_team_builder.py), using
   [football_coaches.py](src/engine/football_coaches.py) and
   [football_player_catalog.py](src/engine/football_player_catalog.py).
