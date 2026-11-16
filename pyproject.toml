@@ -18,6 +18,7 @@ include = ["src*"]
 "src.ui" = [
     "assets/*.png",
     "assets/draft_players/*.png",
+    "assets/draft_coaches/*.png",
     "assets/fonts/*.ttf",
     "assets/fonts/*-OFL.txt",
 ]

@@ -38,7 +38,9 @@ covers extracted interaction state.
 - **Coach and player draft:** [football_coach_view.py](src/ui/football_coach_view.py)
   and [football_player_draft_view.py](src/ui/football_player_draft_view.py)
   render choices and details; [football_draft_interaction.py](src/ui/football_draft_interaction.py)
-  tracks coach inspection and player-card interaction and cosmetic skin tones.
+  tracks coach pair highlighting and player-card interaction and cosmetic skin tones.
+  Coach cards show position modifiers and active perks inline; the fixed portraits
+  and primary-color clothing masks are in `assets/draft_coaches`.
   Player cards display complete inactive perk details without a popup; their
   two team-colored pixel poses are in `assets/draft_players`. Choices pass through the controller to
   [football_team_builder.py](src/engine/football_team_builder.py), using
@@ -50,6 +52,7 @@ covers extracted interaction state.
   executed. See
   [test_football_team_builder.py](tests/test_football_team_builder.py),
   [test_football_coaches.py](tests/test_football_coaches.py), and
+  [test_coach_draft_redesign.py](tests/test_coach_draft_redesign.py), and
   [test_football_player_catalog.py](tests/test_football_player_catalog.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
   renders offers; [football_review_view.py](src/ui/football_review_view.py)

@@ -21,7 +21,7 @@ from src.ui.football_display import (
 from src.ui.football_review_view import FootballReviewView
 from src.ui.football_shop_view import FootballShopView
 from src.ui.football_player_draft_view import FootballPlayerDraftView
-from src.ui.football_coach_view import FootballCoachView, coach_popup_rect
+from src.ui.football_coach_view import FootballCoachView
 from src.ui.football_match_field import draw_match_field
 from src.ui.football_match_decision_view import FootballMatchDecisionView
 from src.ui.football_match_palette import (
@@ -95,8 +95,12 @@ class FootballRunScreen(Screen):
         self.last_error = None
         self.confirm_exit = False
         self.match_interaction = MatchInteraction()
-        self.coach_inspection = CoachInspection(focus_changed_at=pygame.time.get_ticks())
+        self.coach_inspection = CoachInspection()
         self.player_inspection = PlayerInspection()
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance = None
         self._focus_shop_navigation_after_details = False
@@ -151,14 +155,16 @@ class FootballRunScreen(Screen):
             if hand_event.kind is HandEventKind.HANDLED:
                 return
         if self._current_state().phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
-            inspection = self.coach_inspection.handle_event(
-                event, self.buttons, self.focus_index,
-                lambda index: coach_popup_rect(self.buttons, index),
-            )
-            if inspection.update_hover:
-                self.hover_index = inspection.hover_index
-            if inspection.consumed:
-                return
+            self.coach_inspection.handle_event(event)
+            if (
+                event.type == pygame.MOUSEMOTION
+                and self.coach_inspection.hover_index is not None
+                and self.coach_inspection.hover_index < len(self.buttons)
+            ):
+                self._focus(self.coach_inspection.hover_index)
+            if event.type == pygame.WINDOWLEAVE:
+                self.hover_index = None
+                self.pressed_index = None
         if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
             self.player_inspection.handle_event(event, self.buttons)
             if event.type == pygame.WINDOWLEAVE:
@@ -170,7 +176,10 @@ class FootballRunScreen(Screen):
                 return
             self.confirm_exit = not self.confirm_exit
             self.coach_inspection.hover_index = None
-            self.coach_inspection.popup_pressed = False
+            self.buttons = []
+            self.focus_index = 0
+            self.hover_index = None
+            self.pressed_index = None
             return
         if (
             event.type == pygame.KEYDOWN
@@ -191,11 +200,6 @@ class FootballRunScreen(Screen):
             and self.focus_index != previous_focus
         ):
             self._focus(previous_focus)
-        if (
-            self._current_state().phase is FootballRunPhase.COACH_DRAFT
-            and self.focus_index != previous_focus
-        ):
-            self.coach_inspection.focus_changed_at = pygame.time.get_ticks()
 
     def draw(self, surface: pygame.Surface) -> None:
         state = self._current_state()
@@ -313,9 +317,6 @@ class FootballRunScreen(Screen):
         )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
-        if state.phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
-            self._coach_view().draw_inspection(surface, state, self.buttons)
-
         if self.last_error is not None:
             error_rect = pygame.Rect(
                 layout.margin,
@@ -470,8 +471,6 @@ class FootballRunScreen(Screen):
 
     def _draw_buttons(self, surface: pygame.Surface) -> None:
         for index, button in enumerate(self.buttons):
-            if button.variant == "coach-inspect":
-                continue
             if button.variant not in ("coach-select", "draft-select"):
                 button.draw(
                     surface,
@@ -634,12 +633,18 @@ class FootballRunScreen(Screen):
 
     def _submit(self, action: Callable[[], object]) -> None:
         self.last_error = None
+        old_phase = self._current_state().phase
         try:
             action()
         except ValueError as error:
             self.last_error = str(error)
         finally:
             self.state = self._require_controller().state
+            if self.state.phase is not old_phase:
+                self.buttons = []
+                self.focus_index = 0
+                self.hover_index = None
+                self.pressed_index = None
 
     def _open_next_shop(self) -> None:
         self._submit(self._require_controller().enter_next_shop)
@@ -654,9 +659,17 @@ class FootballRunScreen(Screen):
         ):
             self._close_coach_details()
         self.confirm_exit = True
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
 
     def _keep_playing(self) -> None:
         self.confirm_exit = False
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
 
     def _return_to_menu(self) -> None:
         self.confirm_exit = False
