@@ -19,6 +19,7 @@ from src.ui.football_display import (
     _SCHEME_LABELS,
 )
 from src.ui.football_review_view import FootballReviewView
+from src.ui.football_depth_chart import DepthChartButton
 from src.ui.football_shop_view import FootballShopView
 from src.ui.football_player_draft_view import FootballPlayerDraftView
 from src.ui.football_coach_view import FootballCoachView
@@ -234,7 +235,17 @@ class FootballRunScreen(Screen):
             FootballRunPhase.PLAYOFFS: ("Season milestone", "GAME 10 / PLAYOFFS"),
         }
         title, eyebrow = titles[state.phase]
-        if state.phase in (FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT):
+        if state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode == "depth":
+            title, eyebrow = "Depth chart", "CURRENT RUN / READ ONLY"
+        depth_review = (
+            state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and self.shop_review.mode == "depth"
+        )
+        if depth_review:
+            layout = Layout.from_surface(surface)
+            surface.fill("#061629")
+            content = pygame.Rect(20, 15, surface.get_width() - 40, surface.get_height() - 30)
+        elif state.phase in (FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT):
             layout = Layout.from_surface(surface)
             if state.phase is FootballRunPhase.COACH_DRAFT:
                 self._coach_view().draw_backdrop(surface)
@@ -310,10 +321,14 @@ class FootballRunScreen(Screen):
             if state.phase is FootballRunPhase.COACH_DRAFT
             else pygame.Rect(38, 647, 254, 32)
             if state.phase is FootballRunPhase.PLAYER_DRAFT
+            else pygame.Rect(content.right - 112, content.top, 112, 30)
+            if depth_review
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
         )
         self.buttons.append(
-            Button("END RUN", self._request_exit, exit_rect, variant="quiet")
+            (DepthChartButton if depth_review else Button)(
+                "END RUN", self._request_exit, exit_rect, variant="quiet"
+            )
         )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
@@ -558,9 +573,17 @@ class FootballRunScreen(Screen):
         ):
             self._submit(self._require_controller().cancel_card_removal)
         self.shop_review.close()
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
 
     def _open_depth_chart(self) -> None:
         self.shop_review.open_depth_chart()
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
 
     def _shop_view(self) -> FootballShopView:
         if self._shop_view_instance is None:

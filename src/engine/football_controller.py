@@ -17,6 +17,7 @@ from src.engine.football import (
     FootballFourthDownAction,
     FootballMatchState,
     FootballMatchStatus,
+    FootballPlayer,
     FootballPosition,
     FootballTeamSide,
     OffensivePlayAction,
@@ -83,6 +84,9 @@ class FootballGameControllerState:
     skipped_games: tuple[int, ...] = ()
     transition_message: str | None = None
     player_appearances: Mapping[FootballPosition, FootballPlayerAppearance] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    drafted_players: Mapping[FootballPosition, FootballPlayer] = field(
         default_factory=lambda: MappingProxyType({})
     )
 
@@ -158,6 +162,7 @@ class FootballGameController:
         self._skipped_games: list[int] = []
         self._transition_message: str | None = None
         self._player_appearances: dict[FootballPosition, FootballPlayerAppearance] = {}
+        self._drafted_players: dict[FootballPosition, FootballPlayer] = {}
 
     @property
     def state(self) -> FootballGameControllerState:
@@ -178,6 +183,7 @@ class FootballGameController:
             skipped_games=tuple(self._skipped_games),
             transition_message=self._transition_message,
             player_appearances=MappingProxyType(dict(self._player_appearances)),
+            drafted_players=MappingProxyType(dict(self._drafted_players)),
         )
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
@@ -199,7 +205,8 @@ class FootballGameController:
                 raise ValueError("Appearance must be a FootballPlayerAppearance.")
             if not isinstance(position, FootballPosition) or appearance.asset_key != POSITION_ART[position]:
                 raise ValueError("Appearance artwork must match the draft position.")
-        self._builder.choose_player(position, choice)
+        player = self._builder.choose_player(position, choice)
+        self._drafted_players[position] = player
         if appearance is not None:
             self._player_appearances[position] = appearance
         if self._builder.completed:

@@ -23,6 +23,8 @@ from src.engine.football import (
     FootballPlayResult,
     FootballPosition,
     FootballTeamSide,
+    FootballCoachUpgradeKind,
+    FootballCoachAssignment,
     OffensivePlayAction,
 )
 from src.engine.football_decks import (
@@ -38,6 +40,7 @@ from src.engine.football_controller import (
 from src.engine.football_coaches import (
     DEFENSIVE_COACHES,
     OFFENSIVE_COACHES,
+    OFFENSIVE_POSITIONS,
 )
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
@@ -65,6 +68,7 @@ from src.ui import football_match_decision_view as football_match_decision_modul
 from src.ui.football_display import _PLAY_LABELS, _POSITION_LABELS
 from src.ui import football_coach_view as football_coach_module
 from src.ui import football_review_view as football_review_module
+from src.ui import football_depth_chart as football_depth_module
 from src.ui import football_result as football_result_module
 from src.ui import football_shop_view as football_shop_module
 from src.ui import football_player_draft_view as football_player_draft_module
@@ -950,7 +954,7 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     wrapped: list[str] = []
     original_draw_wrapped = football_run_screen_module.draw_wrapped_text
     complete_lines: list[tuple[str, ...]] = []
-    original_complete_wrapped = football_review_module.draw_complete_wrapped_text
+    original_complete_wrapped = football_depth_module.draw_complete_wrapped_text
 
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
@@ -977,24 +981,20 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     monkeypatch.setattr(
         football_run_screen_module, "draw_wrapped_text", capture_wrapped
     )
+    monkeypatch.setattr(football_depth_module, "draw_text", capture_text)
     monkeypatch.setattr(football_review_module, "draw_text", capture_text)
-    monkeypatch.setattr(football_review_module, "draw_wrapped_text", capture_wrapped)
     monkeypatch.setattr(
-        football_review_module,
+        football_depth_module,
         "draw_complete_wrapped_text",
         capture_complete_wrapped,
     )
     _activate(desktop, "DEPTH CHART")
     desktop.router.draw(_surface())
     assert "CURRENT RUN SNAPSHOT" in " ".join(displayed)
-    assert "OFFENSE" in " ".join(displayed)
-    assert "DEFENSE" in " ".join(displayed)
-    assert "PURCHASED RUN UPGRADES" in " ".join(displayed)
-    assert any("PLANNED / INACTIVE" in text for text in wrapped)
     complete_text = " ".join(line for lines in complete_lines for line in lines)
-    assert shop.purchased_upgrades[0].name in complete_text
-    assert shop.purchased_upgrades[0].description in complete_text
-    for coach in football_review_module.coaches_for_assignment(
+    assert "OFFENSE" in complete_text and "DEFENSE" in complete_text
+    assert "PLANNED / INACTIVE" in complete_text
+    for coach in football_depth_module.coaches_for_assignment(
         shop.roster.coach_assignment
     ):
         if coach is not None:
@@ -1002,18 +1002,21 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
                 assert (
                     f"{_POSITION_LABELS[position]} "
                     f"{modifier:+.0%}"
-                ) in " ".join(wrapped)
+                ) in complete_text
             if coach.perk is not None:
-                for detail in (
-                    coach.perk.trigger,
-                    coach.perk.effect,
-                    coach.perk.duration,
-                    coach.perk.reset,
-                ):
-                    assert detail in " ".join(wrapped)
+                assert football_coach_module.coach_perk_text(coach) in " ".join(
+                    " ".join(lines) for lines in complete_lines
+                )
     for player in shop.roster.players.values():
-        assert player.name in " ".join(displayed)
+        assert player.name in complete_text
     assert "BACK TO SHOP" in {button.label for button in desktop.run_screen.buttons}
+    assert desktop.run_screen.shop_review.depth_max_scroll == 0
+    _activate(desktop, "UPGRADES / PERK DETAILS")
+    desktop.router.draw(_surface())
+    assert "PURCHASED RUN UPGRADES" in " ".join(displayed)
+    complete_text = " ".join(line for lines in complete_lines for line in lines)
+    assert shop.purchased_upgrades[0].name in complete_text
+    assert shop.purchased_upgrades[0].description in complete_text
     assert desktop.run_screen.shop_review.depth_max_scroll > 0
     desktop.run_screen.handle_event(
         pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1})
@@ -1037,6 +1040,470 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
         assert OFFENSIVE_PLAY_CATALOG[card.card_id].name in joined
     for card in current_shop.defensive_deck:
         assert DEFENSIVE_SCHEME_CATALOG[card.card_id].name in joined
+
+
+def test_depth_chart_renders_run_art_details_and_router_toggle(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _activate(desktop, "CHOOSE STAFF 01")
+    for index, position in enumerate(PLAYER_DRAFT_ORDER):
+        desktop.router.draw(_surface())
+        screen = desktop.run_screen
+        tone = player_art.SKIN_TONES[index % len(player_art.SKIN_TONES)]
+        screen.player_inspection.skin_tones = (tone,) * 3
+        _activate(desktop, f"DRAFT {position.value}", index=2 if index == 0 else 0, keyboard=True)
+    controller = desktop.football_controller
+    assert controller is not None
+    before = controller.state
+    assert before.shop is not None
+    assert before.team_builder.current_offer == ()
+    assert len(before.drafted_players) == len(before.player_appearances) == 8
+    art = []
+    portraits = []
+    text = []
+    original_art = football_depth_module.draw_draft_player
+    original_portrait = football_depth_module.draw_coach_portrait
+    original_text = football_depth_module.draw_complete_wrapped_text
+
+    def capture_art(surface, rect, appearance, active=False):
+        art.append(appearance)
+        original_art(surface, rect, appearance, active)
+
+    def capture_portrait(surface, rect, coach_id, primary):
+        portraits.append((coach_id, tuple(primary[:3])))
+        original_portrait(surface, rect, coach_id, primary)
+
+    def capture_text(surface, value, rect, font, color, *, line_gap=2):
+        text.append(value)
+        return original_text(surface, value, rect, font, color, line_gap=line_gap)
+
+    monkeypatch.setattr(football_depth_module, "draw_draft_player", capture_art)
+    monkeypatch.setattr(football_depth_module, "draw_coach_portrait", capture_portrait)
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture_text)
+    desktop.router.draw(_surface())
+    old_buy = next(button.rect.center for button in desktop.run_screen.buttons if button.label == "BUY")
+    _activate(desktop, "DEPTH CHART")
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(pygame.event.Event(event_type, {"pos": old_buy, "button": 1}))
+    assert controller.state == before
+    art.clear()
+    portraits.clear()
+    text.clear()
+    desktop.router.draw(_surface())
+    assert art == [before.player_appearances[position] for position in PLAYER_DRAFT_ORDER]
+    assert [a.asset_key for a in art] == [POSITION_ART[position] for position in PLAYER_DRAFT_ORDER]
+    pair = before.selected_coach_pair
+    assert pair is not None
+    assert portraits == [(pair.offense.coach_id, tuple(desktop.theme.primary[:3])),
+                         (pair.defense.coach_id, tuple(desktop.theme.primary[:3]))]
+    for coach in (pair.offense, pair.defense):
+        assert any(coach.name in item for item in text)
+        assert any(football_coach_module.coach_perk_text(coach) in item for item in text)
+    for position in PLAYER_DRAFT_ORDER:
+        player = before.drafted_players[position]
+        assert sum(player.name in item for item in text) == 1
+        player_type = player_type_for_id(player.player_type_id)
+        from src.ui.football_display import player_partnership_text
+        partner, explanation = player_partnership_text(player_type)
+        assert partner in text
+        assert all(part in text for part in football_depth_module._detail_sections(player)[1])
+        if player_type.perk is not None:
+            assert all(detail in football_depth_module._compact_player_details(player) for detail in (
+                "PLANNED / INACTIVE", player_type.perk.name, player_type.perk.trigger, player_type.perk.effect
+            ))
+        if explanation:
+            assert any(explanation in item for item in text)
+    assert "Partner: None" in text and "Perk: None" in text
+    assert not desktop.run_screen.shop_review.modified_stats
+    _activate(desktop, "STARTING STATS / SHOW MODIFIED STATS", keyboard=True)
+    assert desktop.run_screen.shop_review.modified_stats
+    text.clear()
+    desktop.router.draw(_surface())
+    assert controller.state == before
+    _activate(desktop, "MODIFIED STATS / SHOW STARTING STATS")
+    assert not desktop.run_screen.shop_review.modified_stats
+    _activate(desktop, "STARTING STATS / SHOW MODIFIED STATS")
+    _activate(desktop, "BACK TO SHOP", keyboard=True)
+    _activate(desktop, "DEPTH CHART", keyboard=True)
+    assert not desktop.run_screen.shop_review.modified_stats
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_END}))
+    assert desktop.run_screen.shop_review.depth_scroll == desktop.run_screen.shop_review.depth_max_scroll
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_HOME}))
+    assert desktop.run_screen.shop_review.depth_scroll == 0
+    assert controller.state == before
+
+
+def test_depth_chart_modified_stats_use_only_persistent_effects(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    initial = controller.state
+    offered = next(upgrade for upgrade in initial.shop.offer if upgrade.stat.value == "power")
+    controller.buy_upgrade(offered)
+    after = controller.state
+    assert after.shop is not None
+    assert after.drafted_players == initial.drafted_players
+    assert after.drafted_players[offered.position].power + offered.amount == after.shop.roster.players[offered.position].power
+    effects = tuple(card for card in COACH_UPGRADE_CATALOG if card.coach_upgrade_effect is not None)
+    state = replace(after, shop=replace(after.shop, owned_coach_upgrades=effects))
+    for position in PLAYER_DRAFT_ORDER:
+        player = state.shop.roster.players[position]
+        offense = position in OFFENSIVE_POSITIONS
+        coach = state.selected_coach_pair.offense if offense else state.selected_coach_pair.defense
+        power, volatility, stamina = football_depth_module.modified_player_stats(state, position)
+        assert power == pytest.approx(player.power * (1 + coach.position_modifiers[position]) * 1.05)
+        assert volatility == pytest.approx(player.volatility * 0.85)
+        assert stamina == pytest.approx(min(1, player.stamina + 0.1))
+    nonstat = tuple(card for card in effects if card.coach_upgrade_effect.kind in (
+        FootballCoachUpgradeKind.OFFENSIVE_FAMILY_YARDAGE_DELTA,
+        FootballCoachUpgradeKind.INTERCEPTION_RISK_REDUCTION,
+    ))
+    without = replace(state, shop=replace(state.shop, owned_coach_upgrades=()))
+    with_nonstat = replace(state, shop=replace(state.shop, owned_coach_upgrades=nonstat))
+    for position in PLAYER_DRAFT_ORDER:
+        assert football_depth_module.modified_player_stats(without, position) == football_depth_module.modified_player_stats(with_nonstat, position)
+    capped_cards = []
+    for kind in (FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
+                 FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION,
+                 FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST):
+        card = next(card for card in effects if card.coach_upgrade_effect.kind is kind)
+        capped_cards.append(replace(card, coach_upgrade_effect=replace(card.coach_upgrade_effect, magnitude=0.9)))
+    capped = replace(state, shop=replace(state.shop, owned_coach_upgrades=tuple(capped_cards)))
+    qb = capped.shop.roster.players[FootballPosition.QB]
+    coach = capped.selected_coach_pair.offense
+    power, volatility, stamina = football_depth_module.modified_player_stats(capped, FootballPosition.QB)
+    assert power == pytest.approx(qb.power * (1 + coach.position_modifiers[FootballPosition.QB]) * 1.2)
+    assert volatility == pytest.approx(qb.volatility * 0.7)
+    assert stamina == pytest.approx(min(1, qb.stamina + 0.3))
+    assert controller.state == after
+
+
+def test_depth_chart_card_geometry_and_stat_comparisons(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    _activate(desktop, "DEPTH CHART")
+    cards = []
+    portraits = []
+    boxes = []
+    wrapped = []
+    text = []
+    original_art = football_depth_module.draw_draft_player
+    original_wrapped = football_depth_module.draw_complete_wrapped_text
+    original_text = football_depth_module.draw_text
+    original_box = football_depth_module._rounded_box
+
+    def capture_art(surface, rect, appearance, active=False):
+        portraits.append((rect.copy(), appearance))
+        return original_art(surface, rect, appearance, active)
+
+    def capture_wrapped(surface, value, rect, font, color, *, line_gap=2):
+        wrapped.append((value, rect.copy()))
+        return original_wrapped(surface, value, rect, font, color, line_gap=line_gap)
+
+    def capture_text(surface, value, position, font, color):
+        text.append((value, position, font, color))
+        return original_text(surface, value, position, font, color)
+
+    def capture_box(surface, rect, fill, edge, radius=6):
+        if fill == football_depth_module._PERK_BOX:
+            boxes.append(rect.copy())
+        if fill == football_depth_module._CARD:
+            cards.append(rect.copy())
+        return original_box(surface, rect, fill, edge, radius)
+
+    monkeypatch.setattr(football_depth_module, "draw_draft_player", capture_art)
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture_wrapped)
+    monkeypatch.setattr(football_depth_module, "draw_text", capture_text)
+    monkeypatch.setattr(football_depth_module, "_rounded_box", capture_box)
+    desktop.router.draw(_surface())
+    boxes = [box for box in boxes if any(card.contains(box) for card in cards)]
+    assert desktop.run_screen.shop_review.depth_max_scroll == 0
+    assert len(cards) == len(portraits) == len(boxes) == 8
+    assert len({rect.size for rect in cards}) == 1
+    state = controller.state
+    for index, position in enumerate(PLAYER_DRAFT_ORDER):
+        card = cards[index]
+        art, appearance = portraits[index]
+        assert card.inflate(-10, -10).contains(art)
+        assert appearance == state.player_appearances[position]
+        player = state.shop.roster.players[position]
+        name_rect = next(rect for value, rect in wrapped if player.name in value)
+        partner, perk = football_depth_module._detail_sections(player)
+        detail_rect = next(rect for value, rect in wrapped
+                           if value == partner[0] and card.contains(rect))
+        box = boxes[index]
+        assert card.contains(name_rect) and card.contains(detail_rect)
+        assert card.inflate(-6, -6).contains(box)
+        assert detail_rect.left > art.right and box.left > art.right
+        assert detail_rect.top < art.bottom
+        for line in perk:
+            assert any(value == line and box.inflate(-12, -8).contains(rect)
+                       for value, rect in wrapped)
+    assert len([item for item in text if item[0].startswith(("POWER ", "VOLATILITY ", "STAMINA "))
+                and any(card.collidepoint(item[1]) for card in cards)]) == 24
+    cards.clear()
+    text.clear()
+    _activate(desktop, "STARTING STATS / SHOW MODIFIED STATS", keyboard=True)
+    cards.clear()
+    text.clear()
+    desktop.router.draw(_surface())
+    comparisons = [item for item in text if item[0].startswith("(")]
+    assert len(comparisons) == 24
+    assert all(font is football_depth_module._font(12, True) for _, _, font, _ in comparisons)
+    assert all(value.endswith(")") for value, _, _, _ in comparisons)
+    for value, position, font, _ in comparisons:
+        rect = pygame.Rect(position, font.size(value))
+        assert any(card.contains(rect) for card in cards)
+    for index, position in enumerate(PLAYER_DRAFT_ORDER):
+        starting = state.drafted_players[position]
+        current = football_depth_module.modified_player_stats(state, position)
+        expected = (
+            football_depth_module._comparison(current[0], starting.power, lower_is_better=False, percentage=False),
+            football_depth_module._comparison(current[1], starting.volatility, lower_is_better=True, percentage=True),
+            football_depth_module._comparison(current[2], starting.stamina, lower_is_better=False, percentage=True),
+        )
+        assert [(value, color) for value, _, _, color in comparisons[index * 3:index * 3 + 3]] == list(expected)
+    volatility_card = next(card for card in COACH_UPGRADE_CATALOG
+                           if card.coach_upgrade_effect is not None
+                           and card.coach_upgrade_effect.kind is FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION)
+    modified_state = replace(state, shop=replace(state.shop, owned_coach_upgrades=(volatility_card,)))
+    review = football_review_module.FootballReviewView(
+        desktop.theme, desktop.run_screen._small_font, desktop.run_screen._label_font,
+        desktop.run_screen.shop_review, lambda: None, lambda _copy_id: None,
+    )
+    text.clear()
+    review.draw_depth_chart(_surface(), pygame.Rect(20, 15, 1240, 690), modified_state)
+    assert any(value == "(-1.5 pp)" and color == football_depth_module._POSITIVE
+               for value, _, _, color in text)
+    assert controller.state == state
+    compare = football_depth_module._comparison
+    assert compare(0.08, 0.1, lower_is_better=True, percentage=True) == ("(-2 pp)", football_depth_module._POSITIVE)
+    assert compare(0.12, 0.1, lower_is_better=True, percentage=True) == ("(+2 pp)", football_depth_module._NEGATIVE)
+    assert compare(0.1, 0.1, lower_is_better=True, percentage=True) == ("(+0 pp)", football_depth_module._NEUTRAL)
+    assert compare(53, 50, lower_is_better=False, percentage=False) == ("(+3)", football_depth_module._POSITIVE)
+    assert compare(47, 50, lower_is_better=False, percentage=False) == ("(-3)", football_depth_module._NEGATIVE)
+
+
+def test_depth_chart_coach_modifier_colors_and_sections(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.selected_coach_pair is not None
+    pair = controller.state.selected_coach_pair
+    captured = []
+    boxes = []
+    original = football_depth_module.draw_complete_wrapped_text
+    original_box = football_depth_module._rounded_box
+
+    def capture(surface, text, rect, font, color, *, line_gap=2):
+        captured.append((text, rect.copy(), color))
+        return original(surface, text, rect, font, color, line_gap=line_gap)
+
+    def capture_box(surface, rect, fill, edge, radius=6):
+        if fill == football_depth_module._PERK_BOX:
+            boxes.append(rect.copy())
+            assert edge == football_depth_module._PERK_EDGE
+        return original_box(surface, rect, fill, edge, radius)
+
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture)
+    monkeypatch.setattr(football_depth_module, "_rounded_box", capture_box)
+    staff = pygame.Rect(20, 71, 300, 579)
+    football_depth_module._draw_staff(_surface(), staff, controller.state, desktop.theme)
+    assert len(boxes) == 2
+    for index, (side, coach) in enumerate((("OFFENSE", pair.offense), ("DEFENSE", pair.defense))):
+        assert any(value == f"{side} / {coach.name}" and staff.contains(rect)
+                   for value, rect, _ in captured)
+        assert any(value == f"PERK / {football_coach_module.coach_perk_text(coach)}"
+                   and boxes[index].inflate(-12, -8).contains(rect)
+                   and color == football_depth_module._PERK_TEXT for value, rect, color in captured)
+        assert staff.inflate(-20, -8).contains(boxes[index])
+        for position, modifier in coach.position_modifiers.items():
+            color = (football_depth_module._POSITIVE if modifier > 0 else
+                     football_depth_module._NEGATIVE if modifier < 0 else football_depth_module._NEUTRAL)
+            assert any(value == f"{_POSITION_LABELS[position]} {modifier:+.0%}"
+                       and actual == color and staff.contains(rect) for value, rect, actual in captured)
+    assert next(rect for value, rect, _ in captured if value == f"OFFENSE / {pair.offense.name}").left == next(
+        rect for value, rect, _ in captured if value == f"DEFENSE / {pair.defense.name}").left
+
+
+@pytest.mark.parametrize("width", (240, 300))
+def test_depth_chart_coach_perk_boxes_fit_every_staff(tmp_path: Path, monkeypatch, width: int) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    assert state.shop is not None
+    boxes = []
+    texts = []
+    original_box = football_depth_module._rounded_box
+    original_text = football_depth_module.draw_complete_wrapped_text
+
+    def capture_box(surface, rect, fill, edge, radius=6):
+        if fill == football_depth_module._PERK_BOX:
+            boxes.append(rect.copy())
+        return original_box(surface, rect, fill, edge, radius)
+
+    def capture_text(surface, text, rect, font, color, *, line_gap=2):
+        if text.startswith("PERK / "):
+            texts.append((text, rect.copy()))
+        return original_text(surface, text, rect, font, color, line_gap=line_gap)
+
+    monkeypatch.setattr(football_depth_module, "_rounded_box", capture_box)
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture_text)
+    for offense in OFFENSIVE_COACHES:
+        for defense in DEFENSIVE_COACHES:
+            assignment = FootballCoachAssignment(offense.coach_id, defense.coach_id)
+            roster = replace(state.shop.roster, coach_assignment=assignment)
+            candidate = replace(state, shop=replace(state.shop, roster=roster))
+            staff = pygame.Rect(20, 71, width, 579)
+            boxes.clear()
+            texts.clear()
+            height = football_depth_module._draw_staff(_surface(), staff, candidate, desktop.theme)
+            actual = staff.copy()
+            actual.height = height
+            assert len(boxes) == len(texts) == 2
+            assert not boxes[0].colliderect(boxes[1])
+            for box, (text, rect), coach in zip(boxes, texts, (offense, defense)):
+                assert text == f"PERK / {football_coach_module.coach_perk_text(coach)}"
+                assert actual.inflate(-20, -8).contains(box)
+                assert box.inflate(-12, -8).contains(rect)
+            if width == 300:
+                assert height == staff.height
+
+
+def test_all_catalog_players_fit_standard_depth_chart(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    state = controller.state
+    screen = desktop.run_screen
+    view = football_review_module.FootballReviewView(
+        screen.theme, screen._small_font, screen._label_font, screen.shop_review,
+        lambda: None, lambda _copy_id: None,
+    )
+    screen.shop_review.open_depth_chart()
+    area = pygame.Rect(20, 15, 1240, 690)
+    for position in PLAYER_DRAFT_ORDER:
+        for player_type in PLAYER_TYPES_BY_POSITION[position]:
+            player = player_from_type(player_type)
+            roster = replace(state.shop.roster, players={**state.shop.roster.players, position: player})
+            candidate = replace(state, shop=replace(state.shop, roster=roster),
+                                drafted_players={**state.drafted_players, position: player})
+            view.draw_depth_chart(_surface(), area, candidate)
+            assert screen.shop_review.depth_max_scroll == 0, player_type.name
+
+    long_names = {
+        "Silent-Count Caller", "Slot Outlet", "Release Specialist", "Screen Setter",
+        "Rush Contain", "Robber Backer", "Underneath Bracket", "Robber Safety",
+    }
+    longest = {
+        position: player_from_type(next(player_type for player_type in PLAYER_TYPES_BY_POSITION[position]
+                                        if player_type.name in long_names))
+        for position in PLAYER_DRAFT_ORDER
+    }
+    candidate = replace(state, shop=replace(state.shop, roster=replace(state.shop.roster, players=longest)),
+                        drafted_players=longest)
+    view.draw_depth_chart(_surface(), area, candidate)
+    assert screen.shop_review.depth_max_scroll == 0
+
+
+@pytest.mark.parametrize(("primary", "secondary"), [
+    ("navy", "blue"), ("silver", "gold"), ("green", "teal"),
+])
+def test_depth_chart_color_contrast_and_navigation(tmp_path: Path, primary: str, secondary: str) -> None:
+    desktop = _new_desktop(tmp_path, primary=primary, secondary=secondary)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    _activate(desktop, "DEPTH CHART", keyboard=True)
+    controller = desktop.football_controller
+    assert controller is not None
+    before = controller.state
+    screen = desktop.run_screen
+    desktop.router.draw(_surface())
+    assert screen.shop_review.depth_max_scroll == 0
+    assert screen.buttons[screen.focus_index].focused
+    assert all(isinstance(button, football_depth_module.DepthChartButton) for button in screen.buttons)
+
+    def contrast(first, second):
+        light, dark = sorted((relative_luminance(first), relative_luminance(second)), reverse=True)
+        return (light + 0.05) / (dark + 0.05)
+
+    assert contrast(football_depth_module._PERK_TEXT, football_depth_module._PERK_BOX) >= 4.5
+    assert contrast(football_depth_module._TEXT, football_depth_module._CARD) >= 4.5
+    assert contrast(football_depth_module._MUTED, football_depth_module._CARD) >= 4.5
+    assert contrast(football_depth_module._TEXT, pygame.Color("#173652")) >= 4.5
+    _activate(desktop, "UPGRADES / PERK DETAILS")
+    assert screen.shop_review.depth_details
+    _activate(desktop, "BACK TO DEPTH CHART", keyboard=True)
+    assert not screen.shop_review.depth_details
+    _activate(desktop, "END RUN", keyboard=True)
+    assert screen.confirm_exit
+    _activate(desktop, "KEEP PLAYING")
+    assert not screen.confirm_exit and controller.state == before
+    _activate(desktop, "BACK TO SHOP", keyboard=True)
+    assert screen.shop_review.mode is None and controller.state == before
+
+
+def test_depth_chart_scroll_exposes_complete_details_at_multiple_sizes(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    _activate(desktop, "BUY")
+    _activate(desktop, "DEPTH CHART")
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    original = football_depth_module.draw_complete_wrapped_text
+    visible = set()
+    expected = set()
+
+    def capture(surface, text, rect, font, color, *, line_gap=2):
+        for index, line in enumerate(wrap_text_lines(text, font, rect.width)):
+            key = (text, index)
+            expected.add(key)
+            line_rect = pygame.Rect(rect.left, rect.top + index * (font.get_height() + line_gap),
+                                    font.size(line)[0], font.get_height())
+            if surface.get_clip().contains(line_rect):
+                visible.add(key)
+        return original(surface, text, rect, font, color, line_gap=line_gap)
+
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture)
+    for size in (LOGICAL_SIZE, (960, 600), (700, 500)):
+        visible.clear()
+        expected.clear()
+        surface = pygame.Surface(size)
+        desktop.router.draw(surface)
+        interaction = desktop.run_screen.shop_review
+        interaction.depth_scroll = 0
+        while True:
+            desktop.router.draw(surface)
+            if interaction.depth_scroll == interaction.depth_max_scroll:
+                break
+            desktop.router.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1}))
+        assert expected <= visible
+        visible.clear()
+        expected.clear()
+        interaction.toggle_depth_details()
+        while True:
+            desktop.router.draw(surface)
+            if interaction.depth_scroll == interaction.depth_max_scroll:
+                break
+            desktop.router.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1}))
+        assert expected <= visible
+        assert any(controller.state.shop.purchased_upgrades[0].name in text for text, _ in visible)
+        interaction.toggle_depth_details()
+    interaction.depth_scroll = interaction.depth_max_scroll
+    desktop.router.draw(pygame.Surface(LOGICAL_SIZE))
+    assert interaction.depth_scroll == interaction.depth_max_scroll == 0
 
 
 def test_coach_upgrade_text_and_bye_week_marker_are_visible(
@@ -1065,7 +1532,6 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     wrapped: list[str] = []
     shop_labels: list[str] = []
     original_shop_wrapped = football_shop_module.draw_wrapped_text
-    original_review_wrapped = football_review_module.draw_wrapped_text
     original_shop_text = football_shop_module.draw_text
 
     def capture_shop_wrapped(surface, text, rect, font, color, *, line_gap=6):
@@ -1078,19 +1544,10 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
         shop_labels.append(text)
         original_shop_text(surface, text, position, font, color)
 
-    def capture_review_wrapped(surface, text, rect, font, color, *, line_gap=6):
-        wrapped.append(text)
-        original_review_wrapped(
-            surface, text, rect, font, color, line_gap=line_gap
-        )
-
     monkeypatch.setattr(
         football_shop_module, "draw_wrapped_text", capture_shop_wrapped
     )
     monkeypatch.setattr(football_shop_module, "draw_text", capture_shop_text)
-    monkeypatch.setattr(
-        football_review_module, "draw_wrapped_text", capture_review_wrapped
-    )
     view = screen._shop_view()
     buttons = view.draw(
         _surface(), area, shop.state, "Bye Week skipped scheduled game 3."
@@ -1131,6 +1588,7 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
         lambda: None,
         lambda _copy_id: None,
     )
+    review.interaction.toggle_depth_details()
     review.draw_depth_chart(_surface(), area, state)
     assert review.interaction.depth_max_scroll > 0
     for owned_card in COACH_UPGRADE_CATALOG:

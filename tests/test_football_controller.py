@@ -96,6 +96,43 @@ def test_invalid_appearance_and_choice_do_not_change_run() -> None:
     assert controller.state == before
 
 
+def test_draft_stats_and_appearance_survive_upgrades_and_later_shops(monkeypatch) -> None:
+    controller = _controller()
+    controller.choose_coach(0)
+    drafted = {}
+    appearances = {}
+    for index, position in enumerate(PLAYER_DRAFT_ORDER):
+        candidate = controller.state.team_builder.current_offer[0]
+        candidate = replace(candidate, player=replace(
+            candidate.player, power=40 + index, volatility=0.05 + index * 0.01,
+            stamina=0.3 + index * 0.02,
+        ))
+        controller._builder._current_offer = (
+            candidate, *controller.state.team_builder.current_offer[1:],
+        )
+        appearance = FootballPlayerAppearance(
+            POSITION_ART[position], (90 + index, 80, 60), (1, 2, 3), (4, 5, 6)
+        )
+        controller.choose_player(position, candidate, appearance=appearance)
+        drafted[position] = candidate.player
+        appearances[position] = appearance
+        assert controller.state.drafted_players == drafted
+    shop = controller.state.shop
+    assert shop is not None
+    upgrade = next(upgrade for upgrade in shop.offer if upgrade.stat.value == "power")
+    controller.buy_upgrade(upgrade)
+    assert controller.state.drafted_players == drafted
+    assert controller.state.shop.roster.players[upgrade.position].power > drafted[upgrade.position].power
+    controller.finish_shop()
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    _complete_forced_match(controller)
+    controller.enter_next_shop()
+    assert controller.state.drafted_players == drafted
+    assert controller.state.player_appearances == appearances
+    assert controller.state.team_builder.current_offer == ()
+    assert controller.state.shop.roster.players[upgrade.position].power > drafted[upgrade.position].power
+
+
 def _draft_to_shop(controller: FootballGameController) -> None:
     assert controller.state.human_decision is FootballHumanDecision.CHOOSE_COACH
     controller.choose_coach(0)

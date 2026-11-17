@@ -12,6 +12,7 @@ from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerCandidate
 from src.ui.coach_fonts import staff_font
 from src.ui.football_draft_interaction import PlayerInspection
+from src.ui.football_display import player_partnership_text, player_perk_text
 from src.ui.player_art import draw_draft_player
 from src.ui.text import draw_complete_wrapped_text, wrap_text_lines
 from src.ui.theme import Theme
@@ -137,23 +138,16 @@ class FootballPlayerDraftView:
             if candidate.player.player_type_id is None:
                 raise RuntimeError("Drafted players must have a catalog player type.")
             player_type = player_type_for_id(candidate.player.player_type_id)
-            partner = (_draft_position_label(player_type.partner_position)
-                       if player_type.partner_position is not None else "None")
-            draw_text(surface, f"Partner: {partner}", (rect.left + 12, rect.top + 314),
+            partner, explanation = player_partnership_text(player_type)
+            draw_text(surface, partner, (rect.left + 12, rect.top + 314),
                       self._draft_label_font, _TEXT)
-            if player_type.partner_position is not None:
-                draw_text(surface, "+10% when both contribute to a play",
+            if explanation is not None:
+                draw_text(surface, explanation,
                           (rect.left + 12, rect.top + 335), self._draft_small_font, _MUTED)
             box = pygame.Rect(rect.left + 10, rect.top + 356, rect.width - 20,
                               rect.height - 410)
             pygame.draw.rect(surface, _PERK_BOX, box, border_radius=5)
-            perk = player_type.perk
-            if perk is None:
-                text = "Perk: None"
-            else:
-                text = (f"PLANNED / INACTIVE\nPerk: {perk.name}\nTrigger: {perk.trigger}\n"
-                        f"Effect: {perk.effect}\nDuration: {perk.duration}\n"
-                        f"Reset: {perk.reset}\nDependency: {perk.dependency}")
+            text = player_perk_text(player_type)
             text_rect = box.inflate(-16, -14)
             font = self._draft_detail_font
             for size in (14, 13, 12, 11):

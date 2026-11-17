@@ -4,25 +4,18 @@ from collections.abc import Callable
 
 import pygame
 
-from src.engine.football import FootballPosition
-from src.engine.football_coaches import FootballCoachSide, coaches_for_assignment
 from src.engine.football_controller import FootballGameControllerState
 from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG, FootballPlayDefinition,
 )
-from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_shop import MIN_PLAYBOOK_DECK_SIZE, FootballShopState
 from src.engine.football_simulator import calculate_standardized_play_estimate
-from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
-from src.ui.football_display import _POSITION_LABELS, _coach_perk_summary
+from src.ui.football_depth_chart import draw_depth_chart
+from src.ui.football_display import _POSITION_LABELS
 from src.ui.football_shop_review import ShopReviewInteraction
-from src.ui.text import (
-    draw_complete_wrapped_text,
-    fit_text as _fit_text,
-    wrap_text_lines,
-)
+from src.ui.text import fit_text as _fit_text
 from src.ui.theme import Theme
-from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
+from src.ui.widgets import Button, draw_panel, draw_text
 
 
 class FootballReviewView:
@@ -39,274 +32,13 @@ class FootballReviewView:
         self.remove = remove
 
     def draw_depth_chart(
-        self,
-        surface: pygame.Surface,
-        content: pygame.Rect,
+        self, surface: pygame.Surface, content: pygame.Rect,
         state: FootballGameControllerState,
     ) -> list[Button]:
-        shop = state.shop
-        if shop is None:
-            raise RuntimeError("The controller did not provide the active shop state.")
-
-        draw_text(
-            surface,
-            "DEPTH CHART  /  CURRENT RUN SNAPSHOT  /  SCROLL FOR DETAILS",
-            (content.left + 2, content.top + 2),
-            self._label_font,
-            self.theme.text,
+        return draw_depth_chart(
+            surface, content, state, self.theme, self._small_font,
+            self._label_font, self.interaction, self.leave,
         )
-        offense_coach, defense_coach = coaches_for_assignment(
-            shop.roster.coach_assignment
-        )
-        gap = 12
-        body_rect = pygame.Rect(
-            content.left,
-            content.top + 28,
-            content.width,
-            content.height - 78,
-        )
-        coach_height = 142
-        coach_width = (body_rect.width - gap) // 2
-        player_row_height = 92
-        player_panel_height = 36 + 4 * player_row_height
-        upgrade_text_width = body_rect.width - 32
-        upgrade_rows: list[tuple[str, int]] = []
-        for upgrade in shop.purchased_upgrades:
-            text = (
-                f"{upgrade.name}  /  {_POSITION_LABELS[upgrade.position]} "
-                f"{upgrade.stat.value.upper()} +{upgrade.amount:g}: "
-                f"{upgrade.description}"
-            )
-            line_count = len(
-                wrap_text_lines(text, self._small_font, upgrade_text_width)
-            )
-            upgrade_rows.append(
-                (text, max(42, line_count * (self._small_font.get_height() + 2) + 8))
-            )
-        for card in shop.owned_coach_upgrades:
-            sections = coach_upgrade_detail_sections(card)
-            text = "\n".join((f"COACH  /  {sections[0]}", *sections[1:]))
-            line_count = len(
-                wrap_text_lines(text, self._small_font, upgrade_text_width)
-            )
-            upgrade_rows.append(
-                (text, max(42, line_count * (self._small_font.get_height() + 2) + 8))
-            )
-        upgrade_height = 52 + sum(height for _, height in upgrade_rows)
-        if upgrade_rows:
-            upgrade_height += 4 * (len(upgrade_rows) - 1)
-        coach_top = body_rect.top
-        player_top = coach_top + coach_height + 12
-        upgrade_top = player_top + player_panel_height + 12
-        total_content_height = upgrade_top - body_rect.top + upgrade_height
-        self.interaction.depth_max_scroll = max(
-            0, total_content_height - body_rect.height
-        )
-        self.interaction.depth_scroll = min(
-            self.interaction.depth_scroll, self.interaction.depth_max_scroll
-        )
-        offset = body_rect.top - self.interaction.depth_scroll
-        previous_clip = surface.get_clip()
-        surface.set_clip(body_rect)
-        for index, (profile, side) in enumerate(
-            (
-                (offense_coach, FootballCoachSide.OFFENSE),
-                (defense_coach, FootballCoachSide.DEFENSE),
-            )
-        ):
-            rect = pygame.Rect(
-                body_rect.left + index * (coach_width + gap),
-                offset,
-                coach_width,
-                coach_height,
-            )
-            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
-            name = profile.name if profile is not None else f"No {side.value} coach"
-            draw_text(
-                surface,
-                _fit_text(
-                    f"{side.value.upper()}  /  {name}",
-                    self._label_font,
-                    rect.width - 24,
-                ),
-                (rect.left + 12, rect.top + 9),
-                self._label_font,
-                self.theme.text,
-            )
-            modifiers = (
-                "   ".join(
-                    f"{_POSITION_LABELS[position]} {value:+.0%}"
-                    for position, value in profile.position_modifiers.items()
-                )
-                if profile is not None
-                else "No position modifiers."
-            )
-            draw_wrapped_text(
-                surface,
-                f"POSITION MODIFIERS  /  {modifiers}",
-                pygame.Rect(rect.left + 12, rect.top + 34, rect.width - 24, 42),
-                self._small_font,
-                self.theme.secondary_accent,
-                line_gap=2,
-            )
-            perk_text = (
-                f"COACH PERK  /  {_coach_perk_summary(profile)}"
-                if profile is not None
-                else "COACH PERK  /  None"
-            )
-            draw_wrapped_text(
-                surface,
-                perk_text,
-                pygame.Rect(rect.left + 12, rect.top + 78, rect.width - 24, 56),
-                self._small_font,
-                self.theme.muted,
-                line_gap=2,
-            )
-
-        player_width = (content.width - gap) // 2
-        groups = (
-            (
-                "OFFENSE",
-                (
-                    FootballPosition.QB,
-                    FootballPosition.RB,
-                    FootballPosition.WR,
-                    FootballPosition.O_LINE,
-                ),
-            ),
-            (
-                "DEFENSE",
-                (
-                    FootballPosition.D_LINE,
-                    FootballPosition.LINEBACKERS,
-                    FootballPosition.CORNERBACKS,
-                    FootballPosition.SAFETIES,
-                ),
-            ),
-        )
-        for column, (heading, positions) in enumerate(groups):
-            rect = pygame.Rect(
-                body_rect.left + column * (player_width + gap),
-                offset + player_top - coach_top,
-                player_width,
-                player_panel_height,
-            )
-            draw_panel(surface, rect, self.theme, fill=self.theme.panel)
-            draw_text(
-                surface,
-                heading,
-                (rect.left + 12, rect.top + 8),
-                self._label_font,
-                self.theme.text,
-            )
-            row_top = rect.top + 31
-            row_height = player_row_height
-            for row, position in enumerate(positions):
-                player = shop.roster.players[position]
-                player_type = (
-                    player_type_for_id(player.player_type_id)
-                    if player.player_type_id is not None
-                    else None
-                )
-                type_name = player_type.name if player_type is not None else "Basic"
-                partnership = (
-                    f"Conditional +10% with {_POSITION_LABELS[player_type.partner_position]}"
-                    if player_type is not None
-                    and player_type.partner_position is not None
-                    else "No partnership"
-                )
-                perk = (
-                    f"PLANNED / INACTIVE  /  {player_type.perk.name}: "
-                    f"{player_type.perk.effect}"
-                    if player_type is not None and player_type.perk is not None
-                    else "PLANNED / INACTIVE  /  No player perk."
-                )
-                row_rect = pygame.Rect(
-                    rect.left + 10,
-                    row_top + row * row_height,
-                    rect.width - 20,
-                    row_height - 2,
-                )
-                if row % 2:
-                    pygame.draw.rect(surface, self.theme.panel_alt, row_rect, border_radius=5)
-                draw_text(
-                    surface,
-                    _fit_text(
-                        f"{_POSITION_LABELS[position]}  /  {player.name}  /  {type_name}",
-                        self._small_font,
-                        row_rect.width - 12,
-                    ),
-                    (row_rect.left + 6, row_rect.top + 3),
-                    self._small_font,
-                    self.theme.text,
-                )
-                stats = (
-                    f"POWER {player.power:.1f}  VOL {player.volatility:.2f}  "
-                    f"STA {player.stamina:.2f}  /  {partnership}"
-                )
-                draw_text(
-                    surface,
-                    _fit_text(stats, self._small_font, row_rect.width - 12),
-                    (row_rect.left + 6, row_rect.top + 19),
-                    self._small_font,
-                    self.theme.secondary_accent,
-                )
-                draw_wrapped_text(
-                    surface,
-                    perk,
-                    pygame.Rect(
-                        row_rect.left + 6,
-                        row_rect.top + 35,
-                        row_rect.width - 12,
-                        row_rect.height - 38,
-                    ),
-                    self._small_font,
-                    self.theme.muted,
-                    line_gap=1,
-                )
-
-        upgrade_rect = pygame.Rect(
-            body_rect.left,
-            offset + upgrade_top - coach_top,
-            body_rect.width,
-            upgrade_height,
-        )
-        draw_panel(surface, upgrade_rect, self.theme, fill=self.theme.panel)
-        draw_text(
-            surface,
-            "PURCHASED RUN UPGRADES  /  EFFECTS AND PLAYER TRAINING",
-            (upgrade_rect.left + 12, upgrade_rect.top + 8),
-            self._small_font,
-            self.theme.text,
-        )
-        if upgrade_rows:
-            row_top = upgrade_rect.top + 30
-            for text, row_height in upgrade_rows:
-                row_rect = pygame.Rect(
-                    upgrade_rect.left + 10,
-                    row_top,
-                    upgrade_rect.width - 20,
-                    row_height,
-                )
-                draw_complete_wrapped_text(
-                    surface,
-                    text,
-                    row_rect,
-                    self._small_font,
-                    self.theme.secondary_accent,
-                    line_gap=2,
-                )
-                row_top += row_height + 4
-        else:
-            draw_text(
-                surface,
-                "No run upgrades purchased.",
-                (upgrade_rect.left + 12, upgrade_rect.top + 30),
-                self._small_font,
-                self.theme.muted,
-            )
-        surface.set_clip(previous_clip)
-        return [Button("BACK TO SHOP", self.leave, pygame.Rect(content.right - 210, content.bottom - 40, 210, 34), variant="primary")]
 
     def draw_playbook(
         self,

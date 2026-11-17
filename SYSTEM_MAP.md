@@ -66,14 +66,20 @@ covers extracted interaction state.
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
   renders offers; [football_review_view.py](src/ui/football_review_view.py)
-  renders the depth chart and playbook, with review/scroll state in
+  renders the playbook and delegates the Depth Chart to
+  [football_depth_chart.py](src/ui/football_depth_chart.py), with review/scroll
+  and stat-toggle state in
   [football_shop_review.py](src/ui/football_shop_review.py). A removal purchase
   opens the playbook for explicit copy selection or cancellation; the
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
   and removal validation. Coach-upgrade purchase history and descriptions are
-  shown in the Depth Chart. [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py)
+  shown in the Depth Chart's scrollable upgrades/perk-details view. The
+  controller retains draft-time players and appearances in run-local state;
+  the compact chart compares them with persistent coach-adjusted contributions
+  and effective stats without play-specific effects.
+  [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py)
   supplies complete duration, uniqueness, rarity, and cost details to shop
   inspection and owned-upgrade rows; [text.py](src/ui/text.py) wraps complete
   descriptions and fails if they cannot fit their assigned region. See
