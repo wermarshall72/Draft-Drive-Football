@@ -19,6 +19,7 @@ include = ["src*"]
     "assets/*.png",
     "assets/draft_players/*.png",
     "assets/draft_coaches/*.png",
+    "assets/stat_icons/*.png",
     "assets/fonts/*.ttf",
     "assets/fonts/*-OFL.txt",
 ]

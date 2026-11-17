@@ -127,13 +127,14 @@ class FootballPlayerDraftView:
             self.player_inspection.portraits.append((portrait, appearance, active == index))
             strip = pygame.Rect(rect.left + 10, rect.top + 252, rect.width - 20, 52)
             pygame.draw.rect(surface, "#0b1c2b", strip, border_radius=4)
+            stat_label_font = staff_font(12, semibold=True)
             for column, (label, value) in enumerate((
                 ("POWER", str(candidate.player.power)),
                 ("VOLATILITY", _draft_percentage(candidate.player.volatility)),
                 ("STAMINA", _draft_percentage(candidate.player.stamina)),
             )):
                 x = strip.left + 7 + column * (strip.width // 3)
-                draw_text(surface, label, (x, strip.top + 5), self._draft_small_font, _MUTED)
+                draw_text(surface, label, (x, strip.top + 5), stat_label_font, _MUTED)
                 draw_text(surface, value, (x, strip.top + 22), self._draft_label_font, _TEXT)
             if candidate.player.player_type_id is None:
                 raise RuntimeError("Drafted players must have a catalog player type.")

@@ -99,6 +99,12 @@ covers extracted interaction state.
   [test_football_shop.py](tests/test_football_shop.py),
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
   the shop/review cases in [test_football_desktop.py](tests/test_football_desktop.py).
+- **Stat icons:** [stat_icons.py](src/ui/stat_icons.py) wraps every UI font (built only in
+  [screens.py](src/ui/screens.py) and [coach_fonts.py](src/ui/coach_fonts.py)) so any rendered or
+  measured text places the Power, Stamina, or Volatility icon from `assets/stat_icons/` inline
+  before its word; text without those words renders unchanged. Assets come from
+  [process_stat_icons.py](scripts/process_stat_icons.py); see
+  [test_stat_icons.py](tests/test_stat_icons.py).
 - **Match and results:** [football_match_field.py](src/ui/football_match_field.py),
   [football_match_status.py](src/ui/football_match_status.py), and
   [football_match_decision_view.py](src/ui/football_match_decision_view.py)

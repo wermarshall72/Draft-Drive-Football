@@ -3,6 +3,7 @@ from typing import Callable
 import pygame
 
 from src.ui.layout import Layout
+from src.ui.stat_icons import StatIconFont
 from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_text
 
@@ -10,16 +11,16 @@ Navigate = Callable[[str], None]
 Quit = Callable[[], None]
 
 
-def _ui_font(size: int, *, bold: bool = False) -> pygame.font.Font:
+def _ui_font(size: int, *, bold: bool = False) -> StatIconFont:
     for family in ("Avenir Next", "Arial", "Liberation Sans"):
         path = pygame.font.match_font(family)
         if path is not None:
             font = pygame.font.Font(path, size)
             font.set_bold(bold)
-            return font
+            return StatIconFont(font)
     font = pygame.font.Font(None, size)
     font.set_bold(bold)
-    return font
+    return StatIconFont(font)
 
 
 class Screen:

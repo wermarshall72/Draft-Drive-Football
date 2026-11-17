@@ -349,14 +349,16 @@ def test_draft_card_stats_and_partners_are_visible_without_interaction(
     original = football_player_draft_module.draw_text
 
     def capture(surface, text, position, font, color):
-        shown.append((text, position))
+        shown.append((text, position, font))
         original(surface, text, position, font, color)
 
     monkeypatch.setattr(football_player_draft_module, "draw_text", capture)
     desktop.router.draw(_surface())
     for index, candidate in enumerate(changed):
         rect = screen.player_inspection.card_rects[index]
-        texts = [text for text, point in shown if rect.collidepoint(point)]
+        card_text = [(text, point, font) for text, point, font in shown
+                     if rect.collidepoint(point)]
+        texts = [text for text, _, _ in card_text]
         player_type = player_type_for_id(candidate.player.player_type_id)
         partner = ("None" if player_type.partner_position is None else
                    football_player_draft_module._draft_position_label(player_type.partner_position))
@@ -364,6 +366,14 @@ def test_draft_card_stats_and_partners_are_visible_without_interaction(
         assert str(candidate.player.power) in texts
         assert football_player_draft_module._draft_percentage(candidate.player.volatility) in texts
         assert football_player_draft_module._draft_percentage(candidate.player.stamina) in texts
+        strip_left = rect.left + 10
+        strip_width = rect.width - 20
+        column_width = strip_width // 3
+        for column, label in enumerate(("POWER", "VOLATILITY", "STAMINA")):
+            _, point, font = next(item for item in card_text if item[0] == label)
+            label_rect = pygame.Rect(point, font.size(label))
+            next_column = strip_left + 7 + (column + 1) * column_width
+            assert label_rect.right <= min(strip_left + strip_width, next_column)
 
 
 def test_each_card_uses_its_actual_candidate_position(tmp_path: Path, monkeypatch) -> None:

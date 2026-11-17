@@ -323,6 +323,11 @@ class FootballShopView:
             info = pygame.Rect(rect.left + 7, rect.top + 87, rect.width - 14, 38)
             self._inset(surface, info)
             detail_font = staff_font(14, semibold=True)
+            # Icons add width; step the font down rather than clip the effect.
+            for detail_size in (13, 12):
+                if detail_font.size(effect)[0] <= info.width - 8:
+                    break
+                detail_font = staff_font(detail_size, semibold=True)
             self._wrapped(surface, effect, pygame.Rect(info.left + 4,
                           info.centery - detail_font.get_height() // 2,
                           info.width - 8, detail_font.get_height()), detail_font, text)
