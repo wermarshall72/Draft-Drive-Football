@@ -56,11 +56,15 @@ from src.engine.football_player_catalog import (
 from src.ui.theme import readable_ink, relative_luminance
 from src.engine.football_shop import (
     COACH_UPGRADE_CATALOG,
+    PLAYER_UPGRADE_CATALOG,
     FootballShop,
     FootballShopCard,
     FootballShopRarity,
     FootballShopSection,
     FootballShopSlotState,
+    FootballUpgradeDuration,
+    FootballUpgradeStat,
+    _player_upgrade_catalog,
 )
 from src.profile import COLOR_CHOICES
 from src.ui.application import DesktopApplication
@@ -992,10 +996,15 @@ def test_shop_landing_slots_show_saved_art_and_all_complete_coach_summaries(
         assert portraits[index][1] == state.player_appearances[upgrade.position]
         rendered = " ".join(line for line, _ in text)
         assert _POSITION_LABELS[upgrade.position] in rendered
-        assert f"+{upgrade.amount:g} {upgrade.stat.value.upper()}" in rendered
+        assert upgrade.duration.value.upper() in rendered
+        assert upgrade.stat.value.upper() in rendered
+        sign = "-" if upgrade.stat is FootballUpgradeStat.VOLATILITY else "+"
+        amount = upgrade.amount if upgrade.stat is FootballUpgradeStat.POWER else upgrade.amount * 100
+        assert f"{sign}{amount:g}" in rendered
+        assert slot.card.rarity.value.replace("_", " ").upper() in rendered
         assert f"{upgrade.cost} AP" in rendered
         assert len(boxes) == 1
-        effect_rect = next(bounds for line, bounds in text if f"+{upgrade.amount:g}" in line)
+        effect_rect = next(bounds for line, bounds in text if f"{sign}{amount:g}" in line)
         assert boxes[0].contains(effect_rect)
 
     for card in COACH_UPGRADE_CATALOG:
@@ -1575,7 +1584,11 @@ def test_depth_chart_modified_stats_use_only_persistent_effects(tmp_path: Path) 
     controller = desktop.football_controller
     assert controller is not None and controller.state.shop is not None
     initial = controller.state
-    offered = next(upgrade for upgrade in initial.shop.offer if upgrade.stat.value == "power")
+    card = next(card for card in _player_upgrade_catalog()
+                if card.upgrade.stat is FootballUpgradeStat.POWER
+                and card.upgrade.duration is FootballUpgradeDuration.PERMANENT)
+    controller._shop._offers[FootballShopSection.PLAYER_UPGRADES][0] = card
+    offered = card.upgrade
     controller.buy_upgrade(offered)
     after = controller.state
     assert after.shop is not None
@@ -1613,6 +1626,443 @@ def test_depth_chart_modified_stats_use_only_persistent_effects(tmp_path: Path) 
     assert volatility == pytest.approx(qb.volatility * 0.7)
     assert stamina == pytest.approx(min(1, qb.stamina + 0.3))
     assert controller.state == after
+
+
+def test_temporary_upgrade_pending_display_and_pause_resume(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.VOLATILITY
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    controller._shop._offers[FootballShopSection.PLAYER_UPGRADES][0] = card
+    before = controller.state
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+    after = controller.state
+    assert after.shop.roster == before.shop.roster
+    assert football_depth_module.modified_player_stats(after, FootballPosition.QB) == (
+        football_depth_module.modified_player_stats(before, FootballPosition.QB)
+    )
+    labels = []
+    original = football_depth_module.draw_complete_wrapped_text
+
+    def capture(surface, text, *args, **kwargs):
+        labels.append(text)
+        return original(surface, text, *args, **kwargs)
+
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture)
+    desktop.run_screen.state = after
+    _activate(desktop, "DEPTH CHART")
+    desktop.router.draw(_surface())
+    _activate(desktop, "UPGRADES / PERK DETAILS")
+    desktop.router.draw(_surface())
+    assert any("PENDING NEXT MATCH" in text and "Volatility" in text for text in labels)
+    _activate(desktop, "BACK TO DEPTH CHART")
+    _activate(desktop, "BACK TO SHOP")
+    _activate(desktop, "FINISH SHOP / START MATCH")
+    started = controller.state
+    assert started.shop.pending_player_upgrades == (card.upgrade,)
+    assert started.match.team_a.players[FootballPosition.QB].volatility == pytest.approx(
+        max(0, before.shop.roster.players[FootballPosition.QB].volatility - card.upgrade.amount)
+    )
+    _activate(desktop, "PAUSE")
+    assert desktop.run_screen.confirm_exit
+    desktop.run_screen._keep_playing()
+    assert controller.state == started
+
+
+def test_pending_upgrades_do_not_force_standard_depth_chart_scrolling(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    controller = desktop.football_controller
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    controller._shop._offers[FootballShopSection.PLAYER_UPGRADES][0] = card
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+    desktop.run_screen.state = controller.state
+    cards = []
+    original = football_depth_module._rounded_box
+
+    def capture(surface, rect, fill, edge, radius=6):
+        if fill == football_depth_module._CARD:
+            cards.append(rect.copy())
+        return original(surface, rect, fill, edge, radius)
+
+    monkeypatch.setattr(football_depth_module, "_rounded_box", capture)
+    _activate(desktop, "DEPTH CHART")
+    cards.clear()
+    desktop.router.draw(_surface())
+    viewport = pygame.Rect(20, 71, 1240, 579)
+    assert desktop.run_screen.shop_review.depth_max_scroll == 0
+    assert len(cards) == 8 and all(viewport.contains(card) for card in cards)
+
+
+@pytest.mark.parametrize(
+    ("stat", "initial", "nominal"),
+    [
+        (FootballUpgradeStat.STAMINA, 0.97, "STAMINA +10%"),
+        (FootballUpgradeStat.VOLATILITY, 0.015, "VOLATILITY -2%"),
+    ],
+)
+def test_shop_renders_nominal_effects_even_at_stat_caps(
+    tmp_path: Path, monkeypatch, stat, initial, nominal
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    position = FootballPosition.QB
+    player = replace(state.shop.roster.players[position], **{stat.value: initial})
+    roster = replace(state.shop.roster, players={**state.shop.roster.players, position: player})
+    temp = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is position and card.upgrade.stat is stat
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                and card.rarity is FootballShopRarity.COMMON)
+    perm = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is position and card.upgrade.stat is stat
+                and card.upgrade.duration is FootballUpgradeDuration.PERMANENT
+                and card.rarity is FootballShopRarity.COMMON)
+    shop = FootballShop(roster, 1, catalogs={FootballShopSection.PLAYER_UPGRADES: (temp, perm)})
+    labels = []
+    original = football_shop_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        return original(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    rect = pygame.Rect(28, 107, 141, 183)
+    view = desktop.run_screen._shop_view()
+
+    def render(card):
+        labels.clear()
+        slot = FootballShopSlotState(FootballShopSection.PLAYER_UPGRADES, 1, True,
+                                     card, False, None, False, None)
+        buttons = []
+        view._landing_slot(_surface(), rect, slot, buttons, shop.state, state, "Team")
+        for index, (_, bounds) in enumerate(labels):
+            assert rect.contains(bounds)
+            assert not any(bounds.colliderect(other) for _, other in labels[index + 1:])
+            assert not any(bounds.colliderect(button.rect) for button in buttons)
+        assert buttons[-1].enabled
+        return " ".join(text for text, _ in labels)
+
+    rendered = render(temp)
+    assert nominal in rendered and "2 AP" in rendered
+    shop.buy_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    shop.move_to_next_day()
+    rendered = render(temp)
+    assert nominal in rendered
+    permanent_display = render(perm)
+    assert "3 AP" in permanent_display
+    assert all(scope not in rendered and scope not in permanent_display
+               for scope in ("RUN ", "NEXT ", "MATCH "))
+    shop.buy_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    assert len(shop.state.pending_player_upgrades) == 2
+
+
+@pytest.mark.parametrize("duration", list(FootballUpgradeDuration))
+def test_shop_shows_nominal_stamina_with_coach_cap(tmp_path: Path, monkeypatch, duration) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    qb = replace(state.shop.roster.players[FootballPosition.QB], stamina=0.90)
+    roster = replace(state.shop.roster, players={**state.shop.roster.players, FootballPosition.QB: qb})
+    coach = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "fourth_quarter_conditioning")
+    shop = replace(state.shop, roster=roster, owned_coach_upgrades=(coach,))
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.STAMINA
+                and card.upgrade.duration is duration
+                and card.rarity is FootballShopRarity.COMMON)
+    captured = []
+    original = football_shop_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        captured.append(text)
+        original(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    slot = FootballShopSlotState(FootballShopSection.PLAYER_UPGRADES, 1, True, card, False, None, False, None)
+    desktop.run_screen._shop_view()._landing_slot(
+        _surface(), pygame.Rect(28, 107, 141, 183), slot, [], shop, state, "Team"
+    )
+    if duration is FootballUpgradeDuration.PERMANENT:
+        assert "STAMINA +5%" in captured
+    else:
+        assert "STAMINA +10%" in captured
+    assert not any(text.startswith(("RUN ", "NEXT ", "MATCH ")) for text in captured)
+
+
+def test_pending_details_distinguish_raw_and_coached_stacked_effects(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    qb = replace(state.shop.roster.players[FootballPosition.QB], stamina=0.85)
+    roster = replace(state.shop.roster, players={**state.shop.roster.players, FootballPosition.QB: qb})
+    coach = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "fourth_quarter_conditioning")
+    temp = next(card.upgrade for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.STAMINA
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                and card.rarity is FootballShopRarity.COMMON)
+    shop = replace(state.shop, roster=roster, owned_coach_upgrades=(coach,),
+                   pending_player_upgrades=(temp, temp))
+    candidate = replace(state, shop=shop)
+    interaction = desktop.run_screen.shop_review
+    interaction.open_depth_chart()
+    interaction.toggle_depth_details()
+    review = football_review_module.FootballReviewView(
+        desktop.theme, desktop.run_screen._small_font, desktop.run_screen._label_font,
+        interaction, lambda: None, lambda _: None,
+    )
+    labels = []
+    original = football_depth_module.draw_complete_wrapped_text
+
+    def capture(surface, text, *args, **kwargs):
+        labels.append(text)
+        return original(surface, text, *args, **kwargs)
+
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture)
+    review.draw_depth_chart(_surface(), pygame.Rect(20, 15, 1240, 690), candidate)
+    joined = "\n".join(labels)
+    assert "Nominal total: +20 percentage points Stamina" in joined
+    assert "Raw run roster 85% -> raw next match 100%; change +15%" in joined
+    assert "Coached next match 95% -> 100%; change +5%" in joined
+    assert "Changes in % are percentage points." in joined
+    assert "Not permanent." in joined
+    assert interaction.depth_max_scroll > 0
+
+
+def test_pending_combined_details_and_small_viewport_scrolling(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    position = FootballPosition.QB
+    player = replace(state.shop.roster.players[position], stamina=0.94, volatility=0.03)
+    roster = replace(state.shop.roster, players={**state.shop.roster.players, position: player})
+    cards = tuple(card for card in PLAYER_UPGRADE_CATALOG
+                  if card.upgrade.position is position
+                  and card.upgrade.stat in (FootballUpgradeStat.STAMINA, FootballUpgradeStat.VOLATILITY)
+                  and card.upgrade.rarity is FootballShopRarity.COMMON
+                  and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    shop = FootballShop(roster, 2, catalogs={FootballShopSection.PLAYER_UPGRADES: cards})
+    for card in cards:
+        shop.buy_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+    shop.move_to_next_day()
+    for card in cards:
+        shop.buy_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+    candidate = replace(state, shop=shop.state)
+    interaction = desktop.run_screen.shop_review
+    interaction.open_depth_chart()
+    review = football_review_module.FootballReviewView(
+        desktop.theme, desktop.run_screen._small_font, desktop.run_screen._label_font,
+        interaction, lambda: None, lambda _: None,
+    )
+    labels = []
+    original = football_depth_module.draw_complete_wrapped_text
+
+    def capture(surface, text, *args, **kwargs):
+        labels.append(text)
+        return original(surface, text, *args, **kwargs)
+
+    monkeypatch.setattr(football_depth_module, "draw_complete_wrapped_text", capture)
+    review.draw_depth_chart(_surface(), pygame.Rect(20, 15, 1240, 690), candidate)
+    assert interaction.depth_max_scroll == 0
+    interaction.toggle_depth_details()
+    review.draw_depth_chart(_surface(), pygame.Rect(20, 15, 1240, 690), candidate)
+    joined = "\n".join(labels)
+    assert "Nominal total: +20 percentage points Stamina" in joined
+    assert "Raw run roster 94% -> raw next match 100%; change +6%" in joined
+    assert "Coached next match 94% -> 100%; change +6%" in joined
+    assert "Nominal total: -4 percentage points Volatility" in joined
+    assert "Raw run roster 3% -> raw next match 0%; change -3%" in joined
+    assert "Coached next match 3% -> 0%; change -3%" in joined
+    assert "Changes in % are percentage points." in joined
+    assert ("Play yardage spread depends on contributors on both teams and the 1-yard minimum; "
+            "some plays may not become less variable.") in joined
+    assert "Not permanent." in joined and interaction.depth_max_scroll > 0
+    interaction.handle_scroll(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_END}))
+    assert interaction.depth_scroll == interaction.depth_max_scroll
+    interaction.toggle_depth_details()
+    review.draw_depth_chart(_surface(), pygame.Rect(20, 15, 600, 500), candidate)
+    assert interaction.depth_max_scroll > 0
+    interaction.handle_scroll(pygame.event.Event(pygame.MOUSEWHEEL, {"y": -1, "x": 0}))
+    assert interaction.depth_scroll > 0
+
+
+@pytest.mark.parametrize("message", [None, "CHECK: " + "A long transition message " * 4])
+def test_shop_landing_excludes_projections_and_explanations(tmp_path: Path, monkeypatch, message) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.VOLATILITY
+                and card.upgrade.rarity is FootballShopRarity.COMMON
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    qb = replace(state.shop.roster.players[FootballPosition.QB], volatility=0.02)
+    roster = replace(state.shop.roster, players={**state.shop.roster.players, FootballPosition.QB: qb})
+    shop = FootballShop(roster, 1, catalogs={FootballShopSection.PLAYER_UPGRADES: (card,)}).state
+    labels = []
+    original = football_shop_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        return original(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    content = pygame.Rect(20, 15, 1240, 690)
+    buttons = desktop.run_screen._shop_view().draw(
+        _surface(), content, shop, transition_message=message, run_state=state
+    )
+    joined = " ".join(text for text, _ in labels)
+    assert "VOLATILITY -2%" in joined and "2 AP" in joined
+    assert "Volatility is a coached player stat" not in joined
+    assert "RUN / NEXT: RAW" not in joined and "STA MAX 100%" not in joined
+    assert not any(text.startswith(("RUN ", "NEXT ", "MATCH ")) for text, _ in labels)
+    assert all(content.contains(bounds) and not any(bounds.colliderect(button.rect) for button in buttons)
+               for _, bounds in labels)
+
+
+def test_all_player_upgrade_cards_render_details_without_clipping(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    view = desktop.run_screen._shop_view()
+    surface = _surface()
+    labels = []
+    icons = []
+    art = []
+    original = football_shop_module.draw_text
+    original_icon = football_shop_module._duration_icon
+    original_art = football_shop_module.draw_draft_player
+
+    def capture(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        return original(surface, text, position, font, color)
+
+    def capture_icon(duration):
+        image = original_icon(duration)
+        icons.append((duration, image))
+        return image
+
+    def capture_art(surface, rect, appearance, *args, **kwargs):
+        art.append(rect.copy())
+        return original_art(surface, rect, appearance, *args, **kwargs)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    monkeypatch.setattr(football_shop_module, "_duration_icon", capture_icon)
+    monkeypatch.setattr(football_shop_module, "draw_draft_player", capture_art)
+    slot_rect = pygame.Rect(28, 107, 141, 183)
+    for card in PLAYER_UPGRADE_CATALOG:
+        labels.clear()
+        icons.clear()
+        art.clear()
+        slot = FootballShopSlotState(FootballShopSection.PLAYER_UPGRADES, 1, True,
+                                     card, False, None, False, None)
+        buttons = []
+        view._landing_slot(surface, slot_rect, slot, buttons, state.shop, state, "Team")
+        rendered = [text for text, _ in labels]
+        upgrade = card.upgrade
+        assert _POSITION_LABELS[upgrade.position] in rendered
+        assert upgrade.duration.value.upper() in rendered
+        assert f"{card.rarity.value.replace('_', ' ').upper()} / {card.cost} AP" in rendered
+        sign = "-" if upgrade.stat is FootballUpgradeStat.VOLATILITY else "+"
+        amount = upgrade.amount if upgrade.stat is FootballUpgradeStat.POWER else upgrade.amount * 100
+        suffix = "" if upgrade.stat is FootballUpgradeStat.POWER else "%"
+        assert f"{upgrade.stat.value.upper()} {sign}{amount:g}{suffix}" in rendered
+        assert len(icons) == 1 and icons[0][0] is upgrade.duration
+        assert len(art) == 1 and slot_rect.contains(art[0])
+        duration_rect = next(bounds for text, bounds in labels if text == upgrade.duration.value.upper())
+        icon = icons[0][1]
+        icon_rect = icon.get_rect(topright=(duration_rect.left - 4, duration_rect.top))
+        assert icon.get_height() == duration_rect.height
+        assert slot_rect.contains(icon_rect) and not icon_rect.colliderect(buttons[-1].rect)
+        assert not any(icon_rect.colliderect(bounds) for _, bounds in labels)
+        assert not icon_rect.colliderect(art[0])
+        opaque = [(x, y) for y in range(icon.get_height()) for x in range(icon.get_width())
+                  if icon.get_at((x, y)).a == 255]
+        assert opaque
+        assert all(surface.get_at((icon_rect.left + x, icon_rect.top + y)) == icon.get_at((x, y))
+                   for x, y in opaque)
+        assert not any(text.startswith(("RUN ", "NEXT ", "MATCH ")) for text in rendered)
+        assert all(slot_rect.contains(rect) for _, rect in labels)
+        assert all(not rect.colliderect(button.rect) for _, rect in labels for button in buttons)
+        assert all(not first.colliderect(second)
+                   for index, (_, first) in enumerate(labels)
+                   for _, second in labels[index + 1:])
+
+
+def test_duration_assets_are_transparent_trimmed_and_distinct() -> None:
+    from importlib.resources import files
+
+    assets = files("src.ui").joinpath("assets")
+    images = []
+    for duration, filename in (
+        (FootballUpgradeDuration.TEMPORARY, "upgrade_temporary.png"),
+        (FootballUpgradeDuration.PERMANENT, "upgrade_permanent.png"),
+    ):
+        asset = assets.joinpath(filename)
+        assert asset.is_file()
+        image = pygame.image.load(str(asset))
+        assert image.get_bounding_rect() == image.get_rect()
+        assert image.get_at((0, 0)).a == 0
+        for y in range(image.get_height()):
+            for x in range(image.get_width()):
+                color = image.get_at((x, y))
+                assert not (color.a and color.g > 155
+                            and color.g > color.r * 1.65 and color.g > color.b * 1.65)
+        rendered = football_shop_module._duration_icon(duration)
+        assert rendered.get_height() == football_shop_module.staff_font(14).get_height()
+        expected = pygame.transform.scale(image, rendered.get_size())
+        assert pygame.image.tobytes(rendered, "RGBA") == pygame.image.tobytes(expected, "RGBA")
+        images.append(pygame.image.tobytes(image, "RGBA"))
+    assert images[0] != images[1]
+
+
+def test_coached_shop_cards_remain_nominal_without_overlaps(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.football_controller.state
+    coach_ids = {"two_minute_drill", "front_seven_film", "fourth_quarter_conditioning",
+                 "iron_lungs", "rhythm_install", "disguise_package"}
+    coaches = tuple(card for card in COACH_UPGRADE_CATALOG if card.card_id in coach_ids)
+    pending = tuple(card.upgrade for card in PLAYER_UPGRADE_CATALOG
+                    if card.rarity is FootballShopRarity.COMMON
+                    and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    shop = replace(state.shop, owned_coach_upgrades=coaches, pending_player_upgrades=pending)
+    view = desktop.run_screen._shop_view()
+    labels = []
+    original = football_shop_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        return original(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    rect = pygame.Rect(28, 107, 141, 183)
+    for card in PLAYER_UPGRADE_CATALOG:
+        labels.clear()
+        slot = FootballShopSlotState(FootballShopSection.PLAYER_UPGRADES, 1, True,
+                                     card, False, None, False, None)
+        buttons = []
+        view._landing_slot(_surface(), rect, slot, buttons, shop, state, "Team")
+        assert not any(text.startswith(("RUN ", "NEXT ", "MATCH ")) for text, _ in labels)
+        assert all(rect.contains(bounds) and not bounds.colliderect(buttons[-1].rect)
+                   for _, bounds in labels)
+        assert all(not first.colliderect(second)
+                   for index, (_, first) in enumerate(labels)
+                   for _, second in labels[index + 1:])
 
 
 def test_depth_chart_card_geometry_and_stat_comparisons(tmp_path: Path, monkeypatch) -> None:
@@ -1713,15 +2163,15 @@ def test_depth_chart_card_geometry_and_stat_comparisons(tmp_path: Path, monkeypa
     )
     text.clear()
     review.draw_depth_chart(_surface(), pygame.Rect(20, 15, 1240, 690), modified_state)
-    assert any(value == "(-1.5 pp)" and color == football_depth_module._POSITIVE
+    assert any(value == "(8.5%)" and color == football_depth_module._POSITIVE
                for value, _, _, color in text)
     assert controller.state == state
     compare = football_depth_module._comparison
-    assert compare(0.08, 0.1, lower_is_better=True, percentage=True) == ("(-2 pp)", football_depth_module._POSITIVE)
-    assert compare(0.12, 0.1, lower_is_better=True, percentage=True) == ("(+2 pp)", football_depth_module._NEGATIVE)
-    assert compare(0.1, 0.1, lower_is_better=True, percentage=True) == ("(+0 pp)", football_depth_module._NEUTRAL)
-    assert compare(53, 50, lower_is_better=False, percentage=False) == ("(+3)", football_depth_module._POSITIVE)
-    assert compare(47, 50, lower_is_better=False, percentage=False) == ("(-3)", football_depth_module._NEGATIVE)
+    assert compare(0.08, 0.1, lower_is_better=True, percentage=True) == ("(8%)", football_depth_module._POSITIVE)
+    assert compare(0.12, 0.1, lower_is_better=True, percentage=True) == ("(12%)", football_depth_module._NEGATIVE)
+    assert compare(0.1, 0.1, lower_is_better=True, percentage=True) == ("(10%)", football_depth_module._NEUTRAL)
+    assert compare(53, 50, lower_is_better=False, percentage=False) == ("(53)", football_depth_module._POSITIVE)
+    assert compare(47, 50, lower_is_better=False, percentage=False) == ("(47)", football_depth_module._NEGATIVE)
 
 
 def test_depth_chart_coach_modifier_colors_and_sections(tmp_path: Path, monkeypatch) -> None:
@@ -1819,6 +2269,10 @@ def test_all_catalog_players_fit_standard_depth_chart(tmp_path: Path) -> None:
     controller = desktop.football_controller
     assert controller is not None and controller.state.shop is not None
     state = controller.state
+    pending = tuple(card.upgrade for card in PLAYER_UPGRADE_CATALOG
+                    if card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                    and card.upgrade.rarity is FootballShopRarity.COMMON)
+    state = replace(state, shop=replace(state.shop, pending_player_upgrades=pending))
     screen = desktop.run_screen
     view = football_review_module.FootballReviewView(
         screen.theme, screen._small_font, screen._label_font, screen.shop_review,
@@ -1848,6 +2302,35 @@ def test_all_catalog_players_fit_standard_depth_chart(tmp_path: Path) -> None:
                         drafted_players=longest)
     view.draw_depth_chart(_surface(), area, candidate)
     assert screen.shop_review.depth_max_scroll == 0
+    screen.shop_review.modified_stats = True
+    view.draw_depth_chart(_surface(), area, candidate)
+    assert screen.shop_review.depth_max_scroll == 0
+
+
+@pytest.mark.parametrize(("label", "base", "value", "percentage", "expected", "color"), [
+    ("POWER", 50, 51, False, "(51)", "_POSITIVE"),
+    ("POWER", 50, 49, False, "(49)", "_NEGATIVE"),
+    ("POWER", 50, 50, False, "(50)", "_NEUTRAL"),
+    ("STAMINA", 0.5, 0.525, True, "(52.5%)", "_POSITIVE"),
+    ("STAMINA", 0.5, 0.49, True, "(49%)", "_NEGATIVE"),
+    ("STAMINA", 0.5, 0.5, True, "(50%)", "_NEUTRAL"),
+    ("VOLATILITY", 0.1, 0.085, True, "(8.5%)", "_POSITIVE"),
+    ("VOLATILITY", 0.1, 0.12, True, "(12%)", "_NEGATIVE"),
+    ("VOLATILITY", 0.1, 0.1, True, "(10%)", "_NEUTRAL"),
+])
+def test_depth_chart_actual_modified_value_and_color(
+    monkeypatch, label, base, value, percentage, expected, color
+) -> None:
+    pygame.font.init()
+    rendered = []
+    monkeypatch.setattr(football_depth_module, "draw_text",
+                        lambda surface, text, position, font, ink: rendered.append((text, font, ink)))
+    football_depth_module._draw_stat(_surface(), 10, 10, label, base, value, True, percentage)
+    assert rendered[1] == (expected, football_depth_module._font(12, True),
+                           getattr(football_depth_module, color))
+    rendered.clear()
+    football_depth_module._draw_stat(_surface(), 10, 10, label, base, value, False, percentage)
+    assert len(rendered) == 1 and not rendered[0][0].endswith(")")
 
 
 @pytest.mark.parametrize(("primary", "secondary"), [

@@ -44,6 +44,7 @@ from src.engine.football import (
 )
 from src.engine.football_coaches import (
     FootballCoachPerkKind,
+    OFFENSIVE_POSITIONS,
     coaches_for_assignment,
 )
 from src.engine.football_player_catalog import player_contribution_modifier
@@ -222,6 +223,51 @@ def coach_upgrade_magnitude(
         if upgrade.kind is kind
         and (family is None or upgrade.family is family)
     )
+
+
+def coach_power_multiplier(
+    upgrades: tuple[FootballCoachUpgradeEffect, ...], *, offense: bool
+) -> float:
+    kind = (FootballCoachUpgradeKind.OFFENSE_POWER_BOOST if offense
+            else FootballCoachUpgradeKind.DEFENSE_POWER_BOOST)
+    return 1.0 + min(MAX_COACH_POWER_BONUS, coach_upgrade_magnitude(upgrades, kind))
+
+
+def coach_volatility_multiplier(
+    upgrades: tuple[FootballCoachUpgradeEffect, ...], *, offense: bool
+) -> float:
+    kind = (FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION if offense
+            else FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION)
+    return 1.0 - min(MAX_COACH_VOLATILITY_REDUCTION, coach_upgrade_magnitude(upgrades, kind))
+
+
+def coach_stamina_bonus(
+    upgrades: tuple[FootballCoachUpgradeEffect, ...], *, offense: bool
+) -> float:
+    kind = (FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST if offense
+            else FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST)
+    return min(MAX_COACH_STAMINA_BONUS, coach_upgrade_magnitude(upgrades, kind))
+
+
+def effective_player_stamina(player: FootballPlayer, stamina_bonus: float) -> float:
+    return min(1.0, player.stamina + min(stamina_bonus, MAX_COACH_STAMINA_BONUS))
+
+
+def coached_player_baseline_stats(
+    roster: FootballRoster,
+    position: FootballPosition,
+    upgrades: tuple[FootballCoachUpgradeEffect, ...],
+) -> tuple[float, float, float]:
+    """Power, volatility and stamina without play-specific effects or fatigue."""
+    player = roster.players[position]
+    offense = position in OFFENSIVE_POSITIONS
+    coach = coaches_for_assignment(roster.coach_assignment)[0 if offense else 1]
+    modifier = coach.position_modifiers[position] if coach is not None else 0.0
+    power = (player.power * player_contribution_modifier(player, (player,), modifier)
+             * coach_power_multiplier(upgrades, offense=offense))
+    volatility = player.volatility * coach_volatility_multiplier(upgrades, offense=offense)
+    stamina = effective_player_stamina(player, coach_stamina_bonus(upgrades, offense=offense))
+    return power, volatility, stamina
 
 
 def field_goal_success_probability_for_team(
@@ -591,28 +637,16 @@ def calculate_play_estimate(
         defense_roster.players[position]
         for position in DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors
     )
-    offense_volatility_reduction = min(
-        MAX_COACH_VOLATILITY_REDUCTION,
-        coach_upgrade_magnitude(
-            offense_coach_upgrades,
-            FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION,
-        ),
-    )
-    defense_volatility_reduction = min(
-        MAX_COACH_VOLATILITY_REDUCTION,
-        coach_upgrade_magnitude(
-            defense_coach_upgrades,
-            FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION,
-        ),
-    )
+    offense_volatility_multiplier = coach_volatility_multiplier(offense_coach_upgrades, offense=True)
+    defense_volatility_multiplier = coach_volatility_multiplier(defense_coach_upgrades, offense=False)
     spread = max(
         MIN_PLAY_YARDAGE_SPREAD,
         (
             sum(player.volatility for player in offense_players)
-            * (1.0 - offense_volatility_reduction)
+            * offense_volatility_multiplier
             / len(offense_players)
             + sum(player.volatility for player in defense_players)
-            * (1.0 - defense_volatility_reduction)
+            * defense_volatility_multiplier
             / len(defense_players)
         )
         * VOLATILITY_SPREAD_MULTIPLIER,
@@ -823,10 +857,7 @@ def _adjusted_player_power(
     stamina_bonus: float = 0.0,
 ) -> float:
     ramp = min(prior_plays / FATIGUE_RAMP_PLAYS, 1.0)
-    effective_stamina = min(
-        1.0,
-        player.stamina + min(stamina_bonus, MAX_COACH_STAMINA_BONUS),
-    )
+    effective_stamina = effective_player_stamina(player, stamina_bonus)
     reduction = ramp * MAX_FATIGUE_POWER_REDUCTION * (1.0 - effective_stamina)
     return player.power * (1.0 - reduction)
 
@@ -862,14 +893,8 @@ def calculate_matchup_power(
     )
     offense_coach, _ = coaches_for_assignment(offense_roster.coach_assignment)
     _, defense_coach = coaches_for_assignment(defense_roster.coach_assignment)
-    offense_stamina_bonus = coach_upgrade_magnitude(
-        offense_coach_upgrades,
-        FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST,
-    )
-    defense_stamina_bonus = coach_upgrade_magnitude(
-        defense_coach_upgrades,
-        FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST,
-    )
+    offense_stamina_bonus = coach_stamina_bonus(offense_coach_upgrades, offense=True)
+    defense_stamina_bonus = coach_stamina_bonus(defense_coach_upgrades, offense=False)
     offense_power = sum(
         _adjusted_player_power(
             player,
@@ -904,20 +929,8 @@ def calculate_matchup_power(
     if matches:
         defense_power *= MATCHED_SCHEME_DEFENSE_MULTIPLIER
         offense_power *= MATCHED_SCHEME_OFFENSE_MULTIPLIER
-    offense_power *= 1.0 + min(
-        MAX_COACH_POWER_BONUS,
-        coach_upgrade_magnitude(
-            offense_coach_upgrades,
-            FootballCoachUpgradeKind.OFFENSE_POWER_BOOST,
-        ),
-    )
-    defense_power *= 1.0 + min(
-        MAX_COACH_POWER_BONUS,
-        coach_upgrade_magnitude(
-            defense_coach_upgrades,
-            FootballCoachUpgradeKind.DEFENSE_POWER_BOOST,
-        ),
-    )
+    offense_power *= coach_power_multiplier(offense_coach_upgrades, offense=True)
+    defense_power *= coach_power_multiplier(defense_coach_upgrades, offense=False)
     return FootballMatchupPower(offense_power, defense_power, matches)
 
 

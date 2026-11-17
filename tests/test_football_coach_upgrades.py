@@ -287,6 +287,8 @@ def test_bye_week_insufficient_ap_error_does_not_change_shop_or_rng() -> None:
     )
     shop.buy_upgrade(shop.offer[0])
     shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
+    if shop.remaining_ap >= _coach_card("bye_week").cost:
+        shop.move_to_next_day()
     assert shop.remaining_ap < _coach_card("bye_week").cost
     before = shop.state
     rng_before = shop._rng.getstate()

@@ -32,9 +32,14 @@ from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerC
 from src.engine.football_appearance import FootballPlayerAppearance, POSITION_ART
 from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_shop import (
+    COACH_UPGRADE_CATALOG,
+    PLAYER_UPGRADE_CATALOG,
     FootballShopCard,
     FootballShopRarity,
     FootballShopSection,
+    FootballUpgradeDuration,
+    FootballUpgradeStat,
+    _player_upgrade_catalog,
 )
 
 
@@ -119,7 +124,11 @@ def test_draft_stats_and_appearance_survive_upgrades_and_later_shops(monkeypatch
         assert controller.state.drafted_players == drafted
     shop = controller.state.shop
     assert shop is not None
-    upgrade = next(upgrade for upgrade in shop.offer if upgrade.stat.value == "power")
+    card = next(card for card in _player_upgrade_catalog()
+                if card.upgrade.stat is FootballUpgradeStat.POWER
+                and card.upgrade.duration is FootballUpgradeDuration.PERMANENT)
+    controller._shop._offers[FootballShopSection.PLAYER_UPGRADES][0] = card
+    upgrade = card.upgrade
     controller.buy_upgrade(upgrade)
     assert controller.state.drafted_players == drafted
     assert controller.state.shop.roster.players[upgrade.position].power > drafted[upgrade.position].power
@@ -185,6 +194,177 @@ def _complete_forced_match(controller: FootballGameController) -> None:
     controller.choose_offensive_play(OffensivePlayAction.RB_RUN)
 
 
+def test_temporary_upgrades_survive_bye_and_expire_only_after_completed_match(monkeypatch) -> None:
+    def card(duration):
+        return next(card for card in PLAYER_UPGRADE_CATALOG
+                    if card.upgrade.position is FootballPosition.QB
+                    and card.upgrade.stat is FootballUpgradeStat.POWER
+                    and card.upgrade.rarity is FootballShopRarity.COMMON
+                    and card.upgrade.duration is duration)
+
+    permanent = card(FootballUpgradeDuration.PERMANENT)
+    temporary = card(FootballUpgradeDuration.TEMPORARY)
+    bye = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "bye_week")
+    controller = FootballGameController(
+        "Human Team", difficulty=FootballAIDifficulty.EASY,
+        builder_seed=17, shop_seed=29, ai_seed=41, match_seed=53,
+        shop_catalogs={
+            FootballShopSection.PLAYER_UPGRADES: (permanent, temporary),
+            FootballShopSection.COACH_UPGRADES: (bye,),
+        },
+    )
+    _draft_to_shop(controller)
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    for game in range(1, 4):
+        if game == 3:
+            controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, permanent.card_id)
+        controller.finish_shop()
+        _complete_forced_match(controller)
+        controller.enter_next_shop()
+    original = controller.state.shop.roster.players[FootballPosition.QB]
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, temporary.card_id)
+    controller.unlock_shop_slot(FootballShopSection.COACH_UPGRADES, 1)
+    skipped = controller.buy_shop_card(FootballShopSection.COACH_UPGRADES, bye.card_id)
+    assert skipped.game_number == 5 and skipped.skipped_games == (4,)
+    assert skipped.shop.pending_player_upgrades == (temporary.upgrade,)
+    assert skipped.shop.roster.players[FootballPosition.QB] == original
+    started = controller.finish_shop()
+    assert started.phase is FootballRunPhase.MATCH
+    assert started.shop.pending_player_upgrades == (temporary.upgrade,)
+    assert started.shop.roster.players[FootballPosition.QB] == original
+    assert started.match.team_a.players[FootballPosition.QB].power == original.power + temporary.upgrade.amount
+    with pytest.raises(RuntimeError, match="decisive"):
+        controller._record_match_result(started.match)
+    assert controller.state.shop.pending_player_upgrades == (temporary.upgrade,)
+    _complete_forced_match(controller)
+    assert controller.state.shop.pending_player_upgrades == ()
+    controller.enter_next_shop()
+    assert controller.state.shop.roster.players[FootballPosition.QB] == original
+    next_match = controller.finish_shop().match
+    assert next_match.team_a.players[FootballPosition.QB] == original
+
+
+def test_temporary_upgrade_survives_interrupted_match_initialization(monkeypatch) -> None:
+    controller = _controller()
+    _draft_to_shop(controller)
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    controller._shop._offers[FootballShopSection.PLAYER_UPGRADES][0] = card
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+    with monkeypatch.context() as patch:
+        def interrupt():
+            raise RuntimeError("Interrupted")
+        patch.setattr(controller, "_advance_match", interrupt)
+        with pytest.raises(RuntimeError, match="Interrupted"):
+            controller.finish_shop()
+    assert controller.state.phase is FootballRunPhase.MATCH
+    assert controller.state.shop.pending_player_upgrades == (card.upgrade,)
+    controller._advance_match()
+    assert controller.state.shop.pending_player_upgrades == (card.upgrade,)
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    _complete_forced_match(controller)
+    assert controller.state.shop.pending_player_upgrades == ()
+
+
+def test_stacked_capped_temporary_projections_survive_bye(monkeypatch) -> None:
+    temp = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.STAMINA
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                and card.rarity is FootballShopRarity.COMMON)
+    bye = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "bye_week")
+    controller = FootballGameController(
+        "Human Team", difficulty=FootballAIDifficulty.EASY,
+        builder_seed=17, shop_seed=29, ai_seed=41, match_seed=53,
+        shop_catalogs={FootballShopSection.PLAYER_UPGRADES: (temp,),
+                       FootballShopSection.COACH_UPGRADES: (bye,)},
+    )
+    controller.choose_coach(0)
+    for position in PLAYER_DRAFT_ORDER:
+        if position is FootballPosition.QB:
+            candidate = controller.state.team_builder.current_offer[0]
+            candidate = replace(candidate, player=replace(candidate.player, stamina=0.94))
+            controller._builder._current_offer = (
+                candidate, *controller.state.team_builder.current_offer[1:],
+            )
+        controller.choose_player(position, 0)
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    for game in range(1, 5):
+        if game == 4:
+            controller.unlock_shop_slot(FootballShopSection.COACH_UPGRADES, 1)
+        controller.finish_shop()
+        _complete_forced_match(controller)
+        controller.enter_next_shop()
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    controller.move_to_next_day()
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    before = controller.state.shop
+    skipped = controller.buy_shop_card(FootballShopSection.COACH_UPGRADES, bye.card_id)
+    assert skipped.game_number == 6 and skipped.skipped_games == (5,)
+    assert skipped.shop.pending_player_upgrades == (temp.upgrade, temp.upgrade)
+    assert skipped.shop.next_match_roster == before.next_match_roster
+    assert skipped.shop.next_match_roster.players[FootballPosition.QB].stamina == 1
+    assert skipped.shop.project_player_upgrade(temp.upgrade) == before.project_player_upgrade(temp.upgrade)
+    assert skipped.shop.project_player_upgrade(temp.upgrade).next_match.change == 0
+    started = controller.finish_shop()
+    assert started.match.team_a == skipped.shop.next_match_roster
+    _complete_forced_match(controller)
+    assert controller.state.shop.pending_player_upgrades == ()
+
+
+def test_coached_pending_projection_survives_bye_until_match_completes(monkeypatch) -> None:
+    temp = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.STAMINA
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                and card.rarity is FootballShopRarity.COMMON)
+    conditioning = next(card for card in COACH_UPGRADE_CATALOG
+                        if card.card_id == "fourth_quarter_conditioning")
+    bye = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "bye_week")
+    controller = FootballGameController(
+        "Human Team", difficulty=FootballAIDifficulty.EASY,
+        builder_seed=17, shop_seed=29, ai_seed=41, match_seed=53,
+        shop_catalogs={FootballShopSection.PLAYER_UPGRADES: (temp,),
+                       FootballShopSection.COACH_UPGRADES: (conditioning, bye)},
+    )
+    controller.choose_coach(0)
+    for position in PLAYER_DRAFT_ORDER:
+        if position is FootballPosition.QB:
+            candidate = controller.state.team_builder.current_offer[0]
+            candidate = replace(candidate, player=replace(candidate.player, stamina=0.85))
+            controller._builder._current_offer = (
+                candidate, *controller.state.team_builder.current_offer[1:],
+            )
+        controller.choose_player(position, 0)
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    for game in range(1, 5):
+        if game == 4:
+            controller.unlock_shop_slot(FootballShopSection.COACH_UPGRADES, 1)
+            controller._shop._offers[FootballShopSection.COACH_UPGRADES][0] = conditioning
+            controller.buy_shop_card(FootballShopSection.COACH_UPGRADES, conditioning.card_id)
+        controller.finish_shop()
+        _complete_forced_match(controller)
+        controller.enter_next_shop()
+    initial = controller.state.shop.project_player_upgrade(temp.upgrade)
+    assert initial.next_match.change == pytest.approx(0.10)
+    assert initial.effective_next_match.change == pytest.approx(0.05)
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    controller.move_to_next_day()
+    controller.buy_shop_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    before = controller.state.shop
+    controller._shop._offers[FootballShopSection.COACH_UPGRADES][0] = bye
+    skipped = controller.buy_shop_card(FootballShopSection.COACH_UPGRADES, bye.card_id)
+    assert skipped.shop.pending_player_upgrades == (temp.upgrade, temp.upgrade)
+    assert skipped.shop.project_player_upgrade(temp.upgrade) == before.project_player_upgrade(temp.upgrade)
+    assert skipped.shop.project_player_upgrade(temp.upgrade).effective_next_match.change == pytest.approx(0)
+    started = controller.finish_shop()
+    assert started.match.team_a.players[FootballPosition.QB].stamina == 1.0
+    assert conditioning.coach_upgrade_effect in started.match.team_a_coach_upgrades
+    assert started.shop.pending_player_upgrades == (temp.upgrade, temp.upgrade)
+    _complete_forced_match(controller)
+    assert controller.state.shop.pending_player_upgrades == ()
+
+
 def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() -> None:
     controller = _controller(difficulty=FootballAIDifficulty.STANDARD)
     _draft_to_shop(controller)
@@ -202,20 +382,15 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     assert state.shop.remaining_budget == 12
     assert len(state.shop.offer) == 3
 
-    power_upgrade = next(
-        upgrade for upgrade in state.shop.offer if upgrade.stat.value == "power"
-    )
-    stamina_upgrade = next(
-        upgrade for upgrade in state.shop.offer if upgrade.stat.value == "stamina"
-    )
-    controller.buy_upgrade(power_upgrade)
-    controller.buy_upgrade(stamina_upgrade)
+    first_upgrade, second_upgrade = state.shop.offer[:2]
+    controller.buy_upgrade(first_upgrade)
+    controller.buy_upgrade(second_upgrade)
     assert controller.state.shop is not None
     assert (
         controller.state.shop.roster.coach_assignment
         == selected_pair.assignment
     )
-    assert controller.state.shop.remaining_budget == 7
+    assert controller.state.shop.remaining_budget == 12 - first_upgrade.cost - second_upgrade.cost
     assert len(controller.state.shop.purchased_upgrades) == 2
 
     match_view = controller.finish_shop()
@@ -593,7 +768,11 @@ def test_next_shop_resets_ap_and_preserves_upgrades_roster_and_slot_unlocks(
     _draft_to_shop(controller)
     first_shop = controller.state.shop
     assert first_shop is not None
-    upgrade = first_shop.offer[0]
+    card = next(card for card in _player_upgrade_catalog()
+                if card.upgrade.stat is FootballUpgradeStat.POWER
+                and card.upgrade.duration is FootballUpgradeDuration.PERMANENT)
+    controller._shop._offers[FootballShopSection.PLAYER_UPGRADES][0] = card
+    upgrade = card.upgrade
     original_player = first_shop.roster.players[upgrade.position]
     controller.buy_upgrade(upgrade)
     controller.unlock_shop_slot(FootballShopSection.PLAYER_UPGRADES, 4)

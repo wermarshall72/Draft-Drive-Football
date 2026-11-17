@@ -25,6 +25,7 @@ from src.engine.football_decks import (
     starting_defensive_deck,
     starting_offensive_deck,
 )
+from src.engine.football_simulator import coached_player_baseline_stats
 
 ACTION_POINT_BUDGET = 12
 TRAINING_POINT_BUDGET = ACTION_POINT_BUDGET
@@ -68,11 +69,17 @@ RARITY_WEIGHTS = MappingProxyType(
 class FootballUpgradeStat(str, Enum):
     POWER = "power"
     STAMINA = "stamina"
+    VOLATILITY = "volatility"
+
+
+class FootballUpgradeDuration(str, Enum):
+    PERMANENT = "permanent"
+    TEMPORARY = "temporary"
 
 
 @dataclass(frozen=True)
 class FootballUpgrade:
-    """A fixed-cost, single-player stat increase offered by the shop."""
+    """A repeatable single-player stat upgrade."""
 
     upgrade_id: str
     name: str
@@ -82,6 +89,24 @@ class FootballUpgrade:
     amount: float
     cost: int
     rarity: FootballShopRarity = FootballShopRarity.COMMON
+    duration: FootballUpgradeDuration = FootballUpgradeDuration.PERMANENT
+
+
+@dataclass(frozen=True)
+class FootballStatProjection:
+    before: float
+    after: float
+
+    @property
+    def change(self) -> float:
+        return self.after - self.before
+
+
+@dataclass(frozen=True)
+class FootballUpgradeProjection:
+    run: FootballStatProjection
+    next_match: FootballStatProjection
+    effective_next_match: FootballStatProjection
 
 
 FootballShopEligibility = Callable[[FootballRoster], bool]
@@ -193,6 +218,48 @@ class FootballShopState:
     removal_unavailable_reason: str | None
     owned_coach_upgrades: tuple[FootballShopCard, ...] = ()
     future_shop_ap_bonus: int = 0
+    pending_player_upgrades: tuple[FootballUpgrade, ...] = ()
+
+    @property
+    def next_match_roster(self) -> FootballRoster:
+        return apply_player_upgrades(self.roster, self.pending_player_upgrades)
+
+    def coached_player_stats(
+        self, roster: FootballRoster, position: FootballPosition
+    ) -> tuple[float, float, float]:
+        effects = tuple(card.coach_upgrade_effect for card in self.owned_coach_upgrades
+                        if card.coach_upgrade_effect is not None)
+        return coached_player_baseline_stats(roster, position, effects)
+
+    def coached_player_stat(
+        self, roster: FootballRoster, position: FootballPosition, stat: FootballUpgradeStat
+    ) -> float:
+        index = {FootballUpgradeStat.POWER: 0, FootballUpgradeStat.VOLATILITY: 1,
+                 FootballUpgradeStat.STAMINA: 2}[stat]
+        return self.coached_player_stats(roster, position)[index]
+
+    def project_player_upgrade(self, upgrade: FootballUpgrade) -> FootballUpgradeProjection:
+        """Preview both scopes in the same order used by purchases and matches."""
+        before_run = self.roster
+        before_match = self.next_match_roster
+        if upgrade.duration is FootballUpgradeDuration.PERMANENT:
+            after_run = apply_player_upgrade(before_run, upgrade)
+            after_match = apply_player_upgrades(after_run, self.pending_player_upgrades)
+        else:
+            after_run = before_run
+            after_match = apply_player_upgrade(before_match, upgrade)
+
+        def value(roster: FootballRoster) -> float:
+            return player_upgrade_stat_value(roster.players[upgrade.position], upgrade.stat)
+
+        return FootballUpgradeProjection(
+            FootballStatProjection(value(before_run), value(after_run)),
+            FootballStatProjection(value(before_match), value(after_match)),
+            FootballStatProjection(
+                self.coached_player_stat(before_match, upgrade.position, upgrade.stat),
+                self.coached_player_stat(after_match, upgrade.position, upgrade.stat),
+            ),
+        )
 
     @property
     def remaining_budget(self) -> int:
@@ -289,6 +356,8 @@ class FootballShop:
             tuple[FootballShopSection, str], FootballShopCard
         ] = {}
         self._run_purchased_upgrades: list[FootballUpgrade] = []
+        self._pending_player_upgrades: list[FootballUpgrade] = []
+        self._player_offer_purchased: set[str] = set()
         self._owned_coach_upgrades: list[FootballShopCard] = []
         self._future_shop_ap_bonus = 0
         self._offensive_deck = starting_offensive_deck("human")
@@ -367,7 +436,16 @@ class FootballShop:
             ),
             owned_coach_upgrades=tuple(self._owned_coach_upgrades),
             future_shop_ap_bonus=self._future_shop_ap_bonus,
+            pending_player_upgrades=tuple(self._pending_player_upgrades),
         )
+
+    def match_roster(self) -> FootballRoster:
+        return apply_player_upgrades(self._roster, self._pending_player_upgrades)
+
+    def complete_match(self) -> None:
+        if not self._finished:
+            raise ValueError("A match can only complete after the shop is finished.")
+        self._pending_player_upgrades.clear()
 
     def buy_upgrade(self, upgrade: FootballUpgrade | int) -> FootballShopState:
         if isinstance(upgrade, bool):
@@ -389,7 +467,7 @@ class FootballShop:
             )
             if card is None:
                 raise ValueError(
-                    "Upgrade was not offered; capped stamina upgrades are excluded."
+                    "Upgrade was not offered."
                 )
         else:
             raise ValueError("Selection must be an offered upgrade or a valid index.")
@@ -430,7 +508,11 @@ class FootballShop:
         if selected is None:
             raise ValueError("Card is not in the current offer.")
         purchase_key = (section, selected.card_id)
-        if purchase_key in self._purchased:
+        if (
+            selected.card_id in self._player_offer_purchased
+            if section is FootballShopSection.PLAYER_UPGRADES
+            else purchase_key in self._purchased
+        ):
             raise ValueError("This card has already been purchased during this visit.")
         effect = selected.coach_upgrade_effect
         if effect is not None and any(
@@ -450,7 +532,11 @@ class FootballShop:
             self._pending_removal = selected
             return self.state
 
-        updated_roster = selected.effect(self._roster)
+        temporary = (
+            selected.upgrade is not None
+            and selected.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+        )
+        updated_roster = self._roster if temporary else selected.effect(self._roster)
         if not isinstance(updated_roster, FootballRoster):
             raise ValueError("Shop card effect must return a FootballRoster.")
         new_copy = None
@@ -464,6 +550,10 @@ class FootballShop:
         self._purchased[purchase_key] = selected
         if selected.upgrade is not None:
             self._run_purchased_upgrades.append(selected.upgrade)
+            if temporary:
+                self._pending_player_upgrades.append(selected.upgrade)
+        if section is FootballShopSection.PLAYER_UPGRADES:
+            self._player_offer_purchased.add(selected.card_id)
         if effect is not None:
             self._owned_coach_upgrades.append(selected)
             if effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP:
@@ -583,6 +673,7 @@ class FootballShop:
         self._require_no_pending_removal()
         if self._remaining_ap < 1:
             raise ValueError("Moving to the next day requires 1 AP.")
+        self._player_offer_purchased.clear()
         self._reset_offers()
         self._remaining_ap -= 1
         self._day += 1
@@ -608,6 +699,7 @@ class FootballShop:
         self._day = 1
         self._remaining_ap = ACTION_POINT_BUDGET + self._future_shop_ap_bonus
         self._purchased.clear()
+        self._player_offer_purchased.clear()
         self._finished = False
         self._reset_offers()
         return self.state
@@ -628,7 +720,11 @@ class FootballShop:
                         unlocked=True,
                         card=card,
                         purchased=(
-                            card is not None and (section, card.card_id) in self._purchased
+                            card is not None and (
+                                card.card_id in self._player_offer_purchased
+                                if section is FootballShopSection.PLAYER_UPGRADES
+                                else (section, card.card_id) in self._purchased
+                            )
                         ),
                         unlock_cost=None,
                         can_unlock=False,
@@ -721,7 +817,8 @@ class FootballShop:
         eligible = [
             card
             for card in self._catalogs[section]
-            if (section, card.card_id) not in self._purchased
+            if (section is FootballShopSection.PLAYER_UPGRADES
+                or (section, card.card_id) not in self._purchased)
             and card.card_id not in current_ids
             and self._card_is_available(card)
         ]
@@ -767,7 +864,7 @@ class FootballShop:
         if unknown:
             raise ValueError(f"Unknown shop catalog sections: {unknown!r}.")
         if FootballShopSection.PLAYER_UPGRADES not in provided:
-            provided[FootballShopSection.PLAYER_UPGRADES] = _player_upgrade_catalog()
+            provided[FootballShopSection.PLAYER_UPGRADES] = PLAYER_UPGRADE_CATALOG
         if FootballShopSection.PLAYS_SCHEMES not in provided:
             provided[FootballShopSection.PLAYS_SCHEMES] = _play_scheme_catalog()
         if FootballShopSection.COACH_UPGRADES not in provided:
@@ -852,67 +949,94 @@ def _play_scheme_catalog() -> tuple[FootballShopCard, ...]:
 
 def _player_upgrade_catalog() -> tuple[FootballShopCard, ...]:
     cards: list[FootballShopCard] = []
+    position_names = {
+        FootballPosition.QB: "QB",
+        FootballPosition.RB: "RB",
+        FootballPosition.WR: "WR",
+        FootballPosition.O_LINE: "O-line",
+        FootballPosition.D_LINE: "D-line",
+        FootballPosition.LINEBACKERS: "Linebacker",
+        FootballPosition.CORNERBACKS: "Cornerback",
+        FootballPosition.SAFETIES: "Safety",
+    }
     for position in FootballPosition:
-        power = FootballUpgrade(
-            upgrade_id=f"{position.value.lower()}_power",
-            name=f"{position.value} power training",
-            description=f"Increase {position.value} player power by 1.0.",
-            position=position,
-            stat=FootballUpgradeStat.POWER,
-            amount=POWER_UPGRADE_AMOUNT,
-            cost=POWER_UPGRADE_COST,
-            rarity=FootballShopRarity.UNCOMMON,
-        )
-        stamina = FootballUpgrade(
-            upgrade_id=f"{position.value.lower()}_stamina",
-            name=f"{position.value} stamina training",
-            description=f"Increase {position.value} player stamina by 0.1.",
-            position=position,
-            stat=FootballUpgradeStat.STAMINA,
-            amount=STAMINA_UPGRADE_AMOUNT,
-            cost=STAMINA_UPGRADE_COST,
-            rarity=FootballShopRarity.COMMON,
-        )
-        cards.extend(
-            (
-                _player_upgrade_card(power),
-                _player_upgrade_card(stamina),
-            )
-        )
+        for stat in FootballUpgradeStat:
+            for rank, rarity in enumerate(FootballShopRarity, start=1):
+                for duration in FootballUpgradeDuration:
+                    factor = 2 if duration is FootballUpgradeDuration.TEMPORARY else 1
+                    amount = rank * factor * {
+                        FootballUpgradeStat.POWER: 1,
+                        FootballUpgradeStat.STAMINA: 0.05,
+                        FootballUpgradeStat.VOLATILITY: 0.01,
+                    }[stat]
+                    amount = round(amount, 4)
+                    rarity_name = rarity.value.replace("_", " ").title()
+                    duration_name = duration.value.title()
+                    position_name = position_names[position]
+                    effect = player_upgrade_effect_text(stat, amount)
+                    cost = 2 if duration is FootballUpgradeDuration.TEMPORARY else 3
+                    lifetime = ("for the next completed match" if factor == 2
+                                else "for the rest of the run")
+                    bound = {
+                        FootballUpgradeStat.POWER: "",
+                        FootballUpgradeStat.STAMINA: " Stamina is capped at 100%.",
+                        FootballUpgradeStat.VOLATILITY: " Volatility cannot drop below 0%.",
+                    }[stat]
+                    upgrade = FootballUpgrade(
+                        upgrade_id=f"{position.value.lower()}_{stat.value}_{rarity.value}_{duration.value}",
+                        name=f"{duration_name} {rarity_name} {position_name} {stat.value.title()} Upgrade",
+                        description=f"{position_name}: {effect} {lifetime}.{bound} {cost} AP.",
+                        position=position,
+                        stat=stat,
+                        amount=amount,
+                        cost=cost,
+                        rarity=rarity,
+                        duration=duration,
+                    )
+                    cards.append(_player_upgrade_card(upgrade))
     return tuple(cards)
+
+
+def player_upgrade_effect_text(stat: FootballUpgradeStat, amount: float) -> str:
+    if stat is FootballUpgradeStat.POWER:
+        return f"+{amount:g} Power"
+    if stat is FootballUpgradeStat.STAMINA:
+        return f"+{amount * 100:g} percentage points Stamina"
+    return f"-{amount * 100:g} percentage points Volatility"
+
+
+def player_upgrade_stat_value(player: FootballPlayer, stat: FootballUpgradeStat) -> float:
+    if stat is FootballUpgradeStat.POWER:
+        return player.power
+    if stat is FootballUpgradeStat.STAMINA:
+        return player.stamina
+    return player.volatility
+
+
+def apply_player_upgrade(roster: FootballRoster, upgrade: FootballUpgrade) -> FootballRoster:
+    player = roster.players[upgrade.position]
+    if upgrade.stat is FootballUpgradeStat.POWER:
+        updated_player = replace(player, power=player.power + upgrade.amount)
+    elif upgrade.stat is FootballUpgradeStat.STAMINA:
+        updated_player = replace(player, stamina=min(1.0, player.stamina + upgrade.amount))
+    else:
+        updated_player = replace(player, volatility=max(0.0, player.volatility - upgrade.amount))
+    players = dict(roster.players)
+    players[upgrade.position] = updated_player
+    return replace(roster, players=players)
+
+
+def apply_player_upgrades(
+    roster: FootballRoster, upgrades: tuple[FootballUpgrade, ...] | list[FootballUpgrade]
+) -> FootballRoster:
+    for upgrade in upgrades:
+        roster = apply_player_upgrade(roster, upgrade)
+    return roster
 
 
 def _player_upgrade_card(
     upgrade: FootballUpgrade,
 ) -> FootballShopCard:
-    def eligible(current_roster: FootballRoster) -> bool:
-        player = current_roster.players[upgrade.position]
-        return (
-            upgrade.stat is FootballUpgradeStat.POWER
-            or player.stamina + upgrade.amount <= 1.0
-        )
-
-    def apply(current_roster: FootballRoster) -> FootballRoster:
-        player = current_roster.players[upgrade.position]
-        if upgrade.stat is FootballUpgradeStat.POWER:
-            updated_player = replace(player, power=player.power + upgrade.amount)
-        else:
-            stamina = player.stamina + upgrade.amount
-            if stamina > 1.0:
-                raise ValueError(
-                    f"{player.position.value} stamina upgrade would exceed the 1.0 maximum."
-                )
-            updated_player = replace(player, stamina=stamina)
-        players = dict(current_roster.players)
-        players[upgrade.position] = updated_player
-        return FootballRoster(
-            team_name=current_roster.team_name,
-            players=players,
-            coach=current_roster.coach,
-            special_teams=current_roster.special_teams,
-            coach_assignment=current_roster.coach_assignment,
-        )
-
     return FootballShopCard(
         card_id=upgrade.upgrade_id,
         name=upgrade.name,
@@ -920,8 +1044,8 @@ def _player_upgrade_card(
         section=FootballShopSection.PLAYER_UPGRADES,
         rarity=upgrade.rarity,
         cost=upgrade.cost,
-        eligible=eligible,
-        effect=apply,
+        eligible=lambda _roster: True,
+        effect=lambda roster: apply_player_upgrade(roster, upgrade),
         upgrade=upgrade,
     )
 
@@ -1164,4 +1288,5 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
     )
 
 
+PLAYER_UPGRADE_CATALOG = _player_upgrade_catalog()
 COACH_UPGRADE_CATALOG = _coach_upgrade_catalog()

@@ -1,6 +1,8 @@
 """Pre-match shop presentation and card purchase controls."""
 
 from collections.abc import Callable
+from functools import lru_cache
+from pathlib import Path
 
 import pygame
 
@@ -14,6 +16,8 @@ from src.engine.football_shop import (
     FootballShopSection,
     FootballShopSlotState,
     FootballShopState,
+    FootballUpgradeDuration,
+    FootballUpgradeStat,
 )
 from src.engine.football_simulator import calculate_standardized_play_estimate
 from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
@@ -55,6 +59,18 @@ _COMPACT_POSITION_LABELS = {
     FootballPosition.CORNERBACKS: "CB",
     FootballPosition.SAFETIES: "S",
 }
+_DURATION_ICONS = {
+    FootballUpgradeDuration.TEMPORARY: "upgrade_temporary.png",
+    FootballUpgradeDuration.PERMANENT: "upgrade_permanent.png",
+}
+
+
+@lru_cache(maxsize=2)
+def _duration_icon(duration: FootballUpgradeDuration) -> pygame.Surface:
+    image = pygame.image.load(Path(__file__).parent / "assets" / _DURATION_ICONS[duration])
+    height = staff_font(14).get_height()
+    width = max(1, round(image.get_width() * height / image.get_height()))
+    return pygame.transform.scale(image, (width, height))
 
 
 class _ShopCardButton(Button):
@@ -170,8 +186,9 @@ class FootballShopView:
                                    width, height)
                 self._landing_slot(surface, rect, slot, buttons, shop, run_state, team_name)
 
-        draw_text(surface, transition_message or "Unspent AP expires when you finish the shop.",
-                  (content.left, content.bottom - 67), self._small_font, pygame.Color("#c1d0df"))
+        message = transition_message or "Unspent AP expires when you finish the shop."
+        draw_text(surface, message, (content.left, content.bottom - 67),
+                  self._small_font, pygame.Color("#c1d0df"))
         footer_top = content.bottom - 44
         reroll_rect = pygame.Rect(content.left, footer_top, 205, 36)
         buttons.append(
@@ -277,7 +294,7 @@ class FootballShopView:
             return
 
         if slot.section is FootballShopSection.PLAYER_UPGRADES:
-            art = pygame.Rect(rect.left + 8, rect.top + 5, rect.width - 16, 64)
+            art = pygame.Rect(rect.left + 8, rect.top + 4, rect.width - 16, 40)
             pygame.draw.rect(surface, "#1c3e5b", art, border_radius=5)
             if card.upgrade is not None and run_state is not None:
                 appearance = run_state.player_appearances.get(card.upgrade.position)
@@ -285,16 +302,32 @@ class FootballShopView:
                     draw_draft_player(surface, art, appearance)
             if card.upgrade is not None:
                 label = _POSITION_LABELS[card.upgrade.position]
-                effect = f"+{card.upgrade.amount:g} {card.upgrade.stat.value.upper()}"
+                upgrade = card.upgrade
+                sign = "-" if upgrade.stat is FootballUpgradeStat.VOLATILITY else "+"
+                amount = (f"{upgrade.amount:g}" if upgrade.stat is FootballUpgradeStat.POWER
+                          else f"{upgrade.amount * 100:g}%")
+                effect = f"{upgrade.stat.value.upper()} {sign}{amount}"
+                duration = upgrade.duration.value.upper()
             else:
                 label, effect = card.name, card.description
-            self._wrapped(surface, label, pygame.Rect(rect.left + 7, rect.top + 72,
-                          rect.width - 14, 24), bold, text)
-            info = pygame.Rect(rect.left + 7, rect.top + 97, rect.width - 14, 26)
+                duration = ""
+            self._wrapped(surface, label, pygame.Rect(rect.left + 7, rect.top + 45,
+                          rect.width - 14, 20), bold, text)
+            duration_x = rect.left + 7
+            if card.upgrade is not None:
+                icon = _duration_icon(card.upgrade.duration)
+                surface.blit(icon, (duration_x, rect.top + 66))
+                duration_x += icon.get_width() + 4
+            self._wrapped(surface, duration, pygame.Rect(duration_x, rect.top + 66,
+                          rect.right - 7 - duration_x, small.get_height()), small, muted)
+            info = pygame.Rect(rect.left + 7, rect.top + 87, rect.width - 14, 38)
             self._inset(surface, info)
-            self._wrapped(surface, effect, info.inflate(-8, -8), small, text)
+            detail_font = staff_font(14, semibold=True)
+            self._wrapped(surface, effect, pygame.Rect(info.left + 4,
+                          info.centery - detail_font.get_height() // 2,
+                          info.width - 8, detail_font.get_height()), detail_font, text)
             draw_text(surface, f"{card.rarity.value.replace('_', ' ').upper()} / {card.cost} AP",
-                      (rect.left + 7, rect.top + 126), small, muted)
+                      (rect.left + 7, rect.top + 128), small, muted)
         elif slot.section is FootballShopSection.COACH_UPGRADES:
             art = pygame.Rect(rect.left + 7, rect.top + 7, 48, 48)
             self._coach_art(surface, art, card, shop, team_name)

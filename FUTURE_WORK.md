@@ -34,7 +34,10 @@ or the design changes.
 
 - [x] Implement the recurring three-part pre-game shop framework with shared
   AP, seeded rarity offers, player upgrades, and permanent slot unlocks.
-- [ ] Create the larger player-upgrade catalog and its additional effects.
+- [x] Add the individual-player Power, Stamina, and Volatility upgrade
+  catalog, including run-long and next-match effects.
+- [ ] Design and implement group/all-position and synergy player upgrades;
+  these are deferred beyond the individual-player catalog.
 - [x] Add an initial named offensive-play and defensive-scheme catalog to the
   shop, organized into six shared families with variants retaining distinct
   identities, yardage, and clock values. Keep all play/scheme cards Common,
@@ -72,8 +75,8 @@ or the design changes.
 - [ ] Design twelve shop icons: one for each of the six offensive play
   families and one for each corresponding defensive scheme family. Named
   variants within a family should share its icon.
-- [ ] Design future player synergies, temporary upgrades, and AP-saving
-  actions. Unspent AP currently expires at the end of each shop visit.
+- [ ] Design future player synergies and AP-saving actions. Unspent AP
+  currently expires at the end of each shop visit.
 - [ ] Implement a playoff bracket; the current run ends at the playoffs marker.
 - [ ] Revisit asynchronous opponents, accounts, and career history after the
   offline-first game loop is established.

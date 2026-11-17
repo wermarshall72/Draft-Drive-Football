@@ -29,8 +29,10 @@ from src.engine.football import (
 from src.engine.football_simulator import (
     FATIGUE_RAMP_PLAYS,
     MAX_FATIGUE_POWER_REDUCTION,
+    MIN_PLAY_YARDAGE_SPREAD,
     FootballMatchSimulator,
     REGULATION_PERIOD_SECONDS,
+    calculate_play_estimate,
     field_goal_distance_for_position,
     field_goal_success_probability,
     matchup_for_play,
@@ -46,7 +48,10 @@ from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
 )
-from src.engine.football_shop import FootballShop, FootballUpgradeStat
+from src.engine.football_shop import (
+    PLAYER_UPGRADE_CATALOG, FootballShop, FootballShopRarity, FootballUpgradeDuration,
+    FootballUpgradeStat, apply_player_upgrade,
+)
 
 
 class SequenceRNG(random.Random):
@@ -112,6 +117,39 @@ def _roster(
         coach=FootballCoach(f"{team_name} Coach"),
         special_teams=FootballSpecialTeams(),
     )
+
+
+@pytest.mark.parametrize(
+    ("other_volatility", "expected_before", "expected_after"),
+    [(0.10, 1.0, 1.0), (0.20, 1.86, 1.8)],
+)
+def test_volatility_upgrade_can_be_limited_by_play_spread_floor(
+    other_volatility, expected_before, expected_after
+) -> None:
+    original = _roster("Offense")
+    players = {position: replace(player, volatility=other_volatility)
+               for position, player in original.players.items()}
+    players[FootballPosition.QB] = replace(players[FootballPosition.QB], volatility=0.02)
+    offense = replace(original, players=players)
+    opponent = _roster("Defense")
+    opponent = replace(opponent, players={
+        position: replace(player, volatility=other_volatility)
+        for position, player in opponent.players.items()
+    })
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.VOLATILITY
+                and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                and card.rarity is FootballShopRarity.COMMON)
+    upgraded = apply_player_upgrade(offense, card.upgrade)
+    assert upgraded.players[FootballPosition.QB].volatility == pytest.approx(0.0)
+    def spread(roster):
+        return calculate_play_estimate(
+            roster, opponent, OffensivePlayAction.PA_PASS, DefensiveSchemeAction.RB_RUN
+        ).yardage_spread
+    assert spread(offense) == pytest.approx(expected_before)
+    assert spread(upgraded) == pytest.approx(expected_after)
+    assert expected_after >= MIN_PLAY_YARDAGE_SPREAD
 
 
 def _match_state(**overrides) -> FootballMatchState:
@@ -364,6 +402,7 @@ def test_shop_coach_partnership_and_fatigue_stack_once_before_scheme_modifier() 
             if any(
                 item.position is FootballPosition.QB
                 and item.stat is FootballUpgradeStat.POWER
+                and item.duration is FootballUpgradeDuration.PERMANENT
                 for item in candidate.offer
             )
         ),
@@ -375,6 +414,7 @@ def test_shop_coach_partnership_and_fatigue_stack_once_before_scheme_modifier() 
         for item in shop.offer
         if item.position is FootballPosition.QB
         and item.stat is FootballUpgradeStat.POWER
+        and item.duration is FootballUpgradeDuration.PERMANENT
     )
     upgraded_roster = shop.buy(qb_upgrade).roster
 
@@ -414,9 +454,10 @@ def test_shop_coach_partnership_and_fatigue_stack_once_before_scheme_modifier() 
     ).match_events[-1].play_result
 
     assert result is not None
-    assert upgraded_roster.players[FootballPosition.QB].power == 51.0
+    upgraded_power = 50.0 + qb_upgrade.amount
+    assert upgraded_roster.players[FootballPosition.QB].power == upgraded_power
     assert result.offense_power == pytest.approx(
-        (51.0 * 0.975 * 1.30) + (50.0 * 0.975 * 1.0)
+        (upgraded_power * 0.975 * 1.30) + (50.0 * 0.975 * 1.0)
     )
 
 

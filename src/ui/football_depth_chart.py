@@ -5,13 +5,13 @@ from functools import lru_cache
 
 import pygame
 
-from src.engine.football import FootballCoachUpgradeKind, FootballPlayer, FootballPosition
-from src.engine.football_coaches import OFFENSIVE_POSITIONS, coaches_for_assignment
+from src.engine.football import FootballPlayer, FootballPosition
+from src.engine.football_coaches import coaches_for_assignment
 from src.engine.football_controller import FootballGameControllerState
-from src.engine.football_player_catalog import player_contribution_modifier, player_type_for_id
-from src.engine.football_simulator import (
-    MAX_COACH_POWER_BONUS, MAX_COACH_STAMINA_BONUS,
-    MAX_COACH_VOLATILITY_REDUCTION, coach_upgrade_magnitude,
+from src.engine.football_player_catalog import player_type_for_id
+from src.engine.football_shop import (
+    FootballUpgradeDuration, FootballUpgradeStat, player_upgrade_effect_text,
+    player_upgrade_stat_value,
 )
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
 from src.ui.coach_art import draw_coach_portrait
@@ -20,6 +20,7 @@ from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
 from src.ui.football_coach_view import coach_perk_text
 from src.ui.football_display import _POSITION_LABELS, player_partnership_text, player_perk_text
 from src.ui.football_player_draft_view import _draft_percentage
+from src.ui.football_player_upgrade_details import VOLATILITY_SPREAD_EXPLANATION, stat_change, stat_value
 from src.ui.football_shop_review import ShopReviewInteraction
 from src.ui.player_art import draw_draft_player
 from src.ui.text import draw_complete_wrapped_text, wrap_text_lines
@@ -66,27 +67,7 @@ def modified_player_stats(state: FootballGameControllerState, position: Football
     shop = state.shop
     if shop is None:
         raise RuntimeError("The controller did not provide the active shop state.")
-    player = shop.roster.players[position]
-    offense = position in OFFENSIVE_POSITIONS
-    coaches = coaches_for_assignment(shop.roster.coach_assignment)
-    coach = coaches[0 if offense else 1]
-    modifier = coach.position_modifiers[position] if coach is not None else 0.0
-    effects = tuple(card.coach_upgrade_effect for card in shop.owned_coach_upgrades
-                    if card.coach_upgrade_effect is not None)
-    power_kind = (FootballCoachUpgradeKind.OFFENSE_POWER_BOOST if offense
-                  else FootballCoachUpgradeKind.DEFENSE_POWER_BOOST)
-    volatility_kind = (FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION if offense
-                       else FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION)
-    stamina_kind = (FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST if offense
-                    else FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST)
-    power = (player.power * player_contribution_modifier(player, (player,), modifier)
-             * (1 + min(MAX_COACH_POWER_BONUS, coach_upgrade_magnitude(effects, power_kind))))
-    volatility = player.volatility * (
-        1 - min(MAX_COACH_VOLATILITY_REDUCTION, coach_upgrade_magnitude(effects, volatility_kind))
-    )
-    stamina = min(1.0, player.stamina + min(
-        MAX_COACH_STAMINA_BONUS, coach_upgrade_magnitude(effects, stamina_kind)))
-    return power, volatility, stamina
+    return shop.coached_player_stats(shop.roster, position)
 
 
 def _text_height(text: str, font: pygame.font.Font, width: int, gap: int = 0) -> int:
@@ -167,8 +148,8 @@ def _comparison(value: float, base: float, *, lower_is_better: bool, percentage:
     delta = round(value - base, 8)
     beneficial = -delta if lower_is_better else delta
     color = _POSITIVE if beneficial > 0 else _NEGATIVE if beneficial < 0 else _NEUTRAL
-    amount = delta * 100 if percentage else delta
-    return f"({amount:+g}{' pp' if percentage else ''})", color
+    displayed = _draft_percentage(round(value, 8)) if percentage else f"{round(value, 8):g}"
+    return f"({displayed})", color
 
 
 def _draw_stat(surface: pygame.Surface, x: int, y: int, label: str, base: float,
@@ -291,6 +272,10 @@ def _draw_roster(surface: pygame.Surface, rect: pygame.Rect, state: FootballGame
     actual.height = max(rect.height, needed)
     _panel(surface, actual)
     draw_text(surface, "TEAM DEPTH CHART", (rect.left + 12, rect.top + 8), _font(16, True), _TEXT)
+    if shop.pending_player_upgrades:
+        pending_text = f"{len(shop.pending_player_upgrades)} PENDING NEXT MATCH / DETAILS"
+        draw_text(surface, pending_text,
+                  (rect.right - 12 - font.size(pending_text)[0], rect.top + 10), font, _MUTED)
     top = rect.top + 30
     for row, height in enumerate(heights):
         for column, position in enumerate(PLAYER_DRAFT_ORDER[row * columns:(row + 1) * columns]):
@@ -343,8 +328,33 @@ def _draw_details(surface: pygame.Surface, rect: pygame.Rect,
     width = rect.width - 32
     rows = []
     for upgrade in shop.purchased_upgrades:
-        rows.append(f"{upgrade.name} / {_POSITION_LABELS[upgrade.position]} "
-                    f"{upgrade.stat.value.upper()} +{upgrade.amount:g}: {upgrade.description}")
+        if upgrade.duration is FootballUpgradeDuration.PERMANENT:
+            rows.append(f"{upgrade.name}: {upgrade.description}")
+    next_roster = shop.next_match_roster
+    pending_groups = {}
+    for upgrade in shop.pending_player_upgrades:
+        key = (upgrade.position, upgrade.stat)
+        pending_groups.setdefault(key, []).append(upgrade)
+    for (position, stat), upgrades in pending_groups.items():
+        before = player_upgrade_stat_value(shop.roster.players[position], stat)
+        after = player_upgrade_stat_value(next_roster.players[position], stat)
+        effective_before = shop.coached_player_stat(shop.roster, position, stat)
+        effective_after = shop.coached_player_stat(next_roster, position, stat)
+        nominal = player_upgrade_effect_text(stat, sum(upgrade.amount for upgrade in upgrades))
+        rows.append(
+            f"PENDING NEXT MATCH / {_POSITION_LABELS[position]} {stat.value.upper()} "
+            f"({len(upgrades)} purchases)\n"
+            f"Nominal total: {nominal}. Raw run roster {stat_value(stat, before)} -> "
+            f"raw next match {stat_value(stat, after)}; change {stat_change(stat, after - before)}. "
+            f"Coached next match {stat_value(stat, effective_before)} -> "
+            f"{stat_value(stat, effective_after)}; change {stat_change(stat, effective_after - effective_before)}. "
+            "Power excludes fatigue, partnership and scheme. "
+            "Stamina max 100%; volatility min 0%. Not permanent."
+            + (" Changes in % are percentage points." if stat is not FootballUpgradeStat.POWER else "")
+            + (f" {VOLATILITY_SPREAD_EXPLANATION}" if stat is FootballUpgradeStat.VOLATILITY else "")
+        )
+        for upgrade in upgrades:
+            rows.append(f"PENDING NEXT MATCH / {upgrade.name}: {upgrade.description}")
     for card in shop.owned_coach_upgrades:
         sections = coach_upgrade_detail_sections(card)
         rows.append("\n".join((f"COACH / {sections[0]}", *sections[1:])))
@@ -425,7 +435,7 @@ def draw_depth_chart(
         DepthChartButton("BACK TO SHOP", leave, pygame.Rect(content.right - back_width, footer_y, back_width, 32)),
     ]
     hint = ("Scroll: wheel / Page Up / Page Down" if interaction.depth_max_scroll else
-            "POWER change = contribution without partnership or fatigue; "
-            "VOLATILITY / STAMINA changes in percentage points")
+            "Modified power excludes partnership, fatigue and scheme; "
+            "pending effects are separate and shown in details.")
     draw_text(surface, hint, (content.left + 2, content.bottom - 9), _font(11), _MUTED)
     return buttons

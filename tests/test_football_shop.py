@@ -26,7 +26,9 @@ from src.engine.football_player_catalog import player_type_for_id
 from src.engine.football_shop import (
     ACTION_POINT_BUDGET,
     CARD_REMOVAL_COST,
+    COACH_UPGRADE_CATALOG,
     MIN_PLAYBOOK_DECK_SIZE,
+    PLAYER_UPGRADE_CATALOG,
     POWER_UPGRADE_AMOUNT,
     RARITY_WEIGHTS,
     STAMINA_UPGRADE_AMOUNT,
@@ -36,9 +38,17 @@ from src.engine.football_shop import (
     FootballShopRarity,
     FootballShopSection,
     FootballUpgrade,
+    FootballUpgradeDuration,
     FootballUpgradeStat,
+    _player_upgrade_catalog,
+    apply_player_upgrade,
+    apply_player_upgrades,
+    player_upgrade_effect_text,
 )
-from src.engine.football_simulator import FootballMatchSimulator
+from src.engine.football_coaches import COACH_PAIR_OFFERS
+from src.engine.football_simulator import (
+    FootballMatchSimulator, calculate_matchup_power, calculate_play_estimate,
+)
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballTeamBuilder
 
 
@@ -73,20 +83,301 @@ def _drafted_roster(seed: int = 17) -> FootballRoster:
     return builder.build_roster()
 
 
+def test_complete_player_upgrade_catalog_has_exact_metadata_and_effects() -> None:
+    cards = PLAYER_UPGRADE_CATALOG
+    names = {
+        FootballPosition.QB: "QB", FootballPosition.RB: "RB", FootballPosition.WR: "WR",
+        FootballPosition.O_LINE: "O-line", FootballPosition.D_LINE: "D-line",
+        FootballPosition.LINEBACKERS: "Linebacker", FootballPosition.CORNERBACKS: "Cornerback",
+        FootballPosition.SAFETIES: "Safety",
+    }
+    assert len(cards) == len({card.card_id for card in cards}) == 192
+    combinations = set()
+    for card in cards:
+        upgrade = card.upgrade
+        assert upgrade is not None
+        key = (upgrade.position, upgrade.stat, upgrade.rarity, upgrade.duration)
+        combinations.add(key)
+        rank = list(FootballShopRarity).index(upgrade.rarity) + 1
+        factor = 2 if upgrade.duration is FootballUpgradeDuration.TEMPORARY else 1
+        unit = {FootballUpgradeStat.POWER: 1, FootballUpgradeStat.STAMINA: 0.05,
+                FootballUpgradeStat.VOLATILITY: 0.01}[upgrade.stat]
+        assert upgrade.amount == pytest.approx(rank * factor * unit)
+        assert card.cost == (2 if factor == 2 else 3)
+        assert upgrade.duration.value.title() in card.name
+        assert upgrade.rarity.value.replace("_", " ").title() in card.name
+        assert names[upgrade.position] in card.name
+        assert upgrade.stat.value.title() in card.name
+        assert player_upgrade_effect_text(upgrade.stat, upgrade.amount) in card.description
+        assert f"{card.cost} AP" in card.description
+        assert card.eligible(_roster(stamina=1.0))
+    assert len(combinations) == 8 * 3 * 4 * 2
+
+
+def test_player_catalog_offer_rarity_distribution() -> None:
+    counts = {rarity: 0 for rarity in FootballShopRarity}
+    for seed in range(1000):
+        shop = FootballShop(_roster(), seed)
+        counts[shop.offer[0].rarity] += 1
+        assert len({upgrade.upgrade_id for upgrade in shop.offer}) == 3
+    for rarity, weight in RARITY_WEIGHTS.items():
+        assert abs(counts[rarity] - weight * 10) < 70
+
+
+@pytest.mark.parametrize("duration", list(FootballUpgradeDuration))
+@pytest.mark.parametrize("stat", list(FootballUpgradeStat))
+def test_repeat_after_reroll_stacks_and_clamps(duration, stat) -> None:
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is stat
+                and card.upgrade.rarity is FootballShopRarity.VERY_RARE
+                and card.upgrade.duration is duration)
+    original = _roster(stamina=0.75)
+    shop = FootballShop(original, 11, catalogs={FootballShopSection.PLAYER_UPGRADES: (card,)})
+    for purchase in range(3):
+        slots = shop.state.section(FootballShopSection.PLAYER_UPGRADES).slots
+        assert [slot.card for slot in slots[:3]] == [card, None, None]
+        shop.buy_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+        if purchase < 2:
+            shop.move_to_next_day()
+    assert len(shop.purchased_upgrades) == 3
+    permanent = shop.roster.players[FootballPosition.QB]
+    effective = shop.match_roster().players[FootballPosition.QB]
+    target = permanent if duration is FootballUpgradeDuration.PERMANENT else effective
+    if duration is FootballUpgradeDuration.TEMPORARY:
+        assert permanent == original.players[FootballPosition.QB]
+        assert len(shop.state.pending_player_upgrades) == 3
+    if stat is FootballUpgradeStat.POWER:
+        assert target.power == pytest.approx(10 + 3 * card.upgrade.amount)
+        assert target.power > 20
+    elif stat is FootballUpgradeStat.STAMINA:
+        assert target.stamina == 1
+    else:
+        assert target.volatility == pytest.approx(max(0, 0.2 - 3 * card.upgrade.amount))
+
+
+def test_temporary_stats_feed_match_power_fatigue_and_volatility() -> None:
+    original = _roster()
+    players = dict(original.players)
+    players[FootballPosition.QB] = replace(players[FootballPosition.QB], volatility=0.10)
+    original = replace(original, players=players)
+    cards = tuple(card for card in PLAYER_UPGRADE_CATALOG
+                  if card.upgrade.position is FootballPosition.QB
+                  and card.upgrade.rarity is FootballShopRarity.COMMON
+                  and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY)
+    shop = FootballShop(original, 11, catalogs={FootballShopSection.PLAYER_UPGRADES: cards})
+    for card in cards:
+        shop.buy_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
+    effective = shop.match_roster()
+    qb = effective.players[FootballPosition.QB]
+    assert (qb.power, qb.stamina, qb.volatility) == pytest.approx((12.0, 0.85, 0.08))
+    assert shop.roster == original
+    defense = _roster("Defense")
+    play, scheme = OffensivePlayAction.PA_PASS, DefensiveSchemeAction.SCREEN_PASS
+    before = calculate_play_estimate(original, defense, play, scheme, prior_plays=30)
+    after = calculate_play_estimate(effective, defense, play, scheme, prior_plays=30)
+    assert after.yardage_spread < before.yardage_spread
+    before_power = calculate_matchup_power(original, defense, play, scheme, prior_plays=30)
+    after_power = calculate_matchup_power(effective, defense, play, scheme, prior_plays=30)
+    assert after_power.offense > before_power.offense
+
+
+def test_permanent_and_temporary_upgrades_combine_at_bounds() -> None:
+    original = _roster(stamina=0.95)
+    players = dict(original.players)
+    players[FootballPosition.QB] = replace(
+        players[FootballPosition.QB], power=1000, volatility=0.01,
+    )
+    original = replace(original, players=players)
+    cards = tuple(card for card in PLAYER_UPGRADE_CATALOG
+                  if card.upgrade.position is FootballPosition.QB
+                  and card.upgrade.rarity is FootballShopRarity.COMMON
+                  and card.upgrade.stat in (FootballUpgradeStat.STAMINA, FootballUpgradeStat.VOLATILITY))
+    shop = FootballShop(original, 11, catalogs={FootballShopSection.PLAYER_UPGRADES: cards})
+    for card in shop.state.section(FootballShopSection.PLAYER_UPGRADES).slots[:3]:
+        shop.buy_card(FootballShopSection.PLAYER_UPGRADES, card.card.card_id)
+    qb = shop.match_roster().players[FootballPosition.QB]
+    assert qb.stamina == 1.0 and qb.volatility == 0.0
+    power = next(card for card in PLAYER_UPGRADE_CATALOG
+                 if card.upgrade.position is FootballPosition.QB
+                 and card.upgrade.stat is FootballUpgradeStat.POWER
+                 and card.upgrade.duration is FootballUpgradeDuration.PERMANENT
+                 and card.upgrade.rarity is FootballShopRarity.VERY_RARE)
+    high_power = power.effect(original).players[FootballPosition.QB].power
+    assert high_power == 1004
+
+
+@pytest.mark.parametrize(
+    ("stat", "initial", "partial", "permanent", "cap"),
+    [
+        (FootballUpgradeStat.STAMINA, 0.94, 0.01, 0.01, 1.0),
+        (FootballUpgradeStat.VOLATILITY, 0.025, -0.015, -0.01, 0.0),
+    ],
+)
+def test_projection_tracks_partial_and_zero_changes_across_scopes(
+    stat, initial, partial, permanent, cap
+) -> None:
+    position = FootballPosition.QB
+    roster = _roster()
+    player = replace(roster.players[position], **{stat.value: initial})
+    roster = replace(roster, players={**roster.players, position: player})
+    cards = {
+        duration: next(card for card in PLAYER_UPGRADE_CATALOG
+                       if card.upgrade.position is position
+                       and card.upgrade.stat is stat
+                       and card.rarity is FootballShopRarity.COMMON
+                       and card.upgrade.duration is duration)
+        for duration in FootballUpgradeDuration
+    }
+    shop = FootballShop(roster, 1, catalogs={
+        FootballShopSection.PLAYER_UPGRADES: tuple(cards.values()),
+    })
+    perm = cards[FootballUpgradeDuration.PERMANENT]
+    temp = cards[FootballUpgradeDuration.TEMPORARY]
+    shop.buy_card(FootballShopSection.PLAYER_UPGRADES, perm.card_id)
+    before = shop.state
+    preview = before.project_player_upgrade(temp.upgrade)
+    assert preview.run.change == 0
+    assert preview.next_match.change == pytest.approx(partial)
+    assert preview.next_match.after == pytest.approx(cap)
+    assert shop.state == before
+    shop.buy_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    assert getattr(shop.match_roster().players[position], stat.value) == pytest.approx(cap)
+    shop.move_to_next_day()
+    next_preview = shop.state.project_player_upgrade(temp.upgrade)
+    assert next_preview.next_match.change == pytest.approx(0)
+    run_preview = shop.state.project_player_upgrade(perm.upgrade)
+    assert run_preview.run.change == pytest.approx(permanent)
+    assert run_preview.next_match.change == pytest.approx(0)
+    assert temp.eligible(shop.roster) and perm.eligible(shop.roster)
+    shop.buy_card(FootballShopSection.PLAYER_UPGRADES, temp.card_id)
+    shop.buy_card(FootballShopSection.PLAYER_UPGRADES, perm.card_id)
+    assert getattr(shop.roster.players[position], stat.value) == pytest.approx(
+        min(1.0, max(0.0, initial + 2 * permanent))
+        if stat is FootballUpgradeStat.VOLATILITY else cap
+    )
+    assert getattr(shop.match_roster().players[position], stat.value) == pytest.approx(cap)
+    if stat is FootballUpgradeStat.STAMINA:
+        assert shop.state.project_player_upgrade(perm.upgrade).run.change == pytest.approx(0)
+
+
+@pytest.mark.parametrize("position", [FootballPosition.QB, FootballPosition.D_LINE])
+@pytest.mark.parametrize("stat", list(FootballUpgradeStat))
+@pytest.mark.parametrize("duration", list(FootballUpgradeDuration))
+def test_coached_projection_matches_simulator_with_pending_upgrades(position, stat, duration) -> None:
+    offense = position is FootballPosition.QB
+    roster = replace(_roster(stamina=0.82), coach_assignment=COACH_PAIR_OFFERS[0].assignment)
+    other = _roster("Opponent")
+    kinds = (
+        (FootballCoachUpgradeKind.OFFENSE_POWER_BOOST, FootballCoachUpgradeKind.OFFENSE_STAMINA_BOOST,
+         FootballCoachUpgradeKind.OFFENSE_VOLATILITY_REDUCTION)
+        if offense else
+        (FootballCoachUpgradeKind.DEFENSE_POWER_BOOST, FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST,
+         FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION)
+    )
+    coaches = tuple(next(card for card in COACH_UPGRADE_CATALOG
+                         if card.coach_upgrade_effect.kind is kind) for kind in kinds)
+    effects = tuple(card.coach_upgrade_effect for card in coaches)
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is position and card.upgrade.stat is stat
+                and card.upgrade.duration is duration and card.rarity is FootballShopRarity.COMMON)
+    pending = next(card.upgrade for card in PLAYER_UPGRADE_CATALOG
+                   if card.upgrade.position is position and card.upgrade.stat is stat
+                   and card.upgrade.duration is FootballUpgradeDuration.TEMPORARY
+                   and card.rarity is FootballShopRarity.COMMON)
+    state = replace(FootballShop(roster, 1).state, owned_coach_upgrades=coaches,
+                    pending_player_upgrades=(pending,))
+    preview = state.project_player_upgrade(card.upgrade)
+    before = state.next_match_roster
+    after = (apply_player_upgrades(apply_player_upgrade(roster, card.upgrade), (pending,))
+             if duration is FootballUpgradeDuration.PERMANENT
+             else apply_player_upgrade(before, card.upgrade))
+    play, scheme = OffensivePlayAction.DEEP_PASS, DefensiveSchemeAction.RB_RUN
+
+    def estimate(team, prior_plays):
+        return calculate_play_estimate(
+            team if offense else other, other if offense else team, play, scheme,
+            prior_plays=prior_plays,
+            offense_coach_upgrades=effects if offense else (),
+            defense_coach_upgrades=effects if not offense else (),
+        )
+
+    prior = 30 if stat is FootballUpgradeStat.STAMINA else 0
+    first, second = estimate(before, prior), estimate(after, prior)
+    if stat is FootballUpgradeStat.VOLATILITY:
+        contributors = (OFFENSIVE_PLAY_CATALOG[play.value].contributors if offense
+                        else DEFENSIVE_SCHEME_CATALOG[scheme.value].contributors)
+        actual_change = (second.yardage_spread - first.yardage_spread) * len(contributors) / 6
+    else:
+        first_power = first.matchup.offense if offense else first.matchup.defense
+        second_power = second.matchup.offense if offense else second.matchup.defense
+        actual_change = second_power - first_power
+        if stat is FootballUpgradeStat.STAMINA:
+            baseline_power = state.coached_player_stats(before, position)[0]
+            actual_change /= baseline_power * 0.1
+    assert preview.effective_next_match.change == pytest.approx(actual_change)
+    assert state.roster == roster and state.pending_player_upgrades == (pending,)
+
+
+@pytest.mark.parametrize("position,coach_id", [
+    (FootballPosition.QB, "fourth_quarter_conditioning"),
+    (FootballPosition.D_LINE, "iron_lungs"),
+])
+@pytest.mark.parametrize("stamina,expected", [(0.85, 0.05), (0.90, 0.0)])
+@pytest.mark.parametrize("duration", list(FootballUpgradeDuration))
+def test_coached_stamina_preview_distinguishes_raw_and_capped_match(
+    position, coach_id, stamina, expected, duration
+) -> None:
+    roster = _roster(stamina=stamina)
+    coach = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == coach_id)
+    card = next(card for card in PLAYER_UPGRADE_CATALOG
+                if card.upgrade.position is position
+                and card.upgrade.stat is FootballUpgradeStat.STAMINA
+                and card.upgrade.duration is duration and card.rarity is FootballShopRarity.COMMON)
+    state = replace(FootballShop(roster, 1).state, owned_coach_upgrades=(coach,))
+    projection = state.project_player_upgrade(card.upgrade)
+    assert projection.next_match.change == pytest.approx(card.upgrade.amount)
+    assert projection.effective_next_match.change == pytest.approx(expected)
+    if duration is FootballUpgradeDuration.PERMANENT:
+        assert projection.run.change == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("position,ids", [
+    (FootballPosition.QB, ("two_minute_drill", "fourth_quarter_conditioning", "rhythm_install")),
+    (FootballPosition.D_LINE, ("front_seven_film", "iron_lungs", "disguise_package")),
+])
+def test_coached_projection_stacks_effects_with_simulator_caps(position, ids) -> None:
+    roster = _roster(stamina=0.6)
+    cards = tuple(next(card for card in COACH_UPGRADE_CATALOG if card.card_id == card_id)
+                  for card_id in ids)
+    effects = tuple(card.coach_upgrade_effect for card in cards for _ in range(5))
+    state = replace(FootballShop(roster, 1).state,
+                    owned_coach_upgrades=tuple(card for card in cards for _ in range(5)))
+    power, volatility, stamina = state.coached_player_stats(roster, position)
+    assert power == pytest.approx(12)
+    assert volatility == pytest.approx(0.14)
+    assert stamina == pytest.approx(0.9)
+    offense = position is FootballPosition.QB
+    result = calculate_play_estimate(
+        roster, roster, OffensivePlayAction.DEEP_PASS, DefensiveSchemeAction.RB_RUN,
+        prior_plays=30, offense_coach_upgrades=effects if offense else (),
+        defense_coach_upgrades=effects if not offense else (),
+    )
+    matchup = result.matchup.offense if offense else result.matchup.defense
+    assert matchup == pytest.approx(2 * power * (1 - 0.1 * (1 - stamina)))
+    assert result.yardage_spread == pytest.approx((0.14 + 0.2) * 6)
+
+
 def _shop_with_both_upgrade_stats(
     roster: FootballRoster,
     seed: int,
 ) -> FootballShop:
-    shop = FootballShop(roster, seed)
-    for _ in range(10):
-        stats = {upgrade.stat for upgrade in shop.offer}
-        if {
-            FootballUpgradeStat.POWER,
-            FootballUpgradeStat.STAMINA,
-        } <= stats:
-            return shop
-        shop.move_to_next_day()
-    raise AssertionError("The seeded shop did not offer both upgrade stats.")
+    cards = tuple(card for card in _player_upgrade_catalog()
+                  if card.upgrade.position is FootballPosition.QB
+                  and card.upgrade.rarity is FootballShopRarity.COMMON
+                  and card.upgrade.duration is FootballUpgradeDuration.PERMANENT
+                  and card.upgrade.stat in (FootballUpgradeStat.POWER, FootballUpgradeStat.STAMINA))
+    return FootballShop(roster, seed, catalogs={FootballShopSection.PLAYER_UPGRADES: cards})
 
 
 def test_shop_offer_is_three_distinct_affordable_upgrades_and_seeded() -> None:
@@ -99,15 +390,7 @@ def test_shop_offer_is_three_distinct_affordable_upgrades_and_seeded() -> None:
     assert len({upgrade.upgrade_id for upgrade in first.offer}) == 3
     assert all(0 < upgrade.cost <= TRAINING_POINT_BUDGET for upgrade in first.offer)
     assert first.remaining_ap == ACTION_POINT_BUDGET
-    assert all(
-        upgrade.rarity
-        is (
-            FootballShopRarity.UNCOMMON
-            if upgrade.stat is FootballUpgradeStat.POWER
-            else FootballShopRarity.COMMON
-        )
-        for upgrade in first.offer
-    )
+    assert all(upgrade.rarity in FootballShopRarity for upgrade in first.offer)
     assert first.offer == replay.offer
     assert first.state == replay.state
 
@@ -138,7 +421,7 @@ def test_power_and_stamina_purchases_change_only_the_targeted_stat() -> None:
     ap_before_stamina = shop.remaining_ap
     shop.buy(stamina_upgrade)
     upgraded = shop.roster.players[stamina_upgrade.position]
-    assert upgraded.stamina == old_stamina_target.stamina + STAMINA_UPGRADE_AMOUNT
+    assert upgraded.stamina == pytest.approx(old_stamina_target.stamina + stamina_upgrade.amount)
     assert upgraded.power == old_stamina_target.power
     assert upgraded.volatility == old_stamina_target.volatility
     assert 0 <= upgraded.stamina <= 1
@@ -203,26 +486,12 @@ def test_unoffered_duplicate_invalid_and_finished_actions_fail_atomically() -> N
     assert shop.state == finished_state
 
 
-def test_capped_stamina_upgrades_are_excluded_and_cannot_be_bought() -> None:
+def test_capped_stamina_upgrades_remain_available_and_stay_capped() -> None:
     roster = _roster(stamina=1.0)
-    shop = FootballShop(roster, 61)
-
-    assert all(
-        upgrade.stat is not FootballUpgradeStat.STAMINA for upgrade in shop.offer
-    )
-    capped_upgrade = FootballUpgrade(
-        upgrade_id="qb_stamina",
-        name="QB stamina training",
-        description="Increase QB player stamina by 0.1.",
-        position=FootballPosition.QB,
-        stat=FootballUpgradeStat.STAMINA,
-        amount=STAMINA_UPGRADE_AMOUNT,
-        cost=2,
-    )
-    before = shop.state
-    with pytest.raises(ValueError, match="capped stamina upgrades are excluded"):
-        shop.buy(capped_upgrade)
-    assert shop.state == before
+    shop = _shop_with_both_upgrade_stats(roster, 61)
+    capped_upgrade = next(upgrade for upgrade in shop.offer if upgrade.stat is FootballUpgradeStat.STAMINA)
+    shop.buy(capped_upgrade)
+    assert shop.roster.players[capped_upgrade.position].stamina == 1.0
 
 
 def test_roster_updates_are_immutable_valid_and_seeded_outcomes_match() -> None:
@@ -255,6 +524,11 @@ def test_roster_updates_are_immutable_valid_and_seeded_outcomes_match() -> None:
 def test_shop_upgrade_preserves_specialist_identity_and_inactive_perk_text() -> None:
     original_roster = _drafted_roster()
     shop = FootballShop(original_roster, 19)
+    card = next(card for card in _player_upgrade_catalog()
+                if card.upgrade.position is FootballPosition.QB
+                and card.upgrade.stat is FootballUpgradeStat.POWER
+                and card.upgrade.duration is FootballUpgradeDuration.PERMANENT)
+    shop = FootballShop(original_roster, 19, catalogs={FootballShopSection.PLAYER_UPGRADES: (card,)})
     upgrade = shop.offer[0]
     original_player = original_roster.players[upgrade.position]
     assert original_player.player_type_id is not None
@@ -805,9 +1079,8 @@ def test_purchase_stays_visible_until_reroll_and_is_eligible_next_visit() -> Non
 
     next_day = shop.move_to_next_day()
     assert next_day.day == 2 and next_day.remaining_ap == 8
-    assert all(slot.card is None for slot in next_day.section(
-        FootballShopSection.PLAYER_UPGRADES
-    ).slots[:3])
+    assert next_day.section(FootballShopSection.PLAYER_UPGRADES).slots[0].card is card
+    assert not next_day.section(FootballShopSection.PLAYER_UPGRADES).slots[0].purchased
     assert next_day.purchased_cards == (card,)
 
     shop.finish()

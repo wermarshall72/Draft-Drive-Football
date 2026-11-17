@@ -76,7 +76,18 @@ covers extracted interaction state.
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
-  and removal validation. Coach-upgrade purchase history and descriptions are
+  and removal validation. Its 192 individual-player cards apply permanent
+  upgrades to the roster and retain temporary upgrades as pending run-local
+  state. The shop state projects raw run and next-match roster effects and
+  coach-adjusted next-match effects; the Depth Chart separates pending
+  summaries from permanent modified stats, with combined effects in details.
+  [football_simulator.py](src/engine/football_simulator.py) shares the coach
+  bonus, cap, and baseline player-stat calculations with these projections.
+  Power projections exclude play-specific fatigue, partnership, and scheme.
+  Player-upgrade cards show nominal effects with packaged duration icons;
+  [football_player_upgrade_details.py](src/ui/football_player_upgrade_details.py)
+  formats pending changes and roster values in Depth Chart details.
+  Coach-upgrade purchase history and descriptions are
   shown in the Depth Chart's scrollable upgrades/perk-details view. The
   controller retains draft-time players and appearances in run-local state;
   the compact chart compares them with persistent coach-adjusted contributions
@@ -128,7 +139,9 @@ covers extracted interaction state.
 - **Run progression:** [football_controller.py](src/engine/football_controller.py)
   connects draft, shop, simulator, AI, results, and subsequent shops.
   It tracks actual games played separately from scheduled games skipped by
-  Bye Week; [football_result.py](src/ui/football_result.py) renders the
+  Bye Week. Pending player upgrades are applied to the human match roster and
+  cleared only when a match result is recorded, not on a Bye Week;
+  [football_result.py](src/ui/football_result.py) renders the
   game-10 skip as a marker without a fabricated score. Coach upgrades are
   implemented as an initial catalog; player perk effects and a playable
   playoff bracket remain unfinished. See

@@ -366,7 +366,7 @@ class FootballGameController:
         )
         match_seed = self._match_seed_rng.getrandbits(64)
         match_state = FootballMatchState(
-            team_a=self._shop.roster,
+            team_a=self._shop.match_roster(),
             team_b=opponent,
             random_seed=match_seed,
             team_a_score=0,
@@ -434,6 +434,7 @@ class FootballGameController:
         result = match.final_result
         if result is None or not result.completed or result.winner is None:
             raise RuntimeError("A completed match must include a decisive result.")
+        self._require_shop().complete_match()
         if result.winner is FootballTeamSide.TEAM_A:
             self._wins += 1
         else:
