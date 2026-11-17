@@ -153,6 +153,27 @@ class OffensivePlayAction(str, Enum):
     SLOT_SLANT = "slot_slant"
     DEEP_DIG = "deep_dig"
     GO_ROUTE = "go_route"
+    INSIDE_ZONE = "inside_zone"
+    COUNTER_RUN = "counter_run"
+    TUNNEL_SCREEN = "tunnel_screen"
+    RB_SCREEN = "rb_screen"
+    WR_SCREEN = "wr_screen"
+    DELAY_SCREEN = "delay_screen"
+    BOOT_FLOOD = "boot_flood"
+    POST_WHEEL = "post_wheel"
+    PA_CROSSER = "pa_crosser"
+    QB_KEEPER_PA = "qb_keeper_pa"
+    STICK_CONCEPT = "stick_concept"
+    RB_ANGLE = "rb_angle"
+    QUICK_HITCH = "quick_hitch"
+    DIG_ROUTE = "dig_route"
+    CURL_COMEBACK = "curl_comeback"
+    SEAM_PASS = "seam_pass"
+    CROSSING_ROUTE = "crossing_route"
+    POST_ROUTE = "post_route"
+    CORNER_ROUTE = "corner_route"
+    DOUBLE_MOVE = "double_move"
+    GO_BALL = "go_ball"
 
 
 class DefensiveSchemeAction(str, Enum):
@@ -171,6 +192,24 @@ class DefensiveSchemeAction(str, Enum):
     NICKEL_UNDER = "nickel_under"
     TWO_HIGH_PRESSURE = "two_high_pressure"
     QUARTERS_COVERAGE = "quarters_coverage"
+    BEAR_FRONT = "bear_front"
+    MAN_PRESS = "man_press"
+    SCREEN_BLITZ = "screen_blitz"
+    ROBBER_COVERAGE = "robber_coverage"
+    SINKING_ZONE = "sinking_zone"
+    TWO_MAN_UNDER = "two_man_under"
+    HOT_BLITZ = "hot_blitz"
+    THREE_DEEP_BLITZ = "three_deep_blitz"
+    PREVENT_COVERAGE = "prevent_coverage"
+
+
+class FootballBonusCardAction(str, Enum):
+    OFFENSIVE_DRAW = "offensive_draw"
+    DEFENSIVE_DRAW = "defensive_draw"
+    OPPONENT_DISCARD = "opponent_discard"
+    OFFENSIVE_DRAW_DISCARD = "offensive_draw_discard"
+    DEFENSIVE_DRAW_DISCARD = "defensive_draw_discard"
+    CHALLENGE = "challenge"
 
 
 class FootballFourthDownAction(str, Enum):
@@ -185,17 +224,38 @@ OFFENSIVE_PLAY_FAMILIES = MappingProxyType(
         OffensivePlayAction.QB_SNEAK: FootballCardFamily.RB_RUN,
         OffensivePlayAction.JET_SWEEP: FootballCardFamily.RB_RUN,
         OffensivePlayAction.POWER_TOSS: FootballCardFamily.RB_RUN,
+        OffensivePlayAction.INSIDE_ZONE: FootballCardFamily.RB_RUN,
+        OffensivePlayAction.COUNTER_RUN: FootballCardFamily.RB_RUN,
         OffensivePlayAction.SCREEN_PASS: FootballCardFamily.SCREEN_PASS,
         OffensivePlayAction.BUBBLE_SCREEN: FootballCardFamily.SCREEN_PASS,
+        OffensivePlayAction.TUNNEL_SCREEN: FootballCardFamily.SCREEN_PASS,
+        OffensivePlayAction.RB_SCREEN: FootballCardFamily.SCREEN_PASS,
+        OffensivePlayAction.WR_SCREEN: FootballCardFamily.SCREEN_PASS,
+        OffensivePlayAction.DELAY_SCREEN: FootballCardFamily.SCREEN_PASS,
         OffensivePlayAction.PA_PASS: FootballCardFamily.PA_PASS,
         OffensivePlayAction.BOOTLEG_KEEPER: FootballCardFamily.PA_PASS,
+        OffensivePlayAction.BOOT_FLOOD: FootballCardFamily.PA_PASS,
+        OffensivePlayAction.POST_WHEEL: FootballCardFamily.PA_PASS,
+        OffensivePlayAction.PA_CROSSER: FootballCardFamily.PA_PASS,
+        OffensivePlayAction.QB_KEEPER_PA: FootballCardFamily.PA_PASS,
         OffensivePlayAction.SHORT_PASS: FootballCardFamily.SHORT_PASS,
         OffensivePlayAction.QUICK_OUT: FootballCardFamily.SHORT_PASS,
         OffensivePlayAction.SLOT_SLANT: FootballCardFamily.SHORT_PASS,
+        OffensivePlayAction.STICK_CONCEPT: FootballCardFamily.SHORT_PASS,
+        OffensivePlayAction.RB_ANGLE: FootballCardFamily.SHORT_PASS,
+        OffensivePlayAction.QUICK_HITCH: FootballCardFamily.SHORT_PASS,
         OffensivePlayAction.MEDIUM_PASS: FootballCardFamily.MEDIUM_PASS,
         OffensivePlayAction.DEEP_DIG: FootballCardFamily.MEDIUM_PASS,
+        OffensivePlayAction.DIG_ROUTE: FootballCardFamily.MEDIUM_PASS,
+        OffensivePlayAction.CURL_COMEBACK: FootballCardFamily.MEDIUM_PASS,
+        OffensivePlayAction.SEAM_PASS: FootballCardFamily.MEDIUM_PASS,
+        OffensivePlayAction.CROSSING_ROUTE: FootballCardFamily.MEDIUM_PASS,
         OffensivePlayAction.DEEP_PASS: FootballCardFamily.DEEP_PASS,
         OffensivePlayAction.GO_ROUTE: FootballCardFamily.DEEP_PASS,
+        OffensivePlayAction.POST_ROUTE: FootballCardFamily.DEEP_PASS,
+        OffensivePlayAction.CORNER_ROUTE: FootballCardFamily.DEEP_PASS,
+        OffensivePlayAction.DOUBLE_MOVE: FootballCardFamily.DEEP_PASS,
+        OffensivePlayAction.GO_BALL: FootballCardFamily.DEEP_PASS,
     }
 )
 
@@ -204,18 +264,27 @@ DEFENSIVE_SCHEME_FAMILIES = MappingProxyType(
         DefensiveSchemeAction.RB_RUN: FootballCardFamily.RB_RUN,
         DefensiveSchemeAction.GOAL_LINE_FRONT: FootballCardFamily.RB_RUN,
         DefensiveSchemeAction.SPILL_FRONT: FootballCardFamily.RB_RUN,
+        DefensiveSchemeAction.BEAR_FRONT: FootballCardFamily.RB_RUN,
         DefensiveSchemeAction.SCREEN_PASS: FootballCardFamily.SCREEN_PASS,
         DefensiveSchemeAction.PERIMETER_CHECK: FootballCardFamily.SCREEN_PASS,
+        DefensiveSchemeAction.MAN_PRESS: FootballCardFamily.SCREEN_PASS,
+        DefensiveSchemeAction.SCREEN_BLITZ: FootballCardFamily.SCREEN_PASS,
         DefensiveSchemeAction.PA_PASS: FootballCardFamily.PA_PASS,
         DefensiveSchemeAction.READ_REACT: FootballCardFamily.PA_PASS,
+        DefensiveSchemeAction.ROBBER_COVERAGE: FootballCardFamily.PA_PASS,
+        DefensiveSchemeAction.SINKING_ZONE: FootballCardFamily.PA_PASS,
         DefensiveSchemeAction.SHORT_PASS: FootballCardFamily.SHORT_PASS,
         DefensiveSchemeAction.NICKEL_UNDER: FootballCardFamily.SHORT_PASS,
+        DefensiveSchemeAction.TWO_MAN_UNDER: FootballCardFamily.SHORT_PASS,
+        DefensiveSchemeAction.HOT_BLITZ: FootballCardFamily.SHORT_PASS,
         DefensiveSchemeAction.MEDIUM_PASS: FootballCardFamily.MEDIUM_PASS,
         DefensiveSchemeAction.FIRE_ZONE_BLITZ: FootballCardFamily.MEDIUM_PASS,
         DefensiveSchemeAction.TWO_HIGH_PRESSURE: FootballCardFamily.MEDIUM_PASS,
+        DefensiveSchemeAction.THREE_DEEP_BLITZ: FootballCardFamily.MEDIUM_PASS,
         DefensiveSchemeAction.DEEP_PASS: FootballCardFamily.DEEP_PASS,
         DefensiveSchemeAction.COVER_TWO_SHELL: FootballCardFamily.DEEP_PASS,
         DefensiveSchemeAction.QUARTERS_COVERAGE: FootballCardFamily.DEEP_PASS,
+        DefensiveSchemeAction.PREVENT_COVERAGE: FootballCardFamily.DEEP_PASS,
     }
 )
 
@@ -520,6 +589,7 @@ class FootballMatchEvent:
     sequence: int
     action: (
         OffensivePlayAction
+        | FootballBonusCardAction
         | DefensiveSchemeAction
         | FootballFourthDownAction
         | FootballConversionAction
@@ -546,6 +616,7 @@ class FootballMatchEvent:
     blocked: bool = False
     card_id: str | None = None
     card_copy_id: str | None = None
+    reverses_event_sequences: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_nonnegative_int(self.sequence, "Event sequence")
@@ -555,6 +626,7 @@ class FootballMatchEvent:
             self.action,
             (
                 OffensivePlayAction,
+                FootballBonusCardAction,
                 DefensiveSchemeAction,
                 FootballFourthDownAction,
                 FootballConversionAction,
@@ -577,7 +649,24 @@ class FootballMatchEvent:
             _validate_name(self.card_copy_id, "Event card-copy identifier")
             if self.card_id is None:
                 raise ValueError("An event card copy must identify its catalog card.")
-        if isinstance(self.action, (OffensivePlayAction, DefensiveSchemeAction)):
+        if not isinstance(self.reverses_event_sequences, tuple) or any(
+            isinstance(sequence, bool)
+            or not isinstance(sequence, int)
+            or sequence < 1
+            or sequence >= self.sequence
+            for sequence in self.reverses_event_sequences
+        ) or len(self.reverses_event_sequences) != len(
+            set(self.reverses_event_sequences)
+        ):
+            raise ValueError("Reversed event sequences must be unique earlier events.")
+        if isinstance(
+            self.action,
+            (
+                OffensivePlayAction,
+                FootballBonusCardAction,
+                DefensiveSchemeAction,
+            ),
+        ):
             if self.card_id is not None and self.card_id != self.action.value:
                 raise ValueError("Event card identifier must match its selected action.")
         if self.action is FootballConversionAction.EXTRA_POINT and self.card_id is not None:

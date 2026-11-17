@@ -83,6 +83,29 @@ def _drafted_roster(seed: int = 17) -> FootballRoster:
     return builder.build_roster()
 
 
+class _FixedShopRng(random.Random):
+    def __init__(self, roll: float) -> None:
+        super().__init__(0)
+        self.roll = roll
+
+    def random(self) -> float:
+        super().random()
+        return self.roll
+
+
+class _SequenceShopRng(random.Random):
+    def __init__(self, rolls: tuple[float, ...]) -> None:
+        super().__init__(0)
+        self.rolls = iter(rolls)
+
+    def random(self) -> float:
+        super().random()
+        return next(self.rolls)
+
+    def choice(self, sequence):
+        return sequence[0]
+
+
 def test_complete_player_upgrade_catalog_has_exact_metadata_and_effects() -> None:
     cards = PLAYER_UPGRADE_CATALOG
     names = {
@@ -446,7 +469,7 @@ def test_multiple_purchases_compose_and_overspending_is_atomic() -> None:
     )
     shop = FootballShop(
         _roster(),
-        5,
+        rng=_FixedShopRng(0.1),
         catalogs={FootballShopSection.PLAYS_SCHEMES: (expensive_card,)},
     )
     before = shop.state
@@ -716,7 +739,7 @@ def test_buying_a_play_or_scheme_adds_one_owned_copy(
         name=definition.name,
         description=definition.description,
         section=FootballShopSection.PLAYS_SCHEMES,
-        rarity=FootballShopRarity.COMMON,
+        rarity=FootballShopRarity.RARE,
         cost=2,
         eligible=lambda _roster: True,
         effect=lambda roster: roster,
@@ -778,7 +801,7 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
         name="Remove One Card",
         description="Remove one owned play or scheme.",
         section=FootballShopSection.PLAYS_SCHEMES,
-        rarity=FootballShopRarity.COMMON,
+        rarity=FootballShopRarity.RARE,
         cost=CARD_REMOVAL_COST,
         eligible=lambda _roster: True,
         effect=lambda roster: roster,
@@ -786,7 +809,7 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
     )
     shop = FootballShop(
         _roster(),
-        47,
+        rng=_FixedShopRng(0.8),
         catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
     )
     initial = shop.state
@@ -810,13 +833,13 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
     assert removed.section(FootballShopSection.PLAYS_SCHEMES).slots[0].purchased
 
 
-def test_removal_respects_four_card_minimum_and_disables_empty_service_offer() -> None:
+def test_removal_respects_four_card_minimum_and_excludes_empty_service_offer() -> None:
     removal = FootballShopCard(
         card_id="remove-one-card",
         name="Remove One Card",
         description="Remove one owned play or scheme.",
         section=FootballShopSection.PLAYS_SCHEMES,
-        rarity=FootballShopRarity.COMMON,
+        rarity=FootballShopRarity.RARE,
         cost=CARD_REMOVAL_COST,
         eligible=lambda _roster: True,
         effect=lambda roster: roster,
@@ -824,7 +847,7 @@ def test_removal_respects_four_card_minimum_and_disables_empty_service_offer() -
     )
     shop = FootballShop(
         _roster(),
-        49,
+        rng=_FixedShopRng(0.8),
         catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
     )
     for visit in range(4):
@@ -846,10 +869,9 @@ def test_removal_respects_four_card_minimum_and_disables_empty_service_offer() -
     assert len(state.offensive_deck) == MIN_PLAYBOOK_DECK_SIZE
     assert len(state.defensive_deck) == MIN_PLAYBOOK_DECK_SIZE
     removal_slot = state.section(FootballShopSection.PLAYS_SCHEMES).slots[0]
-    assert removal_slot.card is not None
-    assert removal_slot.disabled_reason == "Both decks are at the 4-card minimum."
+    assert removal_slot.card is None
     before = shop.state
-    with pytest.raises(ValueError, match="4-card minimum"):
+    with pytest.raises(ValueError, match="not in the current offer"):
         shop.buy_card(FootballShopSection.PLAYS_SCHEMES, removal.card_id)
     assert shop.state == before
 
@@ -925,7 +947,7 @@ def test_play_slot_unlock_costs_and_catalog_cards_fill_each_new_slot() -> None:
     )
     shop = FootballShop(
         _roster(),
-        19,
+        rng=_FixedShopRng(0.5),
         catalogs={FootballShopSection.PLAYS_SCHEMES: cards},
     )
 
@@ -936,7 +958,10 @@ def test_play_slot_unlock_costs_and_catalog_cards_fill_each_new_slot() -> None:
     section = second.section(FootballShopSection.PLAYS_SCHEMES)
     assert second.remaining_ap == 3
     assert section.slots[5].unlocked and section.slots[5].card is not None
-    assert len({slot.card.card_id for slot in section.slots if slot.card}) == 6
+    assert all(
+        slot.card is not None and slot.card in cards
+        for slot in section.slots[:6]
+    )
 
 
 def test_coach_slot_unlock_is_available_after_game_three_and_can_be_deferred() -> None:
@@ -977,7 +1002,7 @@ def test_coach_slot_unlock_is_available_after_game_three_and_can_be_deferred() -
         shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 2)
 
 
-def test_rarity_weights_and_offer_eligibility_are_renormalized() -> None:
+def test_play_scheme_rarity_rolls_are_independent_and_offer_pools_are_respected() -> None:
     assert dict(RARITY_WEIGHTS) == {
         FootballShopRarity.COMMON: 40,
         FootballShopRarity.UNCOMMON: 30,
@@ -1003,8 +1028,10 @@ def test_rarity_weights_and_offer_eligibility_are_renormalized() -> None:
         assert first_card is not None
         counts[first_card.rarity] += 1
         offer = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
-        ids = [slot.card.card_id for slot in offer if slot.card is not None]
-        assert len(ids) == len(set(ids))
+        assert all(
+            slot.card is None or slot.card in all_rarities
+            for slot in offer
+        )
     for rarity, weight in RARITY_WEIGHTS.items():
         assert abs(counts[rarity] - weight * 10) < 70
 
@@ -1021,14 +1048,85 @@ def test_rarity_weights_and_offer_eligibility_are_renormalized() -> None:
     )
     shop = FootballShop(
         _roster(),
-        21,
+        rng=_FixedShopRng(0.8),
         catalogs={
             FootballShopSection.PLAYS_SCHEMES: (only_rare, ineligible_common)
         },
     )
     slots = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
     assert slots[0].card is only_rare
-    assert all(slot.card is None for slot in slots[1:4])
+    assert all(slot.card is only_rare for slot in slots[1:4])
+
+
+def test_each_play_scheme_offer_slot_rolls_its_own_rarity() -> None:
+    cards = tuple(
+        _future_catalog_card(
+            f"slot-{rarity.value}-{index}",
+            FootballShopSection.PLAYS_SCHEMES,
+            rarity,
+        )
+        for rarity in FootballShopRarity
+        for index in range(4)
+    )
+    shop = FootballShop(
+        _roster(),
+        seed=27,
+        catalogs={FootballShopSection.PLAYS_SCHEMES: cards},
+    )
+    shop._rng = _SequenceShopRng((0.39, 0.40, 0.70, 0.90))
+    offer = []
+    for _ in range(4):
+        card = shop._draw_card(FootballShopSection.PLAYS_SCHEMES, offer)
+        assert card is not None
+        offer.append(card)
+
+    assert tuple(card.rarity for card in offer) == tuple(FootballShopRarity)
+    assert len({card.card_id for card in offer}) == 4
+
+
+def test_play_scheme_offer_repeats_eligible_cards_after_rarity_pool_exhaustion() -> None:
+    common = _future_catalog_card(
+        "single-common",
+        FootballShopSection.PLAYS_SCHEMES,
+        FootballShopRarity.COMMON,
+    )
+    ineligible_common = _future_catalog_card(
+        "ineligible-common",
+        FootballShopSection.PLAYS_SCHEMES,
+        FootballShopRarity.COMMON,
+        eligible=lambda _roster: False,
+    )
+    rare = _future_catalog_card(
+        "single-rare",
+        FootballShopSection.PLAYS_SCHEMES,
+        FootballShopRarity.RARE,
+    )
+    shop = FootballShop(
+        _roster(),
+        seed=28,
+        catalogs={
+            FootballShopSection.PLAYER_UPGRADES: (),
+            FootballShopSection.PLAYS_SCHEMES: (
+                common,
+                ineligible_common,
+                rare,
+            ),
+            FootballShopSection.COACH_UPGRADES: (),
+        },
+    )
+    shop._rng = _SequenceShopRng((0.39, 0.39, 0.70, 0.70))
+    shop._reset_offers()
+
+    slots = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
+    offers = tuple(slot.card for slot in slots[:4])
+    assert offers == (common, common, rare, rare)
+    assert all(slot.card is not None for slot in slots[:4])
+    assert ineligible_common not in offers
+
+    for slot_index in range(4):
+        shop.buy_card(FootballShopSection.PLAYS_SCHEMES, slot_index)
+    assert shop.remaining_ap == 8
+    assert len(shop.state.purchased_cards) == 2
 
 
 def test_purchase_stays_visible_until_reroll_and_is_eligible_next_visit() -> None:
@@ -1124,8 +1222,8 @@ def test_reroll_refreshes_all_active_sections_deterministically() -> None:
         for index in range(6)
     )
     catalogs = {FootballShopSection.PLAYS_SCHEMES: play_cards}
-    first = FootballShop(_roster(), 24, catalogs=catalogs)
-    replay = FootballShop(_roster(), 24, catalogs=catalogs)
+    first = FootballShop(_roster(), rng=_FixedShopRng(0.5), catalogs=catalogs)
+    replay = FootballShop(_roster(), rng=_FixedShopRng(0.5), catalogs=catalogs)
     first_rng = first._rng.getstate()
 
     first_state = first.move_to_next_day()
@@ -1142,5 +1240,8 @@ def test_reroll_refreshes_all_active_sections_deterministically() -> None:
         cards = [slot.card for slot in section.slots if slot.unlocked]
         assert all(card is not None for card in cards)
         ids = [card.card_id for card in cards if card is not None]
-        assert len(ids) == len(set(ids))
+        if section_id is FootballShopSection.PLAYER_UPGRADES:
+            assert len(ids) == len(set(ids))
+        else:
+            assert all(card.card_id.startswith("play-reroll-") for card in cards if card)
     assert not first_state.section(FootballShopSection.COACH_UPGRADES).slots[0].unlocked

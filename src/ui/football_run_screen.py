@@ -412,6 +412,12 @@ class FootballRunScreen(Screen):
                 lambda: self._require_controller().choose_conversion(action, copy_id)
             ),
             self._submit_match_fallback,
+            lambda accept: self._submit_match_action(
+                lambda: self._require_controller().respond_to_challenge(accept)
+            ),
+            lambda: self._submit_match_action(
+                self._require_controller().challenge_touchdown
+            ),
         )
         self.buttons = decision_view.draw(surface, decision_rect, state)
 
@@ -449,6 +455,8 @@ class FootballRunScreen(Screen):
             self._submit_match_action(
                 lambda: self._require_controller().choose_defensive_scheme(copy_id)
             )
+        elif decision is FootballHumanDecision.CHALLENGE:
+            raise RuntimeError("Challenge prompts use the explicit decision buttons.")
         else:
             raise RuntimeError("A hand card can only be played during a play or scheme call.")
 

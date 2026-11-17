@@ -581,7 +581,11 @@ def test_hard_defense_breaks_tied_variant_scores_deterministically(
         defense,
     )
 
-    assert selected_plays == [OffensivePlayAction.GO_ROUTE]
+    expected_play = max(
+        DEFENSIVE_SCHEME_CATALOG["deep_pass"].counters,
+        key=lambda action: action.value,
+    )
+    assert selected_plays == [expected_play]
 
 
 def test_ai_rejects_invalid_constructor_values() -> None:

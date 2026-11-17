@@ -39,13 +39,16 @@ or the design changes.
 - [ ] Design and implement group/all-position and synergy player upgrades;
   these are deferred beyond the individual-player catalog.
 - [x] Add an initial named offensive-play and defensive-scheme catalog to the
-  shop, organized into six shared families with variants retaining distinct
-  identities, yardage, and clock values. Keep all play/scheme cards Common,
-  preserve the six-card starter decks, support deck additions and permanent
-  removal of an explicitly selected owned copy, and retain the four-card
-  minimum per deck.
+  shop, with exactly 36 offensive plays (six per family) and 24 defensive
+  schemes (four per family). Preserve stable identities, family contributors,
+  neutral expected-yardage estimates, play clocks, and scheme counters; retain
+  six-card starter decks and the four-card deck minimum.
+- [x] Add six human-only tactical bonus cards with Uncommon, Rare, and Very
+  Rare shop offers, independent per-slot rarity rolls, repeatable owned copies,
+  cross-deck draws, opponent-hand discards, and Challenge rollback. Keep
+  Remove One Card a Rare shop-only service, not a playable deck card.
 - [x] Implement match-local hands, draw/discard cycling, empty-hand fallbacks,
-  period-boundary resets, and hand-limited AI choices for both sides.
+  period-boundary resets, a shared active-hand UI, and hand-limited AI choices.
 - [x] Resolve "Go For It" through a normal offensive card play using the active
   defensive scheme; failed fourth-down plays turn the ball over at the play
   spot, while punts and field goals remain separate special-teams actions.
@@ -72,7 +75,7 @@ or the design changes.
   effect magnitudes through balance measurement and playtesting.
 - [ ] Expand the play/scheme catalog toward 100+ named ideas without changing
   the six-family invariants.
-- [ ] Design twelve shop icons: one for each of the six offensive play
+- [ ] Design twelve family icons: one for each of the six offensive play
   families and one for each corresponding defensive scheme family. Named
   variants within a family should share its icon.
 - [ ] Design future player synergies and AP-saving actions. Unspent AP

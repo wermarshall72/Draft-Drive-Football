@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from collections import Counter
 
 import pytest
 
@@ -49,6 +50,12 @@ class CenteredRng(random.Random):
 
     def uniform(self, low: float, high: float) -> float:
         return (low + high) / 2
+
+
+class CommonShopRng(random.Random):
+    def random(self) -> float:
+        super().random()
+        return 0.1
 
 
 def _roster(name: str, *, power: float = 10.0) -> FootballRoster:
@@ -103,6 +110,16 @@ def _match_state(**overrides) -> FootballMatchState:
 
 
 def test_every_named_card_has_stable_family_identity_and_family_matchups() -> None:
+    assert len(OFFENSIVE_PLAY_CATALOG) == 36
+    assert len(DEFENSIVE_SCHEME_CATALOG) == 24
+    assert len({definition.name for definition in OFFENSIVE_PLAY_CATALOG.values()}) == 36
+    assert len({definition.name for definition in DEFENSIVE_SCHEME_CATALOG.values()}) == 24
+    assert Counter(
+        definition.family for definition in OFFENSIVE_PLAY_CATALOG.values()
+    ) == {family: 6 for family in FootballCardFamily}
+    assert Counter(
+        definition.family for definition in DEFENSIVE_SCHEME_CATALOG.values()
+    ) == {family: 4 for family in FootballCardFamily}
     assert set(OFFENSIVE_PLAY_CATALOG) == {action.value for action in OffensivePlayAction}
     assert set(DEFENSIVE_SCHEME_CATALOG) == {
         action.value for action in DefensiveSchemeAction
@@ -121,6 +138,8 @@ def test_every_named_card_has_stable_family_identity_and_family_matchups() -> No
         assert definition.card_id == action.value
         assert definition.family is OFFENSIVE_PLAY_FAMILIES[action]
         assert definition.contributors == contributors
+        assert definition.clock_seconds > 0
+        assert calculate_standardized_play_estimate(action).expected_yards > 0
 
     for action, definition in (
         (action, DEFENSIVE_SCHEME_CATALOG[action.value])
@@ -211,6 +230,28 @@ def test_all_play_and_scheme_catalog_offers_are_common_without_changing_player_r
         card.rarity is FootballShopRarity.UNCOMMON
         for card in shop._catalogs[FootballShopSection.PLAYER_UPGRADES]
     )
+
+
+def test_named_play_can_be_rebought_from_one_offer_and_reoffered_next_day() -> None:
+    definition = OFFENSIVE_PLAY_CATALOG["go_route"]
+    card = _shop_card(definition, kind="play")
+    shop = FootballShop(
+        _roster("Repeat"),
+        rng=CommonShopRng(31),
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (card,)},
+    )
+
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    shop.move_to_next_day()
+    assert shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0].card is card
+    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+
+    copies = tuple(
+        copy for copy in shop.offensive_deck if copy.card_id == definition.card_id
+    )
+    assert len(copies) == 3
+    assert len({copy.copy_id for copy in copies}) == 3
 
 
 def test_standardized_expected_yardage_hierarchy_covers_every_variant() -> None:
@@ -321,11 +362,12 @@ def test_variants_keep_yardage_and_clock_through_purchase_draw_resolution_and_re
     )
     shop = FootballShop(
         _roster("Shop"),
-        seed=29,
+        rng=CommonShopRng(29),
         catalogs={
             FootballShopSection.PLAYS_SCHEMES: offered_cards
         },
     )
+    shop._offers[FootballShopSection.PLAYS_SCHEMES] = list(offered_cards)
 
     for card in offered_cards:
         shop.buy_card(

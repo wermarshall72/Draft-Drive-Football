@@ -5,12 +5,17 @@ from collections.abc import Callable
 import pygame
 
 from src.engine.football import (
+    FootballBonusCardAction,
     FootballConversionAction,
     FootballFourthDownAction,
     FootballTeamSide,
 )
 from src.engine.football_controller import FootballGameControllerState, FootballHumanDecision
-from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG
+from src.engine.football_decks import (
+    BONUS_CARD_CATALOG,
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+)
 from src.engine.football_simulator import (
     adjusted_offensive_play_clock_seconds,
     calculate_match_play_estimate,
@@ -34,6 +39,8 @@ class FootballMatchDecisionView:
         choose_fourth_down: Callable[[FootballFourthDownAction], None],
         choose_conversion: Callable[[FootballConversionAction, str | None], None],
         choose_fallback: Callable[[bool], None],
+        choose_challenge: Callable[[bool], None] | None = None,
+        challenge_touchdown: Callable[[], None] | None = None,
     ) -> None:
         self._small_font = small_font
         self._label_font = label_font
@@ -45,6 +52,8 @@ class FootballMatchDecisionView:
         self.choose_fourth_down = choose_fourth_down
         self.choose_conversion = choose_conversion
         self.choose_fallback = choose_fallback
+        self.choose_challenge = choose_challenge
+        self.challenge_touchdown = challenge_touchdown
 
     def draw(
         self,
@@ -80,7 +89,12 @@ class FootballMatchDecisionView:
             deck = match.team_a_offense_deck
             if deck is None:
                 raise RuntimeError("The human offensive deck is not initialized.")
-            if deck.hand:
+            playable_cards = tuple(
+                card
+                for card in deck.hand
+                if card.card_id in OFFENSIVE_PLAY_CATALOG
+            )
+            if playable_cards:
                 actions.extend(
                     (
                         f"2PT: {OFFENSIVE_PLAY_CATALOG[card.card_id].name}",
@@ -88,7 +102,7 @@ class FootballMatchDecisionView:
                             FootballConversionAction.TWO_POINT, card_id
                         ),
                     )
-                    for card in deck.hand
+                    for card in playable_cards
                 )
             else:
                 actions.append(
@@ -97,6 +111,33 @@ class FootballMatchDecisionView:
                         lambda: self.choose_conversion(FootballConversionAction.TWO_POINT, None),
                     )
                 )
+            if state.challenge_available:
+                challenge_touchdown = self.challenge_touchdown
+                if challenge_touchdown is None:
+                    raise RuntimeError(
+                        "The conversion view requires a touchdown Challenge callback."
+                    )
+                actions.append(
+                    (
+                        "CHALLENGE / RESTORE TOUCHDOWN",
+                        challenge_touchdown,
+                    )
+                )
+        elif decision is FootballHumanDecision.CHALLENGE:
+            choose_challenge = self.choose_challenge
+            if choose_challenge is None:
+                raise RuntimeError("The view requires a challenge-response callback.")
+            heading = "TURNOVER / FAILED FOURTH DOWN  /  CHALLENGE?"
+            actions = [
+                (
+                    "CHALLENGE / RESTORE THE LAST PLAY",
+                    lambda: choose_challenge(True),
+                ),
+                (
+                    "DECLINE / CONTINUE THE MATCH",
+                    lambda: choose_challenge(False),
+                ),
+            ]
         else:
             heading = "LOCAL AI IS RESOLVING ITS DRIVE"
             actions = []
@@ -254,7 +295,12 @@ class FootballMatchDecisionView:
                     card_width,
                     card_height,
                 )
-                definition = catalog[card.card_id]
+                bonus = BONUS_CARD_CATALOG.get(card.card_id) if offensive else None
+                definition = (
+                    bonus
+                    if bonus is not None
+                    else catalog[card.card_id]
+                )
                 label = definition.name.upper()
                 fill = (
                     pygame.Color("#344536")
@@ -281,21 +327,77 @@ class FootballMatchDecisionView:
                     self._small_font,
                     _MATCH_CHALK,
                 )
-                contributor_label = ", ".join(
-                    _POSITION_LABELS[position] for position in definition.contributors
-                )
-                draw_text(
-                    surface,
-                    _fit_text(
-                        f"{definition.family.label.upper()} / {contributor_label}",
+                if bonus is not None:
+                    defensive_draw = bonus.action in (
+                        FootballBonusCardAction.DEFENSIVE_DRAW,
+                        FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD,
+                    )
+                    defensive_deck = match.team_a_defense_deck
+                    can_draw_defensive_card = (
+                        defensive_deck is not None
+                        and bool(
+                            defensive_deck.draw_pile
+                            or defensive_deck.discard_pile
+                        )
+                    )
+                    effect = {
+                        FootballBonusCardAction.OFFENSIVE_DRAW:
+                            ("DRAW 1 OFFENSIVE CARD", "10s / NO SNAP"),
+                        FootballBonusCardAction.DEFENSIVE_DRAW:
+                            ("DRAW 1 DEFENSIVE SCHEME", "10s / NO SNAP"),
+                        FootballBonusCardAction.OPPONENT_DISCARD:
+                            ("DRAW 1 / DISCARD OPPONENT", "10s / NO SNAP"),
+                        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD:
+                            ("DRAW OFFENSE / DISCARD OPPONENT", "10s / NO SNAP"),
+                        FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD:
+                            ("DRAW DEFENSE / DISCARD OPPONENT", "10s / NO SNAP"),
+                        FootballBonusCardAction.CHALLENGE:
+                            ("RESTORE LAST PLAY", "NO TIME / NO SNAP"),
+                    }[bonus.action]
+                    draw_text(
+                        surface,
+                        _fit_text(effect[0], self._small_font, card_rect.width - 12),
+                        (card_rect.left + 6, card_rect.top + 20),
                         self._small_font,
-                        card_rect.width - 12,
-                    ),
-                    (card_rect.left + 6, card_rect.top + 20),
-                    self._small_font,
-                    _MATCH_MUTED,
-                )
-                if offensive and match.current_drive_defensive_scheme is not None:
+                        _MATCH_MUTED,
+                    )
+                    if bonus.action is FootballBonusCardAction.CHALLENGE:
+                        enabled = state.challenge_available
+                        clock_line = (
+                            effect[1]
+                            if enabled
+                            else "AVAILABLE AFTER YOUR NEXT PLAY"
+                        )
+                    elif defensive_draw and not can_draw_defensive_card:
+                        enabled = False
+                        clock_line = "NO DEFENSIVE CARD TO DRAW"
+                    else:
+                        enabled = True
+                        clock_line = effect[1]
+                    draw_text(
+                        surface,
+                        _fit_text(clock_line, self._small_font, card_rect.width - 12),
+                        (card_rect.left + 6, card_rect.top + 37),
+                        self._small_font,
+                        _MATCH_BRASS,
+                    )
+                else:
+                    contributor_label = ", ".join(
+                        _POSITION_LABELS[position] for position in definition.contributors
+                    )
+                    draw_text(
+                        surface,
+                        _fit_text(
+                            f"{definition.family.label.upper()} / {contributor_label}",
+                            self._small_font,
+                            card_rect.width - 12,
+                        ),
+                        (card_rect.left + 6, card_rect.top + 20),
+                        self._small_font,
+                        _MATCH_MUTED,
+                    )
+                    enabled = True
+                if bonus is None and offensive and match.current_drive_defensive_scheme is not None:
                     estimate = calculate_match_play_estimate(
                         match,
                         definition.action,
@@ -321,7 +423,7 @@ class FootballMatchDecisionView:
                         self._small_font,
                         _MATCH_BRASS,
                     )
-                elif not offensive:
+                elif bonus is None and not offensive:
                     draw_text(
                         surface,
                         _fit_text(
@@ -333,12 +435,14 @@ class FootballMatchDecisionView:
                         self._small_font,
                         _MATCH_BRASS,
                     )
-                self.match_interaction.card_rects[card.copy_id] = card_rect
+                if enabled:
+                    self.match_interaction.card_rects[card.copy_id] = card_rect
                 buttons.append(
                     Button(
                         label,
                         lambda copy_id=card.copy_id: self.choose_card(copy_id),
                         card_rect,
+                        enabled=enabled,
                         variant="hand-card",
                     )
                 )

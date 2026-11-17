@@ -11,6 +11,7 @@ import pytest
 from src.application import ApplicationController
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballBonusCardAction,
     FootballCardCopy,
     FootballAwaitedAction,
     FootballCardFamily,
@@ -28,6 +29,7 @@ from src.engine.football import (
     OffensivePlayAction,
 )
 from src.engine.football_decks import (
+    BONUS_CARD_CATALOG,
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
 )
@@ -1152,6 +1154,119 @@ def test_shop_all_play_and_scheme_cards_render_complete_details(
             assert rect.contains(bounds)
             assert not any(bounds.colliderect(button.rect) for button in buttons)
             assert not any(bounds.colliderect(other) for _, other in labels[index + 1:])
+
+
+@pytest.mark.parametrize("window_size", [(1280, 720), (1000, 800)])
+def test_bonus_cards_fit_shop_and_playbook_layouts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    window_size: tuple[int, int],
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    screen = desktop.run_screen
+    state = screen.state
+    assert state is not None and state.shop is not None
+    shop_view = screen._shop_view()
+    displayed: list[tuple[str, pygame.Rect]] = []
+    original_shop_draw_text = football_shop_module.draw_text
+
+    def capture_shop_text(surface, text, position, font, color):
+        bounds = pygame.Rect(position, font.size(text))
+        displayed.append((text, bounds))
+        original_shop_draw_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture_shop_text)
+    bonus_copies = []
+    for definition in BONUS_CARD_CATALOG.values():
+        card = FootballShopCard(
+            card_id=f"bonus:{definition.card_id}",
+            name=definition.name,
+            description=definition.description,
+            section=FootballShopSection.PLAYS_SCHEMES,
+            rarity=FootballShopRarity.UNCOMMON,
+            cost=2,
+            eligible=lambda _roster: True,
+            effect=lambda roster: roster,
+            bonus_card=definition,
+        )
+        slot = FootballShopSlotState(
+            section=FootballShopSection.PLAYS_SCHEMES,
+            slot_number=1,
+            unlocked=True,
+            card=card,
+            purchased=False,
+            unlock_cost=None,
+            can_unlock=False,
+            disabled_reason=None,
+        )
+        rect = pygame.Rect(10, 10, 295, 166)
+        buttons: list[Button] = []
+        displayed.clear()
+        shop_view._landing_slot(
+            _surface(), rect, slot, buttons, state.shop, state, "Test Owls"
+        )
+        rendered = " ".join(text for text, _ in displayed)
+        assert definition.name in rendered
+        assert definition.description in rendered
+        assert all(rect.contains(bounds) for _, bounds in displayed)
+        assert len(buttons) == 1 and rect.contains(buttons[0].rect)
+        bonus_copies.append(
+            FootballCardCopy(
+                f"bonus-copy:{definition.card_id}",
+                definition.card_id,
+            )
+        )
+
+    playbook_shop = replace(state.shop, offensive_deck=tuple(bonus_copies))
+    review = football_review_module.FootballReviewView(
+        screen.theme,
+        screen._small_font,
+        screen._label_font,
+        screen.shop_review,
+        lambda: None,
+        lambda _copy_id: None,
+    )
+    displayed.clear()
+    descriptions: list[str] = []
+    original_review_draw_text = football_review_module.draw_text
+    original_complete_wrapped = football_review_module.draw_complete_wrapped_text
+
+    def capture_review_text(surface, text, position, font, color):
+        bounds = pygame.Rect(position, font.size(text))
+        displayed.append((text, bounds))
+        original_review_draw_text(surface, text, position, font, color)
+
+    def capture_review_description(
+        surface, text, rect, font, color, *, line_gap=2
+    ):
+        descriptions.append(text)
+        return original_complete_wrapped(
+            surface, text, rect, font, color, line_gap=line_gap
+        )
+
+    monkeypatch.setattr(football_review_module, "draw_text", capture_review_text)
+    monkeypatch.setattr(
+        football_review_module,
+        "draw_complete_wrapped_text",
+        capture_review_description,
+    )
+    content = pygame.Rect(20, 16, 1240, 688)
+    review.draw_playbook(_surface(), content, playbook_shop)
+    rendered = " ".join(text for text, _ in displayed)
+    for definition in BONUS_CARD_CATALOG.values():
+        assert definition.name in rendered
+        assert definition.description in descriptions
+    assert all(content.contains(bounds) for _, bounds in displayed)
+    scale = min(window_size[0] / 1280, window_size[1] / 720)
+    offset_x = (window_size[0] - round(1280 * scale)) // 2
+    offset_y = (window_size[1] - round(720 * scale)) // 2
+    for _, bounds in displayed:
+        assert 0 <= offset_x + bounds.left * scale
+        assert offset_x + bounds.right * scale <= window_size[0]
+        assert 0 <= offset_y + bounds.top * scale
+        assert offset_y + bounds.bottom * scale <= window_size[1]
 
 
 @pytest.mark.parametrize(
@@ -3808,11 +3923,13 @@ def test_match_decision_view_conversion_and_empty_hand_actions(
     conversions: list[tuple[FootballConversionAction, str | None]] = []
     fourth_down: list[FootballFourthDownAction] = []
     fallbacks: list[bool] = []
+    challenge_calls: list[bool] = []
     view = football_match_decision_module.FootballMatchDecisionView(
         screen._small_font, screen._label_font, screen.match_interaction, 0, None, None,
         lambda copy_id: None, fourth_down.append,
         lambda action, copy_id: conversions.append((action, copy_id)),
         fallbacks.append,
+        challenge_touchdown=lambda: challenge_calls.append(True),
     )
     surface = _surface()
     area = pygame.Rect(30, 400, 900, 150)
@@ -3828,6 +3945,27 @@ def test_match_decision_view_conversion_and_empty_hand_actions(
         (FootballConversionAction.TWO_POINT, "first"),
         (FootballConversionAction.TWO_POINT, "second"),
     ]
+    challenge = FootballCardCopy(
+        "challenge-copy", FootballBonusCardAction.CHALLENGE.value
+    )
+    challenge_deck = FootballDeckState(
+        copies + (challenge,),
+        hand=copies + (challenge,),
+    )
+    challenge_state = replace(
+        state,
+        match=replace(match, team_a_offense_deck=challenge_deck),
+        challenge_available=True,
+    )
+    buttons = view.draw(surface, area, challenge_state)
+    assert [button.label for button in buttons] == [
+        "EXTRA POINT",
+        f"2PT: {OFFENSIVE_PLAY_CATALOG[card_id].name}",
+        f"2PT: {OFFENSIVE_PLAY_CATALOG[card_id].name}",
+        "CHALLENGE / RESTORE TOUCHDOWN",
+    ]
+    buttons[-1].action()
+    assert challenge_calls == [True]
     empty = FootballDeckState(())
     match = replace(match, team_a_offense_deck=empty, team_a_defense_deck=empty)
     buttons = view.draw(surface, area, replace(state, match=match))

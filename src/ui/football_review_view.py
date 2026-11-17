@@ -6,14 +6,20 @@ import pygame
 
 from src.engine.football_controller import FootballGameControllerState
 from src.engine.football_decks import (
-    DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG, FootballPlayDefinition,
+    BONUS_CARD_CATALOG,
+    DEFENSIVE_SCHEME_CATALOG,
+    OFFENSIVE_PLAY_CATALOG,
+    FootballPlayDefinition,
 )
 from src.engine.football_shop import MIN_PLAYBOOK_DECK_SIZE, FootballShopState
 from src.engine.football_simulator import calculate_standardized_play_estimate
 from src.ui.football_depth_chart import draw_depth_chart
 from src.ui.football_display import _POSITION_LABELS
 from src.ui.football_shop_review import ShopReviewInteraction
-from src.ui.text import fit_text as _fit_text
+from src.ui.text import (
+    draw_complete_wrapped_text,
+    fit_text as _fit_text,
+)
 from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_panel, draw_text
 
@@ -62,7 +68,11 @@ class FootballReviewView:
             self.theme.text,
         )
         columns = (
-            ("OFFENSE", shop.offensive_deck, OFFENSIVE_PLAY_CATALOG),
+            (
+                "OFFENSE",
+                shop.offensive_deck,
+                {**OFFENSIVE_PLAY_CATALOG, **BONUS_CARD_CATALOG},
+            ),
             ("DEFENSE", shop.defensive_deck, DEFENSIVE_SCHEME_CATALOG),
         )
         gap = 12
@@ -71,7 +81,7 @@ class FootballReviewView:
         panel_height = max(1, footer_top - top)
         panel_width = (content.width - gap) // 2
         row_top_offset = 46
-        row_height = 56
+        row_height = 80
         visible_rows = max(1, (panel_height - row_top_offset - 8) // row_height)
         self.interaction.playbook_max_scroll = max(
             0, max(len(cards) for _, cards, _ in columns) - visible_rows
@@ -107,10 +117,14 @@ class FootballReviewView:
                 index = start_index + visible_index
                 seen[card.card_id] = seen.get(card.card_id, 0) + 1
                 definition = catalog[card.card_id]
+                card_identity = (
+                    "TACTICAL BONUS"
+                    if card.card_id in BONUS_CARD_CATALOG
+                    else definition.family.label.upper()
+                )
                 label = (
-                    f"{definition.name}  /  {definition.family.label.upper()}  /  COPY "
-                    f"{seen[card.card_id]} OF "
-                    f"{counts[card.card_id]}"
+                    f"{definition.name}  /  {card_identity}  /  COPY "
+                    f"{seen[card.card_id]} OF {counts[card.card_id]}"
                 )
                 row = pygame.Rect(
                     rect.left + 8,
@@ -133,11 +147,14 @@ class FootballReviewView:
                     self._small_font,
                     self.theme.text,
                 )
-                contributors = ", ".join(
-                    _POSITION_LABELS[position]
-                    for position in definition.contributors
-                )
-                if isinstance(definition, FootballPlayDefinition):
+                if card.card_id in BONUS_CARD_CATALOG:
+                    detail = "TACTICAL ACTION / NO DOWN, YARDAGE, OR FIELD-POSITION CHANGE"
+                    description = definition.description
+                elif isinstance(definition, FootballPlayDefinition):
+                    contributors = ", ".join(
+                        _POSITION_LABELS[position]
+                        for position in definition.contributors
+                    )
                     neutral_yards = calculate_standardized_play_estimate(
                         definition.action
                     ).expected_yards
@@ -145,10 +162,16 @@ class FootballReviewView:
                         f"{contributors} / NEUTRAL ~{neutral_yards:.1f} YDS / "
                         f"BASE {definition.clock_seconds}s"
                     )
+                    description = definition.description
                 else:
+                    contributors = ", ".join(
+                        _POSITION_LABELS[position]
+                        for position in definition.contributors
+                    )
                     detail = (
                         f"{contributors} / COUNTERS {definition.family.label.upper()}"
                     )
+                    description = definition.description
                 draw_text(
                     surface,
                     _fit_text(detail, self._small_font, text_width),
@@ -156,16 +179,18 @@ class FootballReviewView:
                     self._small_font,
                     self.theme.muted,
                 )
-                draw_text(
+                draw_complete_wrapped_text(
                     surface,
-                    _fit_text(
-                        definition.description,
-                        self._small_font,
+                    description,
+                    pygame.Rect(
+                        row.left + 7,
+                        row.top + 38,
                         text_width,
+                        row.height - 42,
                     ),
-                    (row.left + 7, row.top + 38),
                     self._small_font,
                     self.theme.muted,
+                    line_gap=0,
                 )
                 if pending:
                     can_remove = len(cards) > MIN_PLAYBOOK_DECK_SIZE

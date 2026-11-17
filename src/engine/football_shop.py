@@ -9,6 +9,7 @@ from enum import Enum
 from types import MappingProxyType
 
 from src.engine.football import (
+    FootballBonusCardAction,
     FootballCardCopy,
     FootballCardFamily,
     FootballCoachUpgradeEffect,
@@ -18,8 +19,10 @@ from src.engine.football import (
     FootballRoster,
 )
 from src.engine.football_decks import (
+    BONUS_CARD_CATALOG,
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
+    FootballBonusCardDefinition,
     FootballPlayDefinition,
     FootballSchemeDefinition,
     starting_defensive_deck,
@@ -127,6 +130,7 @@ class FootballShopCard:
     effect: FootballShopEffect = field(compare=False, repr=False)
     upgrade: FootballUpgrade | None = None
     football_card: FootballPlayDefinition | FootballSchemeDefinition | None = None
+    bonus_card: FootballBonusCardDefinition | None = None
     is_removal: bool = False
     coach_upgrade_effect: FootballCoachUpgradeEffect | None = None
 
@@ -168,6 +172,15 @@ class FootballShopCard:
             )
         ):
             raise ValueError("Football playbook data is only valid for play/scheme cards.")
+        if self.bonus_card is not None and (
+            self.section is not FootballShopSection.PLAYS_SCHEMES
+            or not isinstance(self.bonus_card, FootballBonusCardDefinition)
+            or self.card_id != f"bonus:{self.bonus_card.card_id}"
+            or self.name != self.bonus_card.name
+        ):
+            raise ValueError("Bonus-card data is only valid for matching playbook cards.")
+        if self.football_card is not None and self.bonus_card is not None:
+            raise ValueError("A shop card cannot be both a play and a bonus card.")
         if self.is_removal and self.section is not FootballShopSection.PLAYS_SCHEMES:
             raise ValueError("Removal offers are only valid in the play/scheme section.")
         if self.section is FootballShopSection.COACH_UPGRADES:
@@ -509,9 +522,11 @@ class FootballShop:
             raise ValueError("Card is not in the current offer.")
         purchase_key = (section, selected.card_id)
         if (
-            selected.card_id in self._player_offer_purchased
-            if section is FootballShopSection.PLAYER_UPGRADES
-            else purchase_key in self._purchased
+            section is FootballShopSection.PLAYER_UPGRADES
+            and selected.card_id in self._player_offer_purchased
+        ) or (
+            selected.is_removal
+            and purchase_key in self._purchased
         ):
             raise ValueError("This card has already been purchased during this visit.")
         effect = selected.coach_upgrade_effect
@@ -540,10 +555,14 @@ class FootballShop:
         if not isinstance(updated_roster, FootballRoster):
             raise ValueError("Shop card effect must return a FootballRoster.")
         new_copy = None
-        if selected.football_card is not None:
+        if selected.football_card is not None or selected.bonus_card is not None:
             new_copy = FootballCardCopy(
                 f"human:purchased:{self._copy_sequence}",
-                selected.football_card.card_id,
+                (
+                    selected.football_card.card_id
+                    if selected.football_card is not None
+                    else selected.bonus_card.card_id
+                ),
             )
         self._remaining_ap -= selected.cost
         self._roster = updated_roster
@@ -564,7 +583,9 @@ class FootballShop:
             if effect.kind is FootballCoachUpgradeKind.BYE_WEEK:
                 self._finished = True
         if new_copy is not None:
-            if isinstance(selected.football_card, FootballPlayDefinition):
+            if isinstance(selected.football_card, FootballPlayDefinition) or (
+                selected.bonus_card is not None
+            ):
                 self._offensive_deck += (new_copy,)
             else:
                 self._defensive_deck += (new_copy,)
@@ -720,10 +741,16 @@ class FootballShop:
                         unlocked=True,
                         card=card,
                         purchased=(
-                            card is not None and (
+                            card is not None
+                            and (
                                 card.card_id in self._player_offer_purchased
                                 if section is FootballShopSection.PLAYER_UPGRADES
-                                else (section, card.card_id) in self._purchased
+                                else (
+                                    (section, card.card_id) in self._purchased
+                                    if card.is_removal
+                                    or section is FootballShopSection.COACH_UPGRADES
+                                    else False
+                                )
                             )
                         ),
                         unlock_cost=None,
@@ -818,8 +845,12 @@ class FootballShop:
             card
             for card in self._catalogs[section]
             if (section is FootballShopSection.PLAYER_UPGRADES
+                or section is FootballShopSection.PLAYS_SCHEMES
                 or (section, card.card_id) not in self._purchased)
-            and card.card_id not in current_ids
+            and (
+                section is FootballShopSection.PLAYS_SCHEMES
+                or card.card_id not in current_ids
+            )
             and self._card_is_available(card)
         ]
         if not eligible:
@@ -829,18 +860,29 @@ class FootballShop:
             rarity: [card for card in eligible if card.rarity is rarity]
             for rarity in FootballShopRarity
         }
-        available_rarities = [
-            rarity for rarity, cards in by_rarity.items() if cards
-        ]
-        total_weight = sum(RARITY_WEIGHTS[rarity] for rarity in available_rarities)
-        roll = self._rng.random() * total_weight
-        for rarity in available_rarities:
-            roll -= RARITY_WEIGHTS[rarity]
+        if section is not FootballShopSection.PLAYS_SCHEMES:
+            available_rarities = [
+                rarity for rarity, cards in by_rarity.items() if cards
+            ]
+            total_weight = sum(RARITY_WEIGHTS[rarity] for rarity in available_rarities)
+            roll = self._rng.random() * total_weight
+            for rarity in available_rarities:
+                roll -= RARITY_WEIGHTS[rarity]
+                if roll < 0:
+                    return self._rng.choice(by_rarity[rarity])
+            return self._rng.choice(by_rarity[available_rarities[-1]])
+
+        roll = self._rng.random() * 100
+        for rarity, weight in RARITY_WEIGHTS.items():
+            roll -= weight
             if roll < 0:
-                return self._rng.choice(by_rarity[rarity])
-        return self._rng.choice(by_rarity[available_rarities[-1]])
+                rarity_pool = by_rarity[rarity]
+                return self._rng.choice(rarity_pool) if rarity_pool else None
+        return None
 
     def _card_is_available(self, card: FootballShopCard) -> bool:
+        if card.is_removal and not self._removable_cards():
+            return False
         effect = card.coach_upgrade_effect
         if effect is not None:
             if any(
@@ -928,16 +970,38 @@ def _play_scheme_catalog() -> tuple[FootballShopCard, ...]:
                     football_card=definition,
                 )
             )
+    rarity_by_action = {
+        FootballBonusCardAction.OFFENSIVE_DRAW: FootballShopRarity.UNCOMMON,
+        FootballBonusCardAction.DEFENSIVE_DRAW: FootballShopRarity.UNCOMMON,
+        FootballBonusCardAction.OPPONENT_DISCARD: FootballShopRarity.RARE,
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD: FootballShopRarity.VERY_RARE,
+        FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD: FootballShopRarity.VERY_RARE,
+        FootballBonusCardAction.CHALLENGE: FootballShopRarity.VERY_RARE,
+    }
+    for definition in BONUS_CARD_CATALOG.values():
+        cards.append(
+            FootballShopCard(
+                card_id=f"bonus:{definition.card_id}",
+                name=definition.name,
+                description=definition.description,
+                section=FootballShopSection.PLAYS_SCHEMES,
+                rarity=rarity_by_action[definition.action],
+                cost=2,
+                eligible=lambda _roster: True,
+                effect=lambda roster: roster,
+                bonus_card=definition,
+            )
+        )
     cards.append(
         FootballShopCard(
             card_id="remove-one-card",
-            name="Remove One Card (Provisional Cost)",
+            name="Remove One Card",
             description=(
-                "Choose one owned play or scheme to remove permanently; "
-                "2 AP, provisional."
+                "Rare shop-only service: choose one owned card to remove "
+                "permanently. Costs 2 AP."
             ),
             section=FootballShopSection.PLAYS_SCHEMES,
-            rarity=FootballShopRarity.COMMON,
+            rarity=FootballShopRarity.RARE,
             cost=CARD_REMOVAL_COST,
             eligible=lambda _roster: True,
             effect=lambda roster: roster,

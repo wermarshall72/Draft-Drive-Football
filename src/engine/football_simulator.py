@@ -14,6 +14,7 @@ from math import floor, isfinite
 from numbers import Real
 
 from src.engine.football import (
+    FootballBonusCardAction,
     DEFENSIVE_SCHEME_FAMILIES,
     DefensiveSchemeAction,
     FootballAwaitedAction,
@@ -49,6 +50,7 @@ from src.engine.football_coaches import (
 )
 from src.engine.football_player_catalog import player_contribution_modifier
 from src.engine.football_decks import (
+    BONUS_CARD_CATALOG,
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
     starting_defensive_deck,
@@ -1016,6 +1018,7 @@ def _record_event(
     *,
     action: (
         OffensivePlayAction
+        | FootballBonusCardAction
         | DefensiveSchemeAction
         | FootballFourthDownAction
         | FootballConversionAction
@@ -1033,6 +1036,7 @@ def _record_event(
     blocked: bool = False,
     card_id: str | None = None,
     card_copy_id: str | None = None,
+    reverses_event_sequences: tuple[int, ...] = (),
 ) -> FootballMatchState:
     event = FootballMatchEvent(
         sequence=len(state.match_events) + 1,
@@ -1058,6 +1062,7 @@ def _record_event(
         blocked=blocked,
         card_id=card_id,
         card_copy_id=card_copy_id,
+        reverses_event_sequences=reverses_event_sequences,
     )
     events = state.match_events + (event,)
     first = events[0]
@@ -1067,17 +1072,22 @@ def _record_event(
     score_b = first.team_b_score - (
         first.points_scored if first.scoring_team is FootballTeamSide.TEAM_B else 0
     )
+    reversed_sequences: set[int] = set()
     for recorded_event in events:
-        score_a += (
-            recorded_event.points_scored
-            if recorded_event.scoring_team is FootballTeamSide.TEAM_A
-            else 0
-        )
-        score_b += (
-            recorded_event.points_scored
-            if recorded_event.scoring_team is FootballTeamSide.TEAM_B
-            else 0
-        )
+        for sequence in recorded_event.reverses_event_sequences:
+            if sequence in reversed_sequences:
+                continue
+            reversed_event = events[sequence - 1]
+            if reversed_event.scoring_team is FootballTeamSide.TEAM_A:
+                score_a -= reversed_event.points_scored
+            elif reversed_event.scoring_team is FootballTeamSide.TEAM_B:
+                score_b -= reversed_event.points_scored
+            reversed_sequences.add(sequence)
+        if recorded_event.sequence not in reversed_sequences:
+            if recorded_event.scoring_team is FootballTeamSide.TEAM_A:
+                score_a += recorded_event.points_scored
+            elif recorded_event.scoring_team is FootballTeamSide.TEAM_B:
+                score_b += recorded_event.points_scored
         if (recorded_event.team_a_score, recorded_event.team_b_score) != (
             score_a,
             score_b,
@@ -1123,6 +1133,8 @@ class FootballMatchSimulator:
             "team_b_offense": random.Random(match_state.random_seed ^ 0xB110),
             "team_b_defense": random.Random(match_state.random_seed ^ 0xB120),
         }
+        self._challenge_snapshot: FootballMatchState | None = None
+        self._challenge_play_copy_id: str | None = None
         self._initialize_decks()
 
     def _initialize_decks(self) -> None:
@@ -1139,12 +1151,17 @@ class FootballMatchSimulator:
                         else starting_defensive_deck(side.value)
                     )
                     deck = FootballDeckState(owned)
-                catalog = (
-                    OFFENSIVE_PLAY_CATALOG
+                catalog_ids = (
+                    set(OFFENSIVE_PLAY_CATALOG)
+                    | (
+                        set(BONUS_CARD_CATALOG)
+                        if side is FootballTeamSide.TEAM_A
+                        else set()
+                    )
                     if offensive
-                    else DEFENSIVE_SCHEME_CATALOG
+                    else set(DEFENSIVE_SCHEME_CATALOG)
                 )
-                if any(card.card_id not in catalog for card in deck.owned):
+                if any(card.card_id not in catalog_ids for card in deck.owned):
                     raise ValueError(f"{group.title()} deck contains an unknown card.")
                 if not (deck.draw_pile or deck.hand or deck.discard_pile):
                     deck = self._deal_deck(
@@ -1207,11 +1224,14 @@ class FootballMatchSimulator:
                 (
                     card
                     for card in deck.hand
-                    if OFFENSIVE_PLAY_CATALOG[card.card_id].action is action
+                    if card.card_id in OFFENSIVE_PLAY_CATALOG
+                    and OFFENSIVE_PLAY_CATALOG[card.card_id].action is action
                 ),
                 None,
             )
-            if selected is None and deck.hand:
+            if selected is None and any(
+                card.card_id in OFFENSIVE_PLAY_CATALOG for card in deck.hand
+            ):
                 raise ValueError("Offensive play is not available in the current hand.")
         elif isinstance(selection, str):
             selected = next(
@@ -1220,12 +1240,15 @@ class FootballMatchSimulator:
             )
             if selected is None:
                 raise ValueError("Offensive card is not in the current hand.")
-            action = OFFENSIVE_PLAY_CATALOG[selected.card_id].action
+            definition = OFFENSIVE_PLAY_CATALOG.get(selected.card_id)
+            if definition is None:
+                raise ValueError("A bonus action cannot be used as a football play.")
+            action = definition.action
         elif selection is not None:
             raise ValueError("Offensive selection must be a card id, play, or None.")
 
         if selected is None:
-            if deck.hand:
+            if any(card.card_id in OFFENSIVE_PLAY_CATALOG for card in deck.hand):
                 raise ValueError("The fallback is available only when the hand is empty.")
             if action not in (None, OffensivePlayAction.RB_RUN):
                 raise ValueError("The empty-hand fallback is the basic inside run.")
@@ -1276,6 +1299,7 @@ class FootballMatchSimulator:
         *,
         offensive: bool,
         card: FootballCardCopy | None,
+        draw_replacement: bool = True,
     ) -> None:
         deck = self._deck_for(side, offensive=offensive)
         hand = list(deck.hand)
@@ -1287,10 +1311,10 @@ class FootballMatchSimulator:
             f"{side.value}_{'offense' if offensive else 'defense'}"
         ]
         draw_pile = list(deck.draw_pile)
-        if not draw_pile and discard:
+        if draw_replacement and not draw_pile and discard:
             rng.shuffle(discard)
             draw_pile, discard = discard, []
-        if draw_pile:
+        if draw_replacement and draw_pile:
             hand.append(draw_pile.pop(0))
         self._set_deck(
             side,
@@ -1303,6 +1327,250 @@ class FootballMatchSimulator:
             ),
         )
 
+    def _draw_one_into_hand(
+        self,
+        side: FootballTeamSide,
+        *,
+        offensive: bool,
+        excluded_copy_ids: frozenset[str] = frozenset(),
+    ) -> bool:
+        deck = self._deck_for(side, offensive=offensive)
+        draw_pile = [
+            card
+            for card in deck.draw_pile
+            if card.copy_id not in excluded_copy_ids
+        ]
+        discard = list(deck.discard_pile) + [
+            card
+            for card in deck.draw_pile
+            if card.copy_id in excluded_copy_ids
+        ]
+        if not draw_pile and discard:
+            rng = self._deck_rngs[
+                f"{side.value}_{'offense' if offensive else 'defense'}"
+            ]
+            eligible_discard = [
+                card
+                for card in discard
+                if card.copy_id not in excluded_copy_ids
+            ]
+            protected_discard = [
+                card
+                for card in discard
+                if card.copy_id in excluded_copy_ids
+            ]
+            rng.shuffle(eligible_discard)
+            draw_pile, discard = eligible_discard, protected_discard
+        if not draw_pile:
+            return False
+        hand = list(deck.hand)
+        hand.append(draw_pile.pop(0))
+        self._set_deck(
+            side,
+            offensive=offensive,
+            deck=FootballDeckState(
+                owned=deck.owned,
+                draw_pile=tuple(draw_pile),
+                hand=tuple(hand),
+                discard_pile=tuple(discard),
+            ),
+        )
+        return True
+
+    def _has_drawable_card(
+        self,
+        side: FootballTeamSide,
+        *,
+        offensive: bool,
+        excluded_copy_ids: frozenset[str] = frozenset(),
+    ) -> bool:
+        deck = self._deck_for(side, offensive=offensive)
+        return any(
+            card.copy_id not in excluded_copy_ids
+            for card in deck.draw_pile + deck.discard_pile
+        )
+
+    @property
+    def available_challenge_copy_id(self) -> str | None:
+        if (
+            self._challenge_snapshot is None
+            or self.state.status is FootballMatchStatus.COMPLETED
+            or self.state.game_clock_seconds <= 0
+            or self._challenge_snapshot.period != self.state.period
+        ):
+            return None
+        deck = self._deck_for(FootballTeamSide.TEAM_A, offensive=True)
+        card = next(
+            (
+                card.copy_id
+                for card in deck.hand
+                if card.card_id == FootballBonusCardAction.CHALLENGE.value
+            ),
+            None,
+        )
+        excluded = frozenset(
+            copy_id
+            for copy_id in (card, self._challenge_play_copy_id)
+            if copy_id is not None
+        )
+        return (
+            card
+            if card is not None
+            and self._has_drawable_card(
+                FootballTeamSide.TEAM_A,
+                offensive=True,
+                excluded_copy_ids=excluded,
+            )
+            else None
+        )
+
+    def resolve_bonus_card(self, copy_id: str) -> FootballMatchState:
+        if not isinstance(copy_id, str) or not copy_id.strip():
+            raise ValueError("Bonus-card selection must be a card copy id.")
+        deck = self._deck_for(FootballTeamSide.TEAM_A, offensive=True)
+        selected = next((card for card in deck.hand if card.copy_id == copy_id), None)
+        if selected is None or selected.card_id not in BONUS_CARD_CATALOG:
+            raise ValueError("Bonus card is not in the current offensive hand.")
+        definition = BONUS_CARD_CATALOG[selected.card_id]
+        action = definition.action
+        if (
+            self.state.status is FootballMatchStatus.COMPLETED
+            and action is not FootballBonusCardAction.CHALLENGE
+        ):
+            raise ValueError("A completed match cannot accept a bonus card.")
+        is_defensive_draw = action in (
+            FootballBonusCardAction.DEFENSIVE_DRAW,
+            FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD,
+        )
+        if action is FootballBonusCardAction.CHALLENGE:
+            if copy_id != self.available_challenge_copy_id:
+                raise ValueError(
+                    "Challenge is not available for the current human offensive decision."
+                )
+            excluded = frozenset(
+                copy_id
+                for copy_id in (selected.copy_id, self._challenge_play_copy_id)
+                if copy_id is not None
+            )
+            if not self._has_drawable_card(
+                FootballTeamSide.TEAM_A,
+                offensive=True,
+                excluded_copy_ids=excluded,
+            ):
+                raise ValueError("The offensive deck has no card to replace Challenge.")
+        elif self.state.possession is not FootballTeamSide.TEAM_A or (
+            self.state.awaited_action is not FootballAwaitedAction.OFFENSIVE_PLAY
+        ):
+            raise ValueError("Bonus cards can only be played at a human offensive decision.")
+        if is_defensive_draw:
+            target_deck = self._deck_for(FootballTeamSide.TEAM_A, offensive=False)
+            if not (target_deck.draw_pile or target_deck.discard_pile):
+                raise ValueError("The defensive deck has no drawable card.")
+
+        before = self.state
+        clock_cost = 0 if action is FootballBonusCardAction.CHALLENGE else 10
+        self._cycle_played_card(
+            FootballTeamSide.TEAM_A,
+            offensive=True,
+            card=selected,
+            draw_replacement=not is_defensive_draw
+            and action is not FootballBonusCardAction.CHALLENGE,
+        )
+        if action is FootballBonusCardAction.CHALLENGE:
+            if not self._draw_one_into_hand(
+                FootballTeamSide.TEAM_A,
+                offensive=True,
+                excluded_copy_ids=excluded,
+            ):
+                raise RuntimeError("The offensive deck replacement became unavailable.")
+        if is_defensive_draw:
+            if not self._draw_one_into_hand(
+                FootballTeamSide.TEAM_A,
+                offensive=False,
+            ):
+                raise RuntimeError("The defensive deck draw became unavailable.")
+        if action in (
+            FootballBonusCardAction.OPPONENT_DISCARD,
+            FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
+            FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD,
+        ):
+            opponent_deck = self._deck_for(FootballTeamSide.TEAM_B, offensive=False)
+            if opponent_deck.hand:
+                discarded = self.rng.choice(opponent_deck.hand)
+                self._set_deck(
+                    FootballTeamSide.TEAM_B,
+                    offensive=False,
+                    deck=FootballDeckState(
+                        owned=opponent_deck.owned,
+                        draw_pile=opponent_deck.draw_pile,
+                        hand=tuple(
+                            card for card in opponent_deck.hand if card != discarded
+                        ),
+                        discard_pile=opponent_deck.discard_pile + (discarded,),
+                    ),
+                )
+
+        updated = replace(
+            self.state,
+            game_clock_seconds=max(0, self.state.game_clock_seconds - clock_cost),
+        )
+        if action is FootballBonusCardAction.CHALLENGE:
+            snapshot = self._challenge_snapshot
+            if snapshot is None:
+                raise RuntimeError("The challenge snapshot is unavailable.")
+            if updated.game_clock_seconds == 0:
+                raise ValueError("Challenge cannot restore an expired match clock.")
+            reversed_sequences = tuple(
+                range(len(snapshot.match_events) + 1, len(self.state.match_events) + 1)
+            )
+            updated = replace(
+                snapshot,
+                game_clock_seconds=updated.game_clock_seconds,
+                team_a_offense_deck=updated.team_a_offense_deck,
+                team_a_defense_deck=updated.team_a_defense_deck,
+                team_b_offense_deck=updated.team_b_offense_deck,
+                team_b_defense_deck=updated.team_b_defense_deck,
+                match_events=self.state.match_events,
+            )
+            description = "Challenge accepted; restored the situation before the last human play."
+            self._challenge_snapshot = None
+            self._challenge_play_copy_id = None
+        else:
+            updated = self._finish_action(updated)
+            self.state = updated
+            self._reset_for_period_boundary(before.period)
+            updated = self.state
+            if (
+                self._challenge_snapshot is not None
+                and (
+                    self.state.status is FootballMatchStatus.COMPLETED
+                    or self.state.period != self._challenge_snapshot.period
+                )
+            ):
+                self._challenge_snapshot = None
+                self._challenge_play_copy_id = None
+            description = definition.description
+        self.state = _record_event(
+            updated,
+            action=action,
+            card_id=selected.card_id,
+            card_copy_id=selected.copy_id,
+            clock_seconds_used=min(before.game_clock_seconds, clock_cost),
+            description=description,
+            reverses_event_sequences=(
+                reversed_sequences
+                if action is FootballBonusCardAction.CHALLENGE
+                else ()
+            ),
+        )
+        return self.state
+
+    def decline_challenge(self) -> None:
+        if self._challenge_snapshot is None:
+            raise ValueError("There is no human offensive play available to challenge.")
+        self._challenge_snapshot = None
+        self._challenge_play_copy_id = None
+
     def _finish_play_action(
         self,
         state: FootballMatchState,
@@ -1310,10 +1578,34 @@ class FootballMatchSimulator:
         card: FootballCardCopy | None,
         *,
         previous_period: int,
+        challengeable: bool = False,
     ) -> FootballMatchState:
         self.state = state
         self._cycle_played_card(offensive_side, offensive=True, card=card)
         self._reset_for_period_boundary(previous_period)
+        has_next_human_offensive_decision = (
+            self._challenge_snapshot is not None
+            and offensive_side is FootballTeamSide.TEAM_A
+            and self.state.status is FootballMatchStatus.IN_PROGRESS
+            and self.state.period == self._challenge_snapshot.period
+            and self.state.possession is FootballTeamSide.TEAM_A
+            and self.state.awaited_action
+            in (
+                FootballAwaitedAction.OFFENSIVE_PLAY,
+                FootballAwaitedAction.FOURTH_DOWN_DECISION,
+                FootballAwaitedAction.CONVERSION,
+            )
+        )
+        has_immediate_challenge_prompt = (
+            challengeable
+            and offensive_side is FootballTeamSide.TEAM_A
+            and self._challenge_snapshot is not None
+            and self.state.status is FootballMatchStatus.IN_PROGRESS
+            and self.state.period == self._challenge_snapshot.period
+        )
+        if not has_immediate_challenge_prompt and not has_next_human_offensive_decision:
+            self._challenge_snapshot = None
+            self._challenge_play_copy_id = None
         return self.state
 
     def _reset_for_period_boundary(self, previous_period: int) -> None:
@@ -1385,6 +1677,14 @@ class FootballMatchSimulator:
     def resolve_offensive_play(
         self, play: OffensivePlayAction | str | None
     ) -> FootballMatchState:
+        if isinstance(play, str):
+            offense_deck = self._deck_for(self.state.possession, offensive=True)
+            selected_bonus = next(
+                (card for card in offense_deck.hand if card.copy_id == play),
+                None,
+            )
+            if selected_bonus is not None and selected_bonus.card_id in BONUS_CARD_CATALOG:
+                return self.resolve_bonus_card(play)
         self._require_action(FootballAwaitedAction.OFFENSIVE_PLAY)
         scheme = self.state.current_drive_defensive_scheme
         if scheme is None:
@@ -1392,6 +1692,11 @@ class FootballMatchSimulator:
         previous_period = self.state.period
         offensive_side = self.state.possession
         play, selected_card = self._select_offensive_card(play)
+        if offensive_side is FootballTeamSide.TEAM_A:
+            self._challenge_snapshot = self.state
+            self._challenge_play_copy_id = (
+                selected_card.copy_id if selected_card is not None else None
+            )
 
         play_definition = OFFENSIVE_PLAY_CATALOG[play.value]
         estimate = calculate_match_play_estimate(
@@ -1496,6 +1801,7 @@ class FootballMatchSimulator:
                 offensive_side,
                 selected_card,
                 previous_period=previous_period,
+                challengeable=result.turnover or result.turnover_on_downs,
             )
 
         if new_position >= GOAL_LINE_YARDS and positive_gain:
@@ -1542,6 +1848,7 @@ class FootballMatchSimulator:
                 offensive_side,
                 selected_card,
                 previous_period=previous_period,
+                challengeable=result.turnover or result.turnover_on_downs,
             )
 
         turnover_on_downs = False
@@ -1659,6 +1966,7 @@ class FootballMatchSimulator:
             offensive_side,
             selected_card,
             previous_period=previous_period,
+            challengeable=result.turnover or result.turnover_on_downs,
         )
 
     def _finish_action(
@@ -1995,6 +2303,8 @@ class FootballMatchSimulator:
                 selected_card.copy_id if selected_card is not None else None
             ),
         )
+        self._challenge_snapshot = None
+        self._challenge_play_copy_id = None
         if self.state.status is FootballMatchStatus.COMPLETED:
             return self.state
         return self._finish_scoring_sequence(
@@ -2167,4 +2477,7 @@ class FootballMatchSimulator:
         ):
             self.state = self._resolve_kickoff(self.state, scoring_team)
         self._reset_for_period_boundary(previous_period)
+        if decision is not FootballFourthDownAction.GO_FOR_IT:
+            self._challenge_snapshot = None
+            self._challenge_play_copy_id = None
         return self.state

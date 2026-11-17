@@ -76,9 +76,11 @@ covers extracted interaction state.
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
-  and removal validation. Its 192 individual-player cards apply permanent
-  upgrades to the roster and retain temporary upgrades as pending run-local
-  state. The shop state projects raw run and next-match roster effects and
+  repeatable play/bonus purchases, independent playbook rarity rolls, and
+  removal validation. Remove One Card is a Rare shop-only service, not a deck
+  card. Its 192 individual-player cards apply permanent upgrades to the roster
+  and retain temporary upgrades as pending run-local state. The shop state
+  projects raw run and next-match roster effects and
   coach-adjusted next-match effects; the Depth Chart separates pending
   summaries from permanent modified stats, with combined effects in details.
   [football_simulator.py](src/engine/football_simulator.py) shares the coach
@@ -108,13 +110,19 @@ covers extracted interaction state.
 - **Match and results:** [football_match_field.py](src/ui/football_match_field.py),
   [football_match_status.py](src/ui/football_match_status.py), and
   [football_match_decision_view.py](src/ui/football_match_decision_view.py)
-  render the field, scoreboard/history, and hand/decision controls. Offensive
-  hand previews use the simulator's adjusted normal-play clock calculation and
-  label incomplete-pass, conversion, and special-teams exceptions.
+  render the field, scoreboard/history, and one shared hand/decision area.
+  Human-only tactical bonus cards show effects without football-play yardage;
+  turnover and failed-fourth-down results can pause for Challenge acceptance
+  or decline; an available Challenge is also selectable at a touchdown
+  conversion before the conversion is resolved. Offensive hand previews use the simulator's adjusted normal-play
+  clock calculation and label incomplete-pass, conversion, and special-teams
+  exceptions.
   [football_match_interaction.py](src/ui/football_match_interaction.py)
   tracks hand scrolling, dragging, and field animation.
   The hand distinguishes printed base card durations from the live normal-play
-  clock, with simulator clock exceptions visible.
+  clock, with simulator clock exceptions visible. An available Challenge card
+  can also be played from the conversion decision to review a touchdown before
+  resolving the conversion.
   [football_result.py](src/ui/football_result.py) renders results and
   progression actions. Tests include
   [test_football_desktop.py](tests/test_football_desktop.py) and
@@ -124,20 +132,29 @@ covers extracted interaction state.
 
 - **Play and scheme cards:** [football.py](src/engine/football.py) defines
   actions, families, matchups, card copies, and deck/match state;
-  [football_decks.py](src/engine/football_decks.py) defines the catalogs and
-  starter decks. The shop adds/removes owned copies; the controller passes
-  those decks into the simulator, which deals and cycles match hands. UI calls
-  use copy IDs, including two-point selections. See
+  [football_decks.py](src/engine/football_decks.py) defines the 36-play,
+  24-scheme, and six-bonus-card catalogs plus the starter decks. The shop adds
+  repeatable owned copies and removes explicitly selected copies. The
+  controller passes those decks into the simulator, which deals and cycles
+  match hands. Bonus draws can target either human deck; Challenge restores
+  football state while retaining the post-play clock, card cycling, and event
+  history. AI decks remain limited to named plays and schemes. UI calls use
+  copy IDs, including two-point selections. See
   [test_football_play_catalog.py](tests/test_football_play_catalog.py),
-  [test_football_decks.py](tests/test_football_decks.py), and
+  [test_football_decks.py](tests/test_football_decks.py),
+  [test_football_bonus_cards.py](tests/test_football_bonus_cards.py), and
   [test_football_shop.py](tests/test_football_shop.py).
 - **Resolution and AI:** [football_simulator.py](src/engine/football_simulator.py)
-  owns matchup estimates, play resolution, clock, scoring, deck cycling, and
-  special-teams/conversion outcomes. [football_ai.py](src/engine/football_ai.py)
-  generates local opponents and selects actions; the controller advances AI
-  turns until a human decision or result. Typed coach-upgrade effects travel
-  in the match snapshot and are shared by resolution, previews, and relevant AI
-  field-goal estimates. See
+  owns matchup estimates, play resolution, tactical bonus effects, Challenge
+  rollback, clock, scoring, deck cycling, and special-teams/conversion
+  outcomes. [football_ai.py](src/engine/football_ai.py) generates local
+  opponents and selects actions; AI uses the expanded named catalogs but never
+  receives bonus cards. The controller advances AI turns until a human decision
+  and pauses for an available turnover Challenge before continuing; it routes
+  an available touchdown Challenge from conversion decisions through the same
+  simulator rollback path. Typed
+  coach-upgrade effects travel in the match snapshot and are shared by
+  resolution, previews, and relevant AI field-goal estimates. See
   [test_football_simulator.py](tests/test_football_simulator.py),
   [test_football_ai.py](tests/test_football_ai.py),
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and

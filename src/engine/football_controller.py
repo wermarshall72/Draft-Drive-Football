@@ -63,6 +63,7 @@ class FootballHumanDecision(str, Enum):
     DEFENSIVE_SCHEME = "defensive_scheme"
     FOURTH_DOWN = "fourth_down"
     CONVERSION = "conversion"
+    CHALLENGE = "challenge"
 
 
 @dataclass(frozen=True)
@@ -89,6 +90,7 @@ class FootballGameControllerState:
     drafted_players: Mapping[FootballPosition, FootballPlayer] = field(
         default_factory=lambda: MappingProxyType({})
     )
+    challenge_available: bool = False
 
 
 class FootballGameController:
@@ -161,6 +163,7 @@ class FootballGameController:
         self._games_played = 0
         self._skipped_games: list[int] = []
         self._transition_message: str | None = None
+        self._challenge_prompt = False
         self._player_appearances: dict[FootballPosition, FootballPlayerAppearance] = {}
         self._drafted_players: dict[FootballPosition, FootballPlayer] = {}
 
@@ -184,6 +187,11 @@ class FootballGameController:
             transition_message=self._transition_message,
             player_appearances=MappingProxyType(dict(self._player_appearances)),
             drafted_players=MappingProxyType(dict(self._drafted_players)),
+            challenge_available=(
+                self._simulator.available_challenge_copy_id is not None
+                if self._simulator is not None
+                else False
+            ),
         )
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
@@ -306,7 +314,43 @@ class FootballGameController:
         ):
             raise ValueError("Action must be an OffensivePlayAction or card copy id.")
         self._require_decision(FootballHumanDecision.OFFENSIVE_PLAY)
-        self._require_simulator().resolve_offensive_play(action)
+        simulator = self._require_simulator()
+        simulator.resolve_offensive_play(action)
+        last_event = simulator.state.match_events[-1]
+        result = last_event.play_result
+        if (
+            result is not None
+            and (result.turnover or result.turnover_on_downs)
+            and simulator.available_challenge_copy_id is not None
+        ):
+            self._challenge_prompt = True
+            return self.state
+        self._advance_match()
+        return self.state
+
+    def respond_to_challenge(self, accept: bool) -> FootballGameControllerState:
+        if not isinstance(accept, bool):
+            raise ValueError("Challenge response must be a boolean.")
+        self._require_decision(FootballHumanDecision.CHALLENGE)
+        simulator = self._require_simulator()
+        if accept:
+            copy_id = simulator.available_challenge_copy_id
+            if copy_id is None:
+                raise RuntimeError("The available Challenge card is no longer in hand.")
+            simulator.resolve_bonus_card(copy_id)
+        else:
+            simulator.decline_challenge()
+        self._challenge_prompt = False
+        self._advance_match()
+        return self.state
+
+    def challenge_touchdown(self) -> FootballGameControllerState:
+        self._require_decision(FootballHumanDecision.CONVERSION)
+        simulator = self._require_simulator()
+        copy_id = simulator.available_challenge_copy_id
+        if copy_id is None:
+            raise ValueError("No Challenge card is available for this conversion.")
+        simulator.resolve_bonus_card(copy_id)
         self._advance_match()
         return self.state
 
@@ -389,6 +433,7 @@ class FootballGameController:
             ),
         )
         self._simulator = FootballMatchSimulator(match_state)
+        self._challenge_prompt = False
         self._phase = FootballRunPhase.MATCH
         self._advance_match()
 
@@ -487,6 +532,8 @@ class FootballGameController:
             return FootballHumanDecision.OPEN_NEXT_SHOP
         if self._phase is not FootballRunPhase.MATCH or match is None:
             return None
+        if self._challenge_prompt:
+            return FootballHumanDecision.CHALLENGE
 
         if match.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME:
             if match.possession is FootballTeamSide.TEAM_B:
