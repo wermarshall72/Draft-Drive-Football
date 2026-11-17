@@ -253,6 +253,10 @@ class FootballRunScreen(Screen):
             else:
                 self._player_draft_view().draw_backdrop(surface)
                 content = pygame.Rect(20, 20, 1240, 674)
+        elif state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None:
+            layout = Layout.from_surface(surface)
+            surface.fill("#061629")
+            content = pygame.Rect(20, 16, surface.get_width() - 40, surface.get_height() - 32)
         else:
             layout = self._header(surface, title, eyebrow, self.team_name)
             content = pygame.Rect(
@@ -297,7 +301,9 @@ class FootballRunScreen(Screen):
                     surface,
                     content,
                     state.shop,
-                    state.transition_message,
+                    f"CHECK: {self.last_error}" if self.last_error else state.transition_message,
+                    state,
+                    self.team_name,
                 )
                 if restore_navigation_focus:
                     self.focus_index = next(
@@ -323,6 +329,8 @@ class FootballRunScreen(Screen):
             if state.phase is FootballRunPhase.PLAYER_DRAFT
             else pygame.Rect(content.right - 112, content.top, 112, 30)
             if depth_review
+            else pygame.Rect(content.right - 120, content.bottom - 44, 120, 36)
+            if state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
         )
         self.buttons.append(
@@ -332,7 +340,10 @@ class FootballRunScreen(Screen):
         )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
-        if self.last_error is not None:
+        if self.last_error is not None and not (
+            state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and self.shop_review.mode is None
+        ):
             error_rect = pygame.Rect(
                 layout.margin,
                 layout.height - 23
@@ -590,7 +601,7 @@ class FootballRunScreen(Screen):
             self._shop_view_instance = FootballShopView(
                 self.theme, self._small_font, self._label_font,
                 self._move_to_next_day, self._open_depth_chart,
-                self.shop_review.open_playbook,
+                self._open_playbook,
                 lambda: self._submit(self._require_controller().finish_shop),
                 lambda section, number: self._submit(
                     lambda: self._require_controller().unlock_shop_slot(
@@ -601,6 +612,13 @@ class FootballRunScreen(Screen):
                 self._close_coach_details,
             )
         return self._shop_view_instance
+
+    def _open_playbook(self) -> None:
+        self.shop_review.open_playbook()
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
 
     def _close_coach_details(self) -> None:
         self._shop_view().close_coach_details()
@@ -658,14 +676,17 @@ class FootballRunScreen(Screen):
 
     def _submit(self, action: Callable[[], object]) -> None:
         self.last_error = None
-        old_phase = self._current_state().phase
+        old_state = self._current_state()
         try:
             action()
         except ValueError as error:
             self.last_error = str(error)
         finally:
             self.state = self._require_controller().state
-            if self.state.phase is not old_phase:
+            if self.state.phase is not old_state.phase or (
+                old_state.phase is FootballRunPhase.PRE_MATCH_SHOP
+                and self.state.shop != old_state.shop
+            ):
                 self.buttons = []
                 self.focus_index = 0
                 self.hover_index = None

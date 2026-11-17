@@ -69,6 +69,9 @@ or the design changes.
   effect magnitudes through balance measurement and playtesting.
 - [ ] Expand the play/scheme catalog toward 100+ named ideas without changing
   the six-family invariants.
+- [ ] Design twelve shop icons: one for each of the six offensive play
+  families and one for each corresponding defensive scheme family. Named
+  variants within a family should share its icon.
 - [ ] Design future player synergies, temporary upgrades, and AP-saving
   actions. Unspent AP currently expires at the end of each shop visit.
 - [ ] Implement a playoff bracket; the current run ends at the playoffs marker.

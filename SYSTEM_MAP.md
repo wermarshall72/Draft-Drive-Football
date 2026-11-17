@@ -65,7 +65,9 @@ covers extracted interaction state.
   [test_football_player_catalog.py](tests/test_football_player_catalog.py), and
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
-  renders offers; [football_review_view.py](src/ui/football_review_view.py)
+  renders the player and coach upgrade panels and the six-slot play/scheme
+  grid using the run's saved appearances and coach assignment;
+  [football_review_view.py](src/ui/football_review_view.py)
   renders the playbook and delegates the Depth Chart to
   [football_depth_chart.py](src/ui/football_depth_chart.py), with review/scroll
   and stat-toggle state in

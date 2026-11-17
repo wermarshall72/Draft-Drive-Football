@@ -41,8 +41,10 @@ from src.engine.football_coaches import (
     DEFENSIVE_COACHES,
     OFFENSIVE_COACHES,
     OFFENSIVE_POSITIONS,
+    coaches_for_assignment,
 )
-from src.engine.football_simulator import FootballMatchSimulator
+from src.engine.football_simulator import FootballMatchSimulator, calculate_standardized_play_estimate
+from src.engine.football_decks import FootballPlayDefinition
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
 from src.engine.football_appearance import POSITION_ART
 from src.engine.football_team_builder import FootballPlayerCandidate
@@ -916,6 +918,437 @@ def test_shop_sections_reroll_unlock_and_keyboard_purchase(tmp_path: Path) -> No
     assert controller.state.phase is FootballRunPhase.MATCH
 
 
+def test_shop_landing_slots_show_saved_art_and_all_complete_coach_summaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    screen = desktop.run_screen
+    state = screen.state
+    assert state is not None and state.shop is not None
+    view = screen._shop_view()
+    surface = _surface()
+    content = pygame.Rect(20, 16, 1240, 688)
+    portraits = []
+    coach_portraits = []
+    circles = []
+    labels = []
+    slots = []
+    insets = []
+    original_player = football_shop_module.draw_draft_player
+    original_coach = football_shop_module.draw_coach_portrait
+    original_circle = pygame.draw.circle
+    original_text = football_shop_module.draw_text
+    original_slot = view._landing_slot
+    original_inset = view._inset
+
+    def player_art(surface, rect, appearance):
+        portraits.append((rect.copy(), appearance))
+        original_player(surface, rect, appearance)
+
+    def coach_art(surface, rect, coach_id, primary):
+        coach_portraits.append(coach_id)
+        original_coach(surface, rect, coach_id, primary)
+
+    def circle(surface, color, center, radius, *args, **kwargs):
+        circles.append((color, center, radius))
+        return original_circle(surface, color, center, radius, *args, **kwargs)
+
+    def capture_text(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        original_text(surface, text, position, font, color)
+
+    def capture_slot(surface, rect, slot, buttons, shop, run_state, team_name):
+        start_labels, start_buttons, start_insets = len(labels), len(buttons), len(insets)
+        original_slot(surface, rect, slot, buttons, shop, run_state, team_name)
+        slots.append((rect.copy(), slot, labels[start_labels:], buttons[start_buttons:],
+                      insets[start_insets:]))
+
+    def capture_inset(surface, rect):
+        insets.append(rect.copy())
+        original_inset(surface, rect)
+
+    monkeypatch.setattr(football_shop_module, "draw_draft_player", player_art)
+    monkeypatch.setattr(football_shop_module, "draw_coach_portrait", coach_art)
+    monkeypatch.setattr(pygame.draw, "circle", circle)
+    monkeypatch.setattr(football_shop_module, "draw_text", capture_text)
+    monkeypatch.setattr(view, "_landing_slot", capture_slot)
+    monkeypatch.setattr(view, "_inset", capture_inset)
+
+    view.draw(surface, content, state.shop, run_state=state, team_name="Test Owls")
+    player_slots = [item for item in slots if item[1].section is FootballShopSection.PLAYER_UPGRADES]
+    play_slots = [item for item in slots if item[1].section is FootballShopSection.PLAYS_SCHEMES]
+    assert len(player_slots) == 4 and len(play_slots) == 6
+    assert [item[1].unlocked for item in play_slots] == [True] * 4 + [False] * 2
+    assert [item[1].unlock_cost for item in play_slots[-2:]] == [4, 5]
+    assert [item[0].topleft for item in play_slots] == sorted(
+        (item[0].topleft for item in play_slots), key=lambda point: (point[1], point[0])
+    )
+    assert not player_slots[3][1].unlocked and player_slots[3][1].unlock_cost == 4
+    for index, (_, slot, text, _, boxes) in enumerate(player_slots[:3]):
+        assert slot.card is not None and slot.card.upgrade is not None
+        upgrade = slot.card.upgrade
+        assert portraits[index][1] == state.player_appearances[upgrade.position]
+        rendered = " ".join(line for line, _ in text)
+        assert _POSITION_LABELS[upgrade.position] in rendered
+        assert f"+{upgrade.amount:g} {upgrade.stat.value.upper()}" in rendered
+        assert f"{upgrade.cost} AP" in rendered
+        assert len(boxes) == 1
+        effect_rect = next(bounds for line, bounds in text if f"+{upgrade.amount:g}" in line)
+        assert boxes[0].contains(effect_rect)
+
+    for card in COACH_UPGRADE_CATALOG:
+        shop = FootballShop(state.shop.roster, 51, game_number=4,
+                            catalogs={FootballShopSection.COACH_UPGRADES: (card,)})
+        shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
+        assert shop.state.section(FootballShopSection.COACH_UPGRADES).slots[1].can_unlock
+        slots.clear()
+        labels.clear()
+        coach_portraits.clear()
+        circles.clear()
+        view.draw(surface, content, shop.state, run_state=state, team_name="Test Owls")
+        for rect, slot, text, buttons, boxes in slots:
+            for index, (_, text_rect) in enumerate(text):
+                assert rect.contains(text_rect), (card.name, text_rect, rect)
+                assert not any(text_rect.colliderect(button.rect) for button in buttons), card.name
+                assert not any(text_rect.colliderect(other) for _, other in text[index + 1:]), (card.name, text)
+            for button in buttons:
+                assert rect.contains(button.rect), (card.name, button.label)
+        coach_slot = next(item for item in slots if item[1].card == card)
+        rendered = " ".join(line for line, _ in coach_slot[2])
+        assert card.description in rendered
+        assert "unique" in rendered and f"{card.cost} AP" in rendered
+        assert card.rarity.value.replace("_", " ").upper() in rendered
+        assert len(coach_slot[4]) == 1
+        box = coach_slot[4][0]
+        body_rects = [bounds for _, bounds in coach_slot[2] if box.colliderect(bounds)]
+        assert body_rects and all(box.contains(bounds) for bounds in body_rects)
+        assert not any(box.colliderect(button.rect) for button in coach_slot[3])
+        if card.coach_upgrade_effect.kind in {
+            FootballCoachUpgradeKind.FUTURE_SHOP_AP, FootballCoachUpgradeKind.BYE_WEEK,
+            FootballCoachUpgradeKind.FIELD_GOAL_ACCURACY_BONUS,
+            FootballCoachUpgradeKind.BLOCKED_KICK_RISK_REDUCTION,
+            FootballCoachUpgradeKind.PUNT_RETURN_YARDS_BONUS,
+            FootballCoachUpgradeKind.KICKOFF_RETURN_YARDS_BONUS,
+        }:
+            assert not coach_portraits and len(circles) == 1
+        else:
+            defense_kinds = {
+                FootballCoachUpgradeKind.DEFENSE_POWER_BOOST,
+                FootballCoachUpgradeKind.DEFENSE_VOLATILITY_REDUCTION,
+                FootballCoachUpgradeKind.DEFENSE_STAMINA_BOOST,
+                FootballCoachUpgradeKind.DEFENSIVE_FAMILY_YARDAGE_REDUCTION,
+            }
+            side = 1 if card.coach_upgrade_effect.kind in defense_kinds else 0
+            selected = coaches_for_assignment(state.shop.roster.coach_assignment)[side]
+            assert selected is not None
+            assert coach_portraits == [selected.coach_id] and not circles
+
+
+@pytest.mark.parametrize("window_size", [(1280, 720), (1000, 800)])
+def test_shop_all_play_and_scheme_cards_render_complete_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, window_size: tuple[int, int],
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    screen = desktop.run_screen
+    state = screen.state
+    assert state is not None and state.shop is not None
+    view = screen._shop_view()
+    labels = []
+    insets = []
+    images = []
+    original_text = football_shop_module.draw_text
+    original_inset = view._inset
+    original_rect = pygame.draw.rect
+
+    def capture(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        original_text(surface, text, position, font, color)
+
+    def capture_inset(surface, rect):
+        insets.append(rect.copy())
+        original_inset(surface, rect)
+
+    def capture_rect(surface, color, rect, *args, **kwargs):
+        if color == "#203c57":
+            images.append(pygame.Rect(rect))
+        return original_rect(surface, color, rect, *args, **kwargs)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    monkeypatch.setattr(view, "_inset", capture_inset)
+    monkeypatch.setattr(pygame.draw, "rect", capture_rect)
+    scale = min(window_size[0] / 1280, window_size[1] / 720)
+    offset_x = (window_size[0] - round(1280 * scale)) // 2
+    offset_y = (window_size[1] - round(720 * scale)) // 2
+    for definition in (*OFFENSIVE_PLAY_CATALOG.values(), *DEFENSIVE_SCHEME_CATALOG.values()):
+        card = FootballShopCard(
+            card_id=definition.card_id, name=definition.name, description=definition.description,
+            section=FootballShopSection.PLAYS_SCHEMES, rarity=FootballShopRarity.COMMON,
+            cost=2, eligible=lambda roster: True, effect=lambda roster: roster,
+            football_card=definition,
+        )
+        slot = FootballShopSlotState(FootballShopSection.PLAYS_SCHEMES, 1, True, card,
+                                     False, None, False, None)
+        rect = pygame.Rect(10, 10, 295, 166)
+        buttons = []
+        labels.clear()
+        insets.clear()
+        images.clear()
+        view._landing_slot(_surface(), rect, slot, buttons, state.shop, state, "Test Owls")
+        rendered = " ".join(line for line, _ in labels)
+        assert definition.name in rendered
+        contributors = " / ".join(
+            football_shop_module._COMPACT_POSITION_LABELS[p] for p in definition.contributors
+        )
+        assert f"POSITIONS: {contributors}" in rendered
+        assert f"PLAY TYPE: {definition.family.label.upper()}" in rendered
+        if isinstance(definition, FootballPlayDefinition):
+            estimate = calculate_standardized_play_estimate(definition.action).expected_yards
+            expected_rows = [f"POSITIONS: {contributors}", f"PLAY TYPE: {definition.family.label.upper()}",
+                             f"EXPECTED YARDAGE: ~{estimate:.1f} YDS", f"TIME: {definition.clock_seconds}s"]
+        else:
+            expected_rows = [f"POSITIONS: {contributors}", f"PLAY TYPE: {definition.family.label.upper()}",
+                             f"COUNTERS: {definition.family.label.upper()}"]
+            assert "YARDAGE" not in rendered and "TIME:" not in rendered
+        assert len(insets) == len(images) == 1
+        box, art = insets[0], images[0]
+        assert art.size == (70, 70) and art.centery == rect.centery
+        assert rect.contains(art) and rect.contains(box) and not art.colliderect(box)
+        assert not any(art.colliderect(button.rect) or box.colliderect(button.rect) for button in buttons)
+        for row in expected_rows:
+            row_matches = [bounds for line, bounds in labels if line == row]
+            assert len(row_matches) == 1 and box.contains(row_matches[0]), (definition.name, row)
+            bounds = row_matches[0]
+            assert 0 <= offset_x + bounds.left * scale
+            assert offset_x + bounds.right * scale <= window_size[0]
+            assert 0 <= offset_y + bounds.top * scale
+            assert offset_y + bounds.bottom * scale <= window_size[1]
+        assert [next(bounds.y for line, bounds in labels if line == row) for row in expected_rows] == sorted(
+            next(bounds.y for line, bounds in labels if line == row) for row in expected_rows
+        )
+        for index, (_, bounds) in enumerate(labels):
+            assert rect.contains(bounds)
+            assert not any(bounds.colliderect(button.rect) for button in buttons)
+            assert not any(bounds.colliderect(other) for _, other in labels[index + 1:])
+
+
+@pytest.mark.parametrize(
+    ("rarity", "edge"),
+    [
+        (FootballShopRarity.COMMON, "#abb6c2"),
+        (FootballShopRarity.UNCOMMON, "#68c58a"),
+        (FootballShopRarity.RARE, "#65b5ff"),
+        (FootballShopRarity.VERY_RARE, "#c18be8"),
+    ],
+)
+@pytest.mark.parametrize("section", list(FootballShopSection))
+@pytest.mark.parametrize("status", ["available", "purchased", "unaffordable"])
+def test_shop_rarity_outline_and_label_follow_offered_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    rarity: FootballShopRarity, edge: str, section: FootballShopSection, status: str,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.run_screen.state
+    assert state is not None and state.shop is not None
+    view = desktop.run_screen._shop_view()
+    if section is FootballShopSection.PLAYER_UPGRADES:
+        original = state.shop.section(section).slots[0].card
+        assert original is not None and original.upgrade is not None
+        upgrade = replace(original.upgrade, rarity=rarity)
+        card = replace(original, rarity=rarity, upgrade=upgrade)
+        rect = pygame.Rect(10, 10, 144, 182)
+    elif section is FootballShopSection.COACH_UPGRADES:
+        card = replace(COACH_UPGRADE_CATALOG[0], rarity=rarity)
+        rect = pygame.Rect(10, 10, 296, 277)
+    else:
+        definition = OFFENSIVE_PLAY_CATALOG["slot_slant"]
+        card = FootballShopCard(
+            card_id=definition.card_id, name=definition.name, description=definition.description,
+            section=section, rarity=rarity, cost=2, eligible=lambda roster: True,
+            effect=lambda roster: roster, football_card=definition,
+        )
+        rect = pygame.Rect(10, 10, 295, 166)
+    slot = FootballShopSlotState(section, 1, True, card, status == "purchased", None, False, None)
+    shop = replace(state.shop, remaining_ap=0 if status == "unaffordable" else 12)
+    labels = []
+    original_text = football_shop_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        labels.append((text, pygame.Rect(position, font.size(text))))
+        original_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    surface = _surface()
+    buttons = []
+    view._landing_slot(surface, rect, slot, buttons, shop, state, "Test Owls")
+    assert surface.get_at((rect.centerx, rect.top)) == pygame.Color(edge)
+    rarity_label = rarity.value.replace("_", " ").upper()
+    label_rect = next(bounds for text, bounds in labels if rarity_label in text)
+    assert rect.contains(label_rect)
+    assert not any(label_rect.colliderect(button.rect) for button in buttons)
+    buy = buttons[-1]
+    assert buy.enabled == (status == "available")
+    assert buy.label == (
+        "PURCHASED" if status == "purchased" else
+        f"NEED {card.cost} AP" if status == "unaffordable" else "BUY"
+    )
+
+
+def test_shop_empty_locked_and_unmapped_rarity_keep_neutral_outline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    state = desktop.run_screen.state
+    assert state is not None and state.shop is not None
+    view = desktop.run_screen._shop_view()
+    section = state.shop.section(FootballShopSection.PLAYER_UPGRADES)
+    offered = section.slots[0]
+    assert offered.card is not None
+    monkeypatch.setattr(football_shop_module, "_RARITY_OUTLINE_COLORS", {})
+    labels = []
+    original_text = football_shop_module.draw_text
+
+    def capture(surface, text, position, font, color):
+        labels.append(text)
+        original_text(surface, text, position, font, color)
+
+    monkeypatch.setattr(football_shop_module, "draw_text", capture)
+    slots = (offered, section.slots[3], replace(offered, card=None))
+    for slot in slots:
+        surface = _surface()
+        rect = pygame.Rect(10, 10, 144, 182)
+        labels.clear()
+        view._landing_slot(surface, rect, slot, [], state.shop, state, "Test Owls")
+        assert surface.get_at((rect.centerx, rect.top)) == pygame.Color("#507397")
+        if slot.card is not None:
+            assert slot.card.rarity.value.replace("_", " ").upper() in " ".join(labels)
+
+
+@pytest.mark.parametrize("rarity", list(FootballShopRarity))
+@pytest.mark.parametrize("input_method", ["mouse", "keyboard"])
+def test_shop_rarity_controls_keep_contrasting_focus_and_activation(
+    tmp_path: Path, rarity: FootballShopRarity, input_method: str,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    screen = desktop.run_screen
+    state = screen.state
+    assert state is not None and state.shop is not None
+    view = screen._shop_view()
+    slot = state.shop.section(FootballShopSection.PLAYER_UPGRADES).slots[0]
+    assert slot.card is not None and slot.card.upgrade is not None
+    card = replace(slot.card, rarity=rarity, upgrade=replace(slot.card.upgrade, rarity=rarity))
+    slot = replace(slot, card=card)
+    calls = []
+    view.purchase = lambda section, card_id, removal: calls.append((section, card_id, removal))
+    buttons = []
+    view._landing_slot(_surface(), pygame.Rect(10, 10, 144, 182), slot, buttons,
+                       state.shop, state, "Test Owls")
+    screen._set_buttons(buttons)
+    button = buttons[0]
+    button.focused = False
+    normal, hover, focus = _surface(), _surface(), _surface()
+    button.draw(normal, screen._main_font, screen.theme)
+    button.draw(hover, screen._main_font, screen.theme, hovered=True)
+    button.focused = True
+    button.draw(focus, screen._main_font, screen.theme)
+    point = (button.rect.centerx, button.rect.top + 2)
+    assert hover.get_at(point) == focus.get_at(point) == pygame.Color("#ffffff")
+    assert normal.get_at(point) != hover.get_at(point)
+    button.focused = False
+    if input_method == "keyboard":
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+    else:
+        for event_type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            desktop.router.handle_event(
+                pygame.event.Event(event_type, {"pos": button.rect.center, "button": 1})
+            )
+    assert calls == [(FootballShopSection.PLAYER_UPGRADES, card.card_id, False)]
+
+
+@pytest.mark.parametrize("window_size", [(1280, 720), (1000, 800)])
+def test_shop_same_frame_purchase_and_unlock_invalidate_stale_controls(
+    tmp_path: Path, window_size: tuple[int, int],
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    _draft_to_shop(desktop)
+    desktop.window_size = window_size
+    desktop.router.draw(_surface())
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.shop is not None
+    button = next(button for button in desktop.run_screen.buttons if button.label == "UNLOCK 4 AP")
+    scale = min(window_size[0] / 1280, window_size[1] / 720)
+    offset = ((window_size[0] - round(1280 * scale)) // 2,
+              (window_size[1] - round(720 * scale)) // 2)
+    position = (round(button.rect.centerx * scale + offset[0]),
+                round(button.rect.centery * scale + offset[1]))
+    for _ in range(2):
+        for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            event = pygame.event.Event(event_type, {"pos": position, "button": 1})
+            desktop.router.handle_event(desktop._logical_event(event))
+    shop = controller.state.shop
+    assert shop is not None and shop.remaining_ap == 8
+    assert shop.section(FootballShopSection.PLAYER_UPGRADES).slots[3].unlocked
+    assert not shop.purchased_cards
+    desktop.router.draw(_surface())
+    assert desktop.run_screen.buttons
+
+
+@pytest.mark.parametrize("purchase_bye", (False, True))
+def test_coach_unlock_and_bye_week_through_shop_router(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purchase_bye: bool,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    card = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "bye_week")
+    controller._shop_catalogs = {FootballShopSection.COACH_UPGRADES: (card,)}
+    _draft_to_shop(desktop)
+    _force_result(monkeypatch, FootballTeamSide.TEAM_A)
+    for _ in range(3):
+        _activate(desktop, "FINISH SHOP / START MATCH")
+        _play_first_match_card(desktop)
+        _activate(desktop, "OPEN NEXT GAME SHOP")
+    desktop.router.draw(_surface())
+    coach_section = controller.state.shop.section(FootballShopSection.COACH_UPGRADES)
+    assert coach_section.slots[0].can_unlock
+    unlock = [button for button in desktop.run_screen.buttons
+              if button.label == "UNLOCK 4 AP" and button.rect.top > 300][0]
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(pygame.event.Event(event_type, {"pos": unlock.rect.center, "button": 1}))
+    desktop.router.draw(_surface())
+    second = next(button for button in desktop.run_screen.buttons if button.label == "UNLOCK 6 AP")
+    assert second.enabled
+    if not purchase_bye:
+        desktop.run_screen.focus_index = desktop.run_screen.buttons.index(second)
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+        assert controller.state.shop.section(FootballShopSection.COACH_UPGRADES).slots[1].unlocked
+        assert not controller.state.shop.owned_coach_upgrades
+        return
+    detail = next(index for index, button in enumerate(desktop.run_screen.buttons)
+                  if button.label == "DETAILS")
+    buy = desktop.run_screen.buttons[detail + 1]
+    assert buy.label == "BUY" and buy.enabled
+    for _ in range(2):
+        for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            desktop.router.handle_event(pygame.event.Event(event_type, {"pos": buy.rect.center, "button": 1}))
+    assert controller.state.game_number == 5
+    assert controller.state.skipped_games == (4,)
+    assert controller.state.wins == 3 and controller.state.losses == 0
+    assert controller.state.shop.remaining_ap == 12
+    desktop.router.draw(_surface())
+
+
 def test_shop_at_zero_ap_stays_open_until_explicit_finish(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
@@ -1528,7 +1961,7 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     )
     shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
     screen = desktop.run_screen
-    area = pygame.Rect(20, 80, 1200, 580)
+    area = pygame.Rect(20, 16, 1240, 688)
     wrapped: list[str] = []
     shop_labels: list[str] = []
     original_shop_wrapped = football_shop_module.draw_wrapped_text
@@ -1552,7 +1985,7 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     buttons = view.draw(
         _surface(), area, shop.state, "Bye Week skipped scheduled game 3."
     )
-    assert "SELECT DETAILS" in shop_labels
+    assert card.description in " ".join(shop_labels)
     assert "FOCUS DETAILS" not in shop_labels
     details_index = next(
         index for index, button in enumerate(buttons) if button.label == "DETAILS"
@@ -1647,7 +2080,7 @@ def test_all_coach_upgrade_details_are_keyboard_and_mouse_accessible(
     assert controller is not None and controller.state.shop is not None
     desktop.window_size = window_size
     surface = _surface()
-    content = Layout.from_surface(surface).content
+    content = pygame.Rect(20, 16, 1240, 688)
 
     for card in COACH_UPGRADE_CATALOG:
         shop = FootballShop(
@@ -1969,10 +2402,7 @@ def test_coach_details_do_not_activate_obscured_shop_buttons(
         index for index, button in enumerate(screen.buttons)
         if button.label == "DETAILS"
     )
-    player_buy = next(
-        button for button in screen.buttons
-        if button.label == "BUY"
-    )
+    player_buy = [button for button in screen.buttons if button.label == "BUY"][1]
     ap_before = controller.state.shop.remaining_ap
     logical_buy_position = player_buy.rect.center
 
@@ -2333,7 +2763,9 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     assert play.name in shop_copy and scheme.name in shop_copy
     assert "COMMON" in shop_copy
     assert "SHORT PASS" in shop_copy
-    assert "NEUTRAL ~7.3 / BASE 22s" in shop_copy
+    assert "YARDAGE: STANDARDIZED NEUTRAL ESTIMATE" in shop_copy
+    assert "EXPECTED YARDAGE: ~7.3 YDS" in shop_copy
+    assert "TIME: 22s" in shop_copy
     assert "COUNTERS: DEEP PASS" in shop_copy
 
     desktop.router.draw(_surface())
