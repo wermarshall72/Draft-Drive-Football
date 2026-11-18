@@ -68,6 +68,15 @@ RARITY_WEIGHTS = MappingProxyType(
     }
 )
 
+PLAY_SCHEME_RARITY_WEIGHTS = MappingProxyType(
+    {
+        FootballShopRarity.COMMON: 58,
+        FootballShopRarity.UNCOMMON: 24,
+        FootballShopRarity.RARE: 12,
+        FootballShopRarity.VERY_RARE: 6,
+    }
+)
+
 
 class FootballUpgradeStat(str, Enum):
     POWER = "power"
@@ -873,7 +882,7 @@ class FootballShop:
             return self._rng.choice(by_rarity[available_rarities[-1]])
 
         roll = self._rng.random() * 100
-        for rarity, weight in RARITY_WEIGHTS.items():
+        for rarity, weight in PLAY_SCHEME_RARITY_WEIGHTS.items():
             roll -= weight
             if roll < 0:
                 rarity_pool = by_rarity[rarity]

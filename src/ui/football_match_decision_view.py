@@ -21,6 +21,12 @@ from src.engine.football_simulator import (
     calculate_match_play_estimate,
 )
 from src.ui.football_display import _POSITION_LABELS
+from src.ui.football_card_art import (
+    bonus_card_art,
+    draw_card_art,
+    play_card_art,
+    scheme_card_art,
+)
 from src.ui.football_match_interaction import MatchInteraction
 from src.ui.football_match_palette import (
     MATCH_PANEL as _MATCH_PANEL, MATCH_PANEL_EDGE as _MATCH_PANEL_EDGE,
@@ -301,6 +307,18 @@ class FootballMatchDecisionView:
                     if bonus is not None
                     else catalog[card.card_id]
                 )
+                if bonus is not None:
+                    art_name = bonus_card_art(bonus.action)
+                elif offensive:
+                    art_name = play_card_art(definition.family)
+                else:
+                    art_name = scheme_card_art(definition.family)
+                art_rect = pygame.Rect(
+                    card_rect.left + 5,
+                    card_rect.centery - 21,
+                    42,
+                    42,
+                )
                 label = definition.name.upper()
                 fill = (
                     pygame.Color("#344536")
@@ -320,10 +338,13 @@ class FootballMatchDecisionView:
                     or card.copy_id == self.match_interaction.dragging_card_id else 1,
                     border_radius=5,
                 )
+                draw_card_art(surface, art_name, art_rect)
+                text_left = art_rect.right + 6
+                text_width = card_rect.right - text_left - 6
                 draw_text(
                     surface,
-                    _fit_text(label, self._small_font, card_rect.width - 12),
-                    (card_rect.left + 6, card_rect.top + 3),
+                    _fit_text(label, self._small_font, text_width),
+                    (text_left, card_rect.top + 3),
                     self._small_font,
                     _MATCH_CHALK,
                 )
@@ -356,8 +377,8 @@ class FootballMatchDecisionView:
                     }[bonus.action]
                     draw_text(
                         surface,
-                        _fit_text(effect[0], self._small_font, card_rect.width - 12),
-                        (card_rect.left + 6, card_rect.top + 20),
+                        _fit_text(effect[0], self._small_font, text_width),
+                        (text_left, card_rect.top + 20),
                         self._small_font,
                         _MATCH_MUTED,
                     )
@@ -376,8 +397,8 @@ class FootballMatchDecisionView:
                         clock_line = effect[1]
                     draw_text(
                         surface,
-                        _fit_text(clock_line, self._small_font, card_rect.width - 12),
-                        (card_rect.left + 6, card_rect.top + 37),
+                        _fit_text(clock_line, self._small_font, text_width),
+                        (text_left, card_rect.top + 37),
                         self._small_font,
                         _MATCH_BRASS,
                     )
@@ -390,9 +411,9 @@ class FootballMatchDecisionView:
                         _fit_text(
                             f"{definition.family.label.upper()} / {contributor_label}",
                             self._small_font,
-                            card_rect.width - 12,
+                            text_width,
                         ),
-                        (card_rect.left + 6, card_rect.top + 20),
+                        (text_left, card_rect.top + 20),
                         self._small_font,
                         _MATCH_MUTED,
                     )
@@ -418,8 +439,8 @@ class FootballMatchDecisionView:
                     )
                     draw_text(
                         surface,
-                        _fit_text(preview, self._small_font, card_rect.width - 12),
-                        (card_rect.left + 6, card_rect.top + 37),
+                        _fit_text(preview, self._small_font, text_width),
+                        (text_left, card_rect.top + 37),
                         self._small_font,
                         _MATCH_BRASS,
                     )
@@ -429,9 +450,9 @@ class FootballMatchDecisionView:
                         _fit_text(
                             f"COUNTERS: {definition.family.label.upper()}",
                             self._small_font,
-                            card_rect.width - 12,
+                            text_width,
                         ),
-                        (card_rect.left + 6, card_rect.top + 37),
+                        (text_left, card_rect.top + 37),
                         self._small_font,
                         _MATCH_BRASS,
                     )
@@ -520,12 +541,24 @@ class FootballMatchDecisionView:
                 center=(rect.left + 26, rect.centery),
             ),
         )
-        label = _fit_text(button.label, self._label_font, rect.width - 70)
+        label_left = rect.left + 52
+        if button.label.startswith("CHALLENGE /"):
+            art_rect = pygame.Rect(rect.left + 51, rect.top + 4, 38, rect.height - 8)
+            draw_card_art(
+                surface,
+                bonus_card_art(FootballBonusCardAction.CHALLENGE),
+                art_rect,
+            )
+            label_left = art_rect.right + 6
+            label_width = rect.right - label_left - 8
+        else:
+            label_width = rect.width - 70
+        label = _fit_text(button.label, self._label_font, label_width)
         label_surface = self._label_font.render(label, True, _MATCH_CHALK)
         surface.blit(
             label_surface,
             label_surface.get_rect(
-                midleft=(rect.left + 52, rect.centery),
+                midleft=(label_left, rect.centery),
             ),
         )
         if focused:

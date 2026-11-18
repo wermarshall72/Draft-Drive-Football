@@ -30,6 +30,7 @@ from src.engine.football_shop import (
     MIN_PLAYBOOK_DECK_SIZE,
     PLAYER_UPGRADE_CATALOG,
     POWER_UPGRADE_AMOUNT,
+    PLAY_SCHEME_RARITY_WEIGHTS,
     RARITY_WEIGHTS,
     STAMINA_UPGRADE_AMOUNT,
     TRAINING_POINT_BUDGET,
@@ -809,7 +810,7 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
     )
     shop = FootballShop(
         _roster(),
-        rng=_FixedShopRng(0.8),
+        rng=_FixedShopRng(0.9),
         catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
     )
     initial = shop.state
@@ -847,7 +848,7 @@ def test_removal_respects_four_card_minimum_and_excludes_empty_service_offer() -
     )
     shop = FootballShop(
         _roster(),
-        rng=_FixedShopRng(0.8),
+        rng=_FixedShopRng(0.9),
         catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
     )
     for visit in range(4):
@@ -947,7 +948,7 @@ def test_play_slot_unlock_costs_and_catalog_cards_fill_each_new_slot() -> None:
     )
     shop = FootballShop(
         _roster(),
-        rng=_FixedShopRng(0.5),
+        rng=_FixedShopRng(0.6),
         catalogs={FootballShopSection.PLAYS_SCHEMES: cards},
     )
 
@@ -1009,6 +1010,12 @@ def test_play_scheme_rarity_rolls_are_independent_and_offer_pools_are_respected(
         FootballShopRarity.RARE: 20,
         FootballShopRarity.VERY_RARE: 10,
     }
+    assert dict(PLAY_SCHEME_RARITY_WEIGHTS) == {
+        FootballShopRarity.COMMON: 58,
+        FootballShopRarity.UNCOMMON: 24,
+        FootballShopRarity.RARE: 12,
+        FootballShopRarity.VERY_RARE: 6,
+    }
     all_rarities = tuple(
         _future_catalog_card(
             f"rarity-{rarity.value}",
@@ -1032,7 +1039,7 @@ def test_play_scheme_rarity_rolls_are_independent_and_offer_pools_are_respected(
             slot.card is None or slot.card in all_rarities
             for slot in offer
         )
-    for rarity, weight in RARITY_WEIGHTS.items():
+    for rarity, weight in PLAY_SCHEME_RARITY_WEIGHTS.items():
         assert abs(counts[rarity] - weight * 10) < 70
 
     only_rare = _future_catalog_card(
@@ -1048,7 +1055,7 @@ def test_play_scheme_rarity_rolls_are_independent_and_offer_pools_are_respected(
     )
     shop = FootballShop(
         _roster(),
-        rng=_FixedShopRng(0.8),
+        rng=_FixedShopRng(0.9),
         catalogs={
             FootballShopSection.PLAYS_SCHEMES: (only_rare, ineligible_common)
         },
@@ -1073,7 +1080,7 @@ def test_each_play_scheme_offer_slot_rolls_its_own_rarity() -> None:
         seed=27,
         catalogs={FootballShopSection.PLAYS_SCHEMES: cards},
     )
-    shop._rng = _SequenceShopRng((0.39, 0.40, 0.70, 0.90))
+    shop._rng = _SequenceShopRng((0.25, 0.7, 0.88, 0.97))
     offer = []
     for _ in range(4):
         card = shop._draw_card(FootballShopSection.PLAYS_SCHEMES, offer)
@@ -1114,7 +1121,7 @@ def test_play_scheme_offer_repeats_eligible_cards_after_rarity_pool_exhaustion()
             FootballShopSection.COACH_UPGRADES: (),
         },
     )
-    shop._rng = _SequenceShopRng((0.39, 0.39, 0.70, 0.70))
+    shop._rng = _SequenceShopRng((0.25, 0.25, 0.88, 0.88))
     shop._reset_offers()
 
     slots = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
@@ -1222,8 +1229,8 @@ def test_reroll_refreshes_all_active_sections_deterministically() -> None:
         for index in range(6)
     )
     catalogs = {FootballShopSection.PLAYS_SCHEMES: play_cards}
-    first = FootballShop(_roster(), rng=_FixedShopRng(0.5), catalogs=catalogs)
-    replay = FootballShop(_roster(), rng=_FixedShopRng(0.5), catalogs=catalogs)
+    first = FootballShop(_roster(), rng=_FixedShopRng(0.6), catalogs=catalogs)
+    replay = FootballShop(_roster(), rng=_FixedShopRng(0.6), catalogs=catalogs)
     first_rng = first._rng.getstate()
 
     first_state = first.move_to_next_day()

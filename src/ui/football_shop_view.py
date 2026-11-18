@@ -21,6 +21,13 @@ from src.engine.football_shop import (
 )
 from src.engine.football_simulator import calculate_standardized_play_estimate
 from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
+from src.ui.football_card_art import (
+    REMOVE_ONE_CARD_ART,
+    bonus_card_art,
+    draw_card_art,
+    play_card_art,
+    scheme_card_art,
+)
 from src.ui.coach_art import draw_coach_portrait
 from src.ui.coach_fonts import staff_font
 from src.ui.football_display import _POSITION_LABELS
@@ -358,14 +365,19 @@ class FootballShopView:
         else:
             art = pygame.Rect(rect.left + 7, 0, 70, 70)
             art.centery = rect.centery
-            pygame.draw.rect(surface, "#203c57", art, border_radius=5)
-            pygame.draw.rect(surface, "#507397", art, 1, border_radius=5)
-            placeholder = "--"
-            draw_text(surface, placeholder,
-                      (art.centerx - bold.size(placeholder)[0] // 2,
-                       art.centery - bold.get_height() // 2), bold, muted)
-            x = art.right + 7
             football_card = card.football_card
+            if card.is_removal:
+                art_name = REMOVE_ONE_CARD_ART
+            elif card.bonus_card is not None:
+                art_name = bonus_card_art(card.bonus_card.action)
+            elif isinstance(football_card, FootballPlayDefinition):
+                art_name = play_card_art(football_card.family)
+            elif isinstance(football_card, FootballSchemeDefinition):
+                art_name = scheme_card_art(football_card.family)
+            else:
+                raise ValueError(f"No artwork is mapped for shop card: {card.card_id}")
+            draw_card_art(surface, art_name, art)
+            x = art.right + 7
             self._wrapped(surface, "Remove One Card" if card.is_removal else card.name,
                 pygame.Rect(x, rect.top + 5, rect.right - x - 6, 36), bold, text)
             if isinstance(football_card, (FootballPlayDefinition, FootballSchemeDefinition)):

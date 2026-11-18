@@ -13,6 +13,12 @@ from src.engine.football_decks import (
 )
 from src.engine.football_shop import MIN_PLAYBOOK_DECK_SIZE, FootballShopState
 from src.engine.football_simulator import calculate_standardized_play_estimate
+from src.ui.football_card_art import (
+    bonus_card_art,
+    draw_card_art,
+    play_card_art,
+    scheme_card_art,
+)
 from src.ui.football_depth_chart import draw_depth_chart
 from src.ui.football_display import _POSITION_LABELS
 from src.ui.football_shop_review import ShopReviewInteraction
@@ -139,11 +145,23 @@ class FootballReviewView:
                     border_radius=5,
                 )
                 remove_width = 72 if pending else 0
-                text_width = row.width - remove_width - 16
+                text_left = row.left + 58
+                text_width = row.right - remove_width - 8 - text_left
+                if card.card_id in BONUS_CARD_CATALOG:
+                    art_name = bonus_card_art(BONUS_CARD_CATALOG[card.card_id].action)
+                elif title == "OFFENSE":
+                    art_name = play_card_art(definition.family)
+                else:
+                    art_name = scheme_card_art(definition.family)
+                draw_card_art(
+                    surface,
+                    art_name,
+                    pygame.Rect(row.left + 4, row.top + 10, 48, 48),
+                )
                 draw_text(
                     surface,
                     _fit_text(label, self._small_font, text_width),
-                    (row.left + 7, row.top + 3),
+                    (text_left, row.top + 3),
                     self._small_font,
                     self.theme.text,
                 )
@@ -175,7 +193,7 @@ class FootballReviewView:
                 draw_text(
                     surface,
                     _fit_text(detail, self._small_font, text_width),
-                    (row.left + 7, row.top + 21),
+                    (text_left, row.top + 21),
                     self._small_font,
                     self.theme.muted,
                 )
@@ -183,7 +201,7 @@ class FootballReviewView:
                     surface,
                     description,
                     pygame.Rect(
-                        row.left + 7,
+                        text_left,
                         row.top + 38,
                         text_width,
                         row.height - 42,

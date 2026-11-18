@@ -76,8 +76,9 @@ covers extracted interaction state.
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
-  repeatable play/bonus purchases, independent playbook rarity rolls, and
-  removal validation. Remove One Card is a Rare shop-only service, not a deck
+  repeatable play/bonus purchases, independent 58/24/12/6 playbook rarity
+  rolls, and removal validation. Other shop sections keep their existing rarity
+  weights. Remove One Card is a Rare shop-only service, not a deck
   card. Its 192 individual-player cards apply permanent upgrades to the roster
   and retain temporary upgrades as pending run-local state. The shop state
   projects raw run and next-match roster effects and
@@ -97,7 +98,12 @@ covers extracted interaction state.
   [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py)
   supplies complete duration, uniqueness, rarity, and cost details to shop
   inspection and owned-upgrade rows; [text.py](src/ui/text.py) wraps complete
-  descriptions and fails if they cannot fit their assigned region. See
+  descriptions and fails if they cannot fit their assigned region.
+  [football_card_art.py](src/ui/football_card_art.py) maps play/scheme families,
+  bonus actions, and the removal service to packaged pixel-art tiles used by
+  the shop, Playbook, match hand, and Challenge action buttons. Assets come from
+  [process_football_card_art.py](scripts/process_football_card_art.py). See
+  [test_football_card_art.py](tests/test_football_card_art.py),
   [test_football_shop.py](tests/test_football_shop.py),
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
   the shop/review cases in [test_football_desktop.py](tests/test_football_desktop.py).

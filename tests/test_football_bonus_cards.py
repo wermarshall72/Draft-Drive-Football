@@ -39,6 +39,8 @@ from src.engine.football_shop import (
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
 from src.ui.football_match_decision_view import FootballMatchDecisionView
+from src.ui import football_match_decision_view as football_match_view_module
+from src.ui.football_card_art import bonus_card_art
 from src.ui.football_match_interaction import MatchInteraction
 
 
@@ -156,7 +158,9 @@ def test_bonus_catalog_rarities_costs_and_shop_only_removal() -> None:
     )
 
 
-def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand() -> None:
+def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand(
+    monkeypatch,
+) -> None:
     pygame.font.init()
     font = pygame.font.Font(None, 14)
     surface = pygame.Surface((900, 420))
@@ -165,6 +169,14 @@ def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand() -> 
         defensive_cards,
         hand=defensive_cards,
     )
+    rendered_art = []
+    original_draw_art = football_match_view_module.draw_card_art
+
+    def capture_art(surface, filename, rect):
+        rendered_art.append((filename, pygame.Rect(rect)))
+        return original_draw_art(surface, filename, rect)
+
+    monkeypatch.setattr(football_match_view_module, "draw_card_art", capture_art)
     for action, definition in BONUS_CARD_CATALOG.items():
         card = FootballCardCopy(f"ui:{action}", action)
         offense = FootballDeckState((card,), hand=(card,))
@@ -191,6 +203,9 @@ def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand() -> 
                 challenge_available=True,
             ),
         )
+        art_name, art_rect = rendered_art[-1]
+        assert art_name == bonus_card_art(definition.action)
+        assert buttons[0].rect.contains(art_rect)
         assert len(buttons) == 1
         assert buttons[0].label == definition.name.upper()
         assert buttons[0].enabled is not (
