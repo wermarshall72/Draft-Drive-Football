@@ -221,7 +221,7 @@ def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand(
             assert card.copy_id not in view.match_interaction.card_rects
 
 
-def test_bonus_shop_purchases_repeat_with_independent_copy_ids_and_offense_ownership() -> None:
+def test_bonus_shop_purchase_replaces_offer_and_adds_offensive_copy() -> None:
     shop = FootballShop(_roster("Shop"), seed=105)
     card = next(
         card
@@ -231,17 +231,20 @@ def test_bonus_shop_purchases_repeat_with_independent_copy_ids_and_offense_owner
     shop._offers[FootballShopSection.PLAYS_SCHEMES] = [card, None, None, None]
 
     shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
-    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    replacement = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0].card
     copies = tuple(
         owned
         for owned in shop.offensive_deck
         if owned.card_id == FootballBonusCardAction.OFFENSIVE_DRAW.value
     )
 
-    assert len(copies) == 2
-    assert len({copy.copy_id for copy in copies}) == 2
+    assert replacement is not None
+    assert replacement.card_id != card.card_id
+    assert replacement in shop._catalogs[FootballShopSection.PLAYS_SCHEMES]
+    assert len(copies) == 1
+    assert len({copy.copy_id for copy in copies}) == 1
     assert len(shop.defensive_deck) == 6
-    assert shop.remaining_ap == 8
+    assert shop.remaining_ap == 10
     assert not shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0].purchased
 
 

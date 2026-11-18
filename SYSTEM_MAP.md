@@ -66,19 +66,22 @@ covers extracted interaction state.
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
   renders the player and coach upgrade panels and the six-slot play/scheme
-  grid using the run's saved appearances and coach assignment;
-  [football_review_view.py](src/ui/football_review_view.py)
-  renders the playbook and delegates the Depth Chart to
-  [football_depth_chart.py](src/ui/football_depth_chart.py), with review/scroll
-  and stat-toggle state in
+  grid using the run's saved appearances and coach assignment.
+  [football_review_view.py](src/ui/football_review_view.py) renders the
+  unified, filterable two-column Playbook with category borders, shop-sourced
+  rarity badges, full card details, and the explicit removal-mode selection;
+  it delegates the Depth Chart to [football_depth_chart.py](src/ui/football_depth_chart.py).
+  Review filters/scrolling and stat-toggle state live in
   [football_shop_review.py](src/ui/football_shop_review.py). A removal purchase
-  opens the playbook for explicit copy selection or cancellation; the
+  opens the same Playbook layout for exact-copy selection or cancellation; the
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
-  repeatable play/bonus purchases, independent 58/24/12/6 playbook rarity
-  rolls, and removal validation. Other shop sections keep their existing rarity
-  weights. Remove One Card is a Rare shop-only service, not a deck
+  repeatable bonus-card purchases, play/scheme-section offer replacement after
+  purchase, independent 58/24/12/6 playbook rarity rolls, and removal
+  validation. Purchased plays/schemes cannot be bought again on the same shop
+  day; other shop sections keep their existing rarity weights. Remove One Card
+  is a Rare shop-only service, not a deck
   card. Its 192 individual-player cards apply permanent upgrades to the roster
   and retain temporary upgrades as pending run-local state. The shop state
   projects raw run and next-match roster effects and
@@ -98,7 +101,11 @@ covers extracted interaction state.
   [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py)
   supplies complete duration, uniqueness, rarity, and cost details to shop
   inspection and owned-upgrade rows; [text.py](src/ui/text.py) wraps complete
-  descriptions and fails if they cannot fit their assigned region.
+  descriptions and fails if they cannot fit their assigned region. See
+  [test_football_playbook_view.py](tests/test_football_playbook_view.py) for
+  Playbook filtering, card content, color contrast, rarity, and bounds;
+  [test_football_desktop.py](tests/test_football_desktop.py) covers the shop
+  navigation and paid-removal flow.
   [football_card_art.py](src/ui/football_card_art.py) maps play/scheme families,
   bonus actions, and the removal service to packaged pixel-art tiles used by
   the shop, Playbook, match hand, and Challenge action buttons. Assets come from

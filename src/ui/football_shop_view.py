@@ -32,6 +32,7 @@ from src.ui.coach_art import draw_coach_portrait
 from src.ui.coach_fonts import staff_font
 from src.ui.football_display import _POSITION_LABELS
 from src.ui.player_art import draw_draft_player
+from src.ui.stat_icons import without_stat_icons
 from src.ui.text import (
     draw_complete_wrapped_text,
     fit_text as _fit_text,
@@ -379,7 +380,9 @@ class FootballShopView:
             draw_card_art(surface, art_name, art)
             x = art.right + 7
             self._wrapped(surface, "Remove One Card" if card.is_removal else card.name,
-                pygame.Rect(x, rect.top + 5, rect.right - x - 6, 36), bold, text)
+                pygame.Rect(x, rect.top + 5, rect.right - x - 6, 36),
+                without_stat_icons(bold),
+                text)
             if isinstance(football_card, (FootballPlayDefinition, FootballSchemeDefinition)):
                 contributors = " / ".join(_COMPACT_POSITION_LABELS[p] for p in football_card.contributors)
                 lines = [f"POSITIONS: {contributors}",
@@ -565,11 +568,19 @@ class FootballShopView:
                 )
             elif compact:
                 card_label = f"{card.name} / {football_card.family.label.upper()}"
+        card_name_font = (
+            without_stat_icons(self._small_font)
+            if isinstance(
+                football_card,
+                (FootballPlayDefinition, FootballSchemeDefinition),
+            )
+            else self._small_font
+        )
         draw_text(
             surface,
-            _fit_text(card_label, self._small_font, text_width),
+            _fit_text(card_label, card_name_font, text_width),
             (text_left, rect.top + (3 if compact else 4)),
-            self._small_font,
+            card_name_font,
             self.theme.text,
         )
         if not tiny:

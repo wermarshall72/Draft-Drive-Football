@@ -241,7 +241,11 @@ class FootballRunScreen(Screen):
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode == "depth"
         )
-        if depth_review:
+        playbook_review = (
+            state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and self.shop_review.mode == "playbook"
+        )
+        if depth_review or playbook_review:
             layout = Layout.from_surface(surface)
             surface.fill("#061629")
             content = pygame.Rect(20, 15, surface.get_width() - 40, surface.get_height() - 30)
@@ -333,11 +337,12 @@ class FootballRunScreen(Screen):
             if state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
         )
-        self.buttons.append(
-            (DepthChartButton if depth_review else Button)(
-                "END RUN", self._request_exit, exit_rect, variant="quiet"
+        if not playbook_review:
+            self.buttons.append(
+                (DepthChartButton if depth_review else Button)(
+                    "END RUN", self._request_exit, exit_rect, variant="quiet"
+                )
             )
-        )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
         if self.last_error is not None and not (

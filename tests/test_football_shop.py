@@ -808,11 +808,19 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
         effect=lambda roster: roster,
         is_removal=True,
     )
+    replacement = _future_catalog_card(
+        "very-rare-replacement",
+        FootballShopSection.PLAYS_SCHEMES,
+        FootballShopRarity.VERY_RARE,
+    )
     shop = FootballShop(
         _roster(),
-        rng=_FixedShopRng(0.9),
-        catalogs={FootballShopSection.PLAYS_SCHEMES: (removal,)},
+        rng=_FixedShopRng(0.99),
+        catalogs={
+            FootballShopSection.PLAYS_SCHEMES: (removal, replacement),
+        },
     )
+    shop._offers[FootballShopSection.PLAYS_SCHEMES] = [removal, None, None, None]
     initial = shop.state
     copy_to_remove = initial.offensive_deck[-1]
     shop.buy_card(FootballShopSection.PLAYS_SCHEMES, removal.card_id)
@@ -831,7 +839,26 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
     assert copy_to_remove not in removed.offensive_deck
     assert len(removed.offensive_deck) == 5
     assert removed.pending_removal is None
-    assert removed.section(FootballShopSection.PLAYS_SCHEMES).slots[0].purchased
+    assert (
+        removed.section(FootballShopSection.PLAYS_SCHEMES).slots[0].card
+        is replacement
+    )
+
+
+def test_bonus_purchase_replacement_uses_play_scheme_rarity_roll() -> None:
+    shop = FootballShop(_roster(), rng=_FixedShopRng(0.99))
+    section = FootballShopSection.PLAYS_SCHEMES
+    catalog = shop._catalogs[section]
+    bonus = next(card for card in catalog if card.card_id == "bonus:offensive_draw")
+    shop._offers[section] = [bonus, None, None, None]
+
+    state = shop.buy_card(section, bonus.card_id)
+    replacement = state.section(section).slots[0].card
+
+    assert replacement is not None
+    assert replacement.card_id != bonus.card_id
+    assert replacement in catalog
+    assert replacement.rarity is FootballShopRarity.VERY_RARE
 
 
 def test_removal_respects_four_card_minimum_and_excludes_empty_service_offer() -> None:
@@ -1130,10 +1157,57 @@ def test_play_scheme_offer_repeats_eligible_cards_after_rarity_pool_exhaustion()
     assert all(slot.card is not None for slot in slots[:4])
     assert ineligible_common not in offers
 
-    for slot_index in range(4):
-        shop.buy_card(FootballShopSection.PLAYS_SCHEMES, slot_index)
-    assert shop.remaining_ap == 8
-    assert len(shop.state.purchased_cards) == 2
+    assert sum(card is common for card in offers) == 2
+    assert sum(card is rare for card in offers) == 2
+
+
+def test_purchased_play_replaces_all_matching_slots_and_can_return_next_day() -> None:
+    source_shop = FootballShop(_roster(), 28)
+    play_catalog = tuple(
+        card
+        for card in source_shop._catalogs[FootballShopSection.PLAYS_SCHEMES]
+        if card.football_card is not None
+    )[:2]
+    assert len(play_catalog) == 2
+    shop = FootballShop(
+        _roster(),
+        seed=29,
+        catalogs={
+            FootballShopSection.PLAYER_UPGRADES: (),
+            FootballShopSection.PLAYS_SCHEMES: play_catalog,
+            FootballShopSection.COACH_UPGRADES: (),
+        },
+    )
+    shop._rng = _SequenceShopRng((0.0,) * 20)
+    shop._reset_offers()
+
+    before = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
+    purchased_card = before[0].card
+    assert purchased_card is not None
+    assert all(slot.card is purchased_card for slot in before[:4])
+
+    purchased = shop.buy_card(
+        FootballShopSection.PLAYS_SCHEMES,
+        purchased_card.card_id,
+    )
+    refreshed = purchased.section(FootballShopSection.PLAYS_SCHEMES).slots
+    assert refreshed[0].card is not None
+    assert all(
+        slot.card is not None and slot.card.card_id != purchased_card.card_id
+        for slot in refreshed[:4]
+    )
+    assert len(purchased.purchased_cards) == 1
+    with pytest.raises(ValueError, match="not in the current offer"):
+        shop.buy_card(
+            FootballShopSection.PLAYS_SCHEMES,
+            purchased_card.card_id,
+        )
+
+    next_day = shop.move_to_next_day()
+    assert any(
+        slot.card is not None and slot.card.card_id == purchased_card.card_id
+        for slot in next_day.section(FootballShopSection.PLAYS_SCHEMES).slots[:4]
+    )
 
 
 def test_purchase_stays_visible_until_reroll_and_is_eligible_next_visit() -> None:

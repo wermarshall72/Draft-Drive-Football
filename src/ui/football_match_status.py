@@ -14,8 +14,17 @@ from src.ui.football_match_palette import (
     MATCH_BRASS as _MATCH_BRASS,
 )
 from src.ui.screens import _ui_font
+from src.ui.stat_icons import STAT_PATTERN, without_stat_icons
 from src.ui.text import fit_text as _fit_text
 from src.ui.widgets import draw_text
+
+
+_CARD_NAMES_WITH_STAT_WORDS = tuple(
+    name
+    for name in (*_PLAY_LABELS.values(), *_SCHEME_LABELS.values())
+    if STAT_PATTERN.search(name)
+)
+
 
 class FootballMatchStatusView:
     def __init__(self, small_font: pygame.font.Font) -> None:
@@ -174,18 +183,20 @@ class FootballMatchStatusView:
         else:
             text = "Opening drive  /  First possession"
             previous = ""
+        text_font = self._event_font(text)
         text_left = rect.left + 142
         available = rect.right - text_left - 18
         draw_text(
             surface,
-            _fit_text(text, self._small_font, available),
+            _fit_text(text, text_font, available),
             (text_left, rect.top + 7),
-            self._small_font,
+            text_font,
             _MATCH_CHALK,
         )
         if previous:
-            previous_surface = self._small_font.render(
-                _fit_text(previous, self._small_font, available),
+            previous_font = self._event_font(previous)
+            previous_surface = previous_font.render(
+                _fit_text(previous, previous_font, available),
                 True,
                 _MATCH_MUTED,
             )
@@ -275,4 +286,10 @@ class FootballMatchStatusView:
             description = f"{offense}: {event.action.value.replace('_', ' ').upper()}"
         if event.perk_effects:
             description += f" / {'; '.join(event.perk_effects)}"
-        return _fit_text(description, self._small_font, 950)
+        event_font = self._event_font(description)
+        return _fit_text(description, event_font, 950)
+
+    def _event_font(self, text: str) -> pygame.font.Font:
+        if any(name in text.upper() for name in _CARD_NAMES_WITH_STAT_WORDS):
+            return without_stat_icons(self._small_font)
+        return self._small_font

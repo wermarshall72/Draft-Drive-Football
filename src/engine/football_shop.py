@@ -377,6 +377,7 @@ class FootballShop:
         self._purchased: dict[
             tuple[FootballShopSection, str], FootballShopCard
         ] = {}
+        self._purchased_play_schemes_today: set[str] = set()
         self._run_purchased_upgrades: list[FootballUpgrade] = []
         self._pending_player_upgrades: list[FootballUpgrade] = []
         self._player_offer_purchased: set[str] = set()
@@ -582,6 +583,8 @@ class FootballShop:
                 self._pending_player_upgrades.append(selected.upgrade)
         if section is FootballShopSection.PLAYER_UPGRADES:
             self._player_offer_purchased.add(selected.card_id)
+        if section is FootballShopSection.PLAYS_SCHEMES:
+            self._refresh_play_scheme_offers(selected)
         if effect is not None:
             self._owned_coach_upgrades.append(selected)
             if effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP:
@@ -653,6 +656,7 @@ class FootballShop:
         self._remaining_ap -= pending.cost
         self._purchased[(pending.section, pending.card_id)] = pending
         self._pending_removal = None
+        self._refresh_play_scheme_offers(pending)
         return self.state
 
     def cancel_card_removal(self) -> FootballShopState:
@@ -704,6 +708,7 @@ class FootballShop:
         if self._remaining_ap < 1:
             raise ValueError("Moving to the next day requires 1 AP.")
         self._player_offer_purchased.clear()
+        self._purchased_play_schemes_today.clear()
         self._reset_offers()
         self._remaining_ap -= 1
         self._day += 1
@@ -730,6 +735,7 @@ class FootballShop:
         self._remaining_ap = ACTION_POINT_BUDGET + self._future_shop_ap_bonus
         self._purchased.clear()
         self._player_offer_purchased.clear()
+        self._purchased_play_schemes_today.clear()
         self._finished = False
         self._reset_offers()
         return self.state
@@ -842,10 +848,32 @@ class FootballShop:
                     section, self._offers[section]
                 )
 
+    def _refresh_play_scheme_offers(self, purchased: FootballShopCard) -> None:
+        if purchased.football_card is not None:
+            self._purchased_play_schemes_today.add(purchased.card_id)
+
+        section = FootballShopSection.PLAYS_SCHEMES
+        offers = self._offers[section]
+        replaced_slots = [
+            index
+            for index, offered in enumerate(offers)
+            if offered is not None and offered.card_id == purchased.card_id
+        ]
+        for index in replaced_slots:
+            offers[index] = None
+        for index in replaced_slots:
+            offers[index] = self._draw_card(
+                section,
+                offers,
+                excluded_card_id=purchased.card_id,
+            )
+
     def _draw_card(
         self,
         section: FootballShopSection,
         current_offer: list[FootballShopCard | None],
+        *,
+        excluded_card_id: str | None = None,
     ) -> FootballShopCard | None:
         current_ids = {
             card.card_id for card in current_offer if card is not None
@@ -853,12 +881,18 @@ class FootballShop:
         eligible = [
             card
             for card in self._catalogs[section]
-            if (section is FootballShopSection.PLAYER_UPGRADES
+            if card.card_id != excluded_card_id
+            and (
+                section is FootballShopSection.PLAYER_UPGRADES
                 or section is FootballShopSection.PLAYS_SCHEMES
                 or (section, card.card_id) not in self._purchased)
             and (
                 section is FootballShopSection.PLAYS_SCHEMES
                 or card.card_id not in current_ids
+            )
+            and not (
+                section is FootballShopSection.PLAYS_SCHEMES
+                and card.card_id in self._purchased_play_schemes_today
             )
             and self._card_is_available(card)
         ]
@@ -1018,6 +1052,22 @@ def _play_scheme_catalog() -> tuple[FootballShopCard, ...]:
         )
     )
     return tuple(cards)
+
+
+def _playbook_card_rarities() -> Mapping[str, FootballShopRarity]:
+    rarities: dict[str, FootballShopRarity] = {}
+    for card in _play_scheme_catalog():
+        if card.football_card is not None:
+            card_id = card.football_card.card_id
+        elif card.bonus_card is not None:
+            card_id = card.bonus_card.card_id
+        else:
+            continue
+        rarities[card_id] = card.rarity
+    return MappingProxyType(rarities)
+
+
+PLAYBOOK_CARD_RARITIES = _playbook_card_rarities()
 
 
 def _player_upgrade_catalog() -> tuple[FootballShopCard, ...]:

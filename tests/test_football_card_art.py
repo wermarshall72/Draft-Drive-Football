@@ -185,3 +185,16 @@ def test_card_art_packaging_and_scaling_preserve_pixels() -> None:
         for y in range(destination.top, destination.bottom)
         for x in range(destination.left, destination.right)
     } <= source_pixels
+
+
+def test_play_action_defense_tile_includes_safety_plus_linebacker_glyph() -> None:
+    image = pygame.image.load(CARD_ART_DIR / "defense_pa_pass.png")
+
+    def is_ink(x: int, y: int) -> bool:
+        color = image.get_at((x, y))
+        return color.a > 0 and max(color.r, color.g, color.b) < 55
+
+    horizontal_stroke = [x for x in range(50, 105) if is_ink(x, 163)]
+    vertical_stroke = [y for y in range(138, 188) if is_ink(77, y)]
+    assert horizontal_stroke[0] < 60 and horizontal_stroke[-1] > 95
+    assert vertical_stroke[0] < 148 and vertical_stroke[-1] > 178

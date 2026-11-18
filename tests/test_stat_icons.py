@@ -17,6 +17,7 @@ from src.ui.stat_icons import (
     StatIconFont,
     icon_height_for,
     stat_icon,
+    without_stat_icons,
 )
 from src.ui.text import draw_complete_wrapped_text, fit_text, wrap_text_lines
 from src.ui.widgets import Button
@@ -97,6 +98,17 @@ def test_plain_text_rendering_and_metrics_are_unchanged() -> None:
     assert wrapped.get_height() == plain.get_height()
     assert wrap_text_lines("one two three four five six", wrapped, 60) == \
         wrap_text_lines("one two three four five six", plain, 60)
+
+
+def test_stat_words_in_names_can_render_without_icons() -> None:
+    font = staff_font(16)
+    plain = without_stat_icons(font)
+    assert plain is font._font
+    assert plain.size("Power Toss") == font._font.size("Power Toss")
+    assert _bytes(plain.render("Power Toss", True, WHITE)) == _bytes(
+        font._font.render("Power Toss", True, WHITE)
+    )
+    assert font.size("Power +5%")[0] > plain.size("Power +5%")[0]
 
 
 @pytest.mark.parametrize("stat", STATS)

@@ -1318,7 +1318,20 @@ def test_bonus_cards_fit_shop_and_playbook_layouts(
         capture_review_description,
     )
     content = pygame.Rect(20, 16, 1240, 688)
-    playbook_buttons = review.draw_playbook(_surface(), content, playbook_shop)
+    review.interaction.open_playbook()
+    review.draw_playbook(_surface(), content, playbook_shop)
+    playbook_art.clear()
+    displayed.clear()
+    descriptions.clear()
+    description_rects.clear()
+    for page in range(review.interaction.playbook_max_scroll + 1):
+        if page:
+            review.interaction.handle_scroll(
+                pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1})
+            )
+        playbook_buttons = review.draw_playbook(
+            _surface(), content, playbook_shop
+        )
     rendered = " ".join(text for text, _ in displayed)
     for definition in BONUS_CARD_CATALOG.values():
         assert definition.name in rendered
@@ -1671,7 +1684,9 @@ def test_shop_review_screens_show_run_snapshot_and_owned_playbook(
     _activate(desktop, "BACK TO SHOP")
     _activate(desktop, "PLAYBOOK")
     desktop.router.draw(_surface())
-    assert "OWNED CARDS" in " ".join(displayed)
+    assert "END RUN" not in {button.label for button in desktop.run_screen.buttons}
+    assert "BACK TO SHOP" in {button.label for button in desktop.run_screen.buttons}
+    assert "OWNED COPIES" in " ".join(displayed)
     for _ in range(desktop.run_screen.shop_review.playbook_max_scroll):
         desktop.run_screen.handle_event(
             pygame.event.Event(pygame.MOUSEWHEEL, {"x": 0, "y": -1})
@@ -3434,14 +3449,29 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     _draft_to_shop(desktop)
 
     displayed: list[str] = []
+    playbook_details: list[str] = []
     original_draw_text = football_run_screen_module.draw_text
+    original_review_complete = football_review_module.draw_complete_wrapped_text
 
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
         original_draw_text(surface, text, position, font, color)
 
+    def capture_review_complete(
+        surface, text, rect, font, color, *, line_gap=2
+    ):
+        playbook_details.append(text)
+        return original_review_complete(
+            surface, text, rect, font, color, line_gap=line_gap
+        )
+
     monkeypatch.setattr(football_run_screen_module, "draw_text", capture_text)
     monkeypatch.setattr(football_review_module, "draw_text", capture_text)
+    monkeypatch.setattr(
+        football_review_module,
+        "draw_complete_wrapped_text",
+        capture_review_complete,
+    )
     monkeypatch.setattr(football_shop_module, "draw_text", capture_text)
     desktop.router.draw(_surface())
     shop_copy = " ".join(displayed)
@@ -3472,9 +3502,10 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     playbook_copy = " ".join(displayed)
     assert "Slot Slant" in playbook_copy
     assert "SHORT PASS" in playbook_copy
-    assert "NEUTRAL ~7.3 YDS / BASE 22s" in playbook_copy
+    assert any("NEUTRAL ~7.3 YDS" in detail and "BASE 22s" in detail
+               for detail in playbook_details)
     assert "Quarters Coverage" in playbook_copy
-    assert "COUNTERS DEEP PASS" in playbook_copy
+    assert any("COUNTERS DEEP PASS" in detail for detail in playbook_details)
 
 
 @pytest.mark.parametrize("height", (49, 50, 60, 74, 75, 92))
@@ -3611,6 +3642,38 @@ def test_match_history_labels_turnovers_on_downs(tmp_path: Path) -> None:
     assert "turnover on downs" in text
 
 
+def test_match_history_play_name_does_not_get_a_power_stat_icon(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    status_view = FootballMatchStatusView(desktop.run_screen._small_font)
+    result = FootballPlayResult(
+        offensive_play=OffensivePlayAction.POWER_TOSS,
+        yards_gained=4.0,
+        clock_seconds_used=18,
+    )
+    event = FootballMatchEvent(
+        sequence=1,
+        action=OffensivePlayAction.POWER_TOSS,
+        team_a_score=0,
+        team_b_score=0,
+        possession=FootballTeamSide.TEAM_A,
+        offense_field_position=25.0,
+        down=1,
+        yards_to_go=10.0,
+        game_clock_seconds=882,
+        period=1,
+        status=FootballMatchStatus.IN_PROGRESS,
+        clock_seconds_used=18,
+        play_result=result,
+    )
+
+    text = status_view.format_event(event, "Home", "Away")
+
+    assert "POWER TOSS" in text
+    assert status_view._event_font(text) is desktop.run_screen._small_font._font
+
+
 def test_match_history_labels_ball_hawk_defensive_touchdown(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     result = FootballPlayResult(
@@ -3668,9 +3731,12 @@ def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(
 
     _activate(desktop, "SELECT CARD")
     assert desktop.run_screen.shop_review.mode == "playbook"
+    desktop.router.draw(_surface())
+    assert "END RUN" not in {button.label for button in desktop.run_screen.buttons}
     pending = controller.state.shop
     assert pending is not None and pending.pending_removal is not None
     assert pending.remaining_ap == before.remaining_ap
+    _activate(desktop, "CATEGORY: ALL CATEGORIES")
     desktop.router.draw(_surface())
     assert pending_art
     remove_buttons = [
@@ -3688,14 +3754,15 @@ def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(
     assert cancelled.remaining_ap == before.remaining_ap
 
     _activate(desktop, "SELECT CARD")
+    _activate(desktop, "CATEGORY: ALL CATEGORIES")
     desktop.router.draw(_surface())
-    remove_button = next(
-        button for button in desktop.run_screen.buttons if button.label == "REMOVE"
-    )
-    remove_button.action()
+    expected_offense = before.offensive_deck[1:]
+    _activate(desktop, "REMOVE")
     removed = controller.state.shop
     assert removed is not None and removed.pending_removal is None
     assert removed.remaining_ap == before.remaining_ap - 2
+    assert removed.offensive_deck == expected_offense
+    assert removed.defensive_deck == before.defensive_deck
     assert len(removed.offensive_deck) + len(removed.defensive_deck) == (
         len(before.offensive_deck) + len(before.defensive_deck) - 1
     )

@@ -232,17 +232,28 @@ def test_all_play_and_scheme_catalog_offers_are_common_without_changing_player_r
     )
 
 
-def test_named_play_can_be_rebought_from_one_offer_and_reoffered_next_day() -> None:
+def test_named_play_is_replaced_after_purchase_and_can_return_next_day() -> None:
     definition = OFFENSIVE_PLAY_CATALOG["go_route"]
     card = _shop_card(definition, kind="play")
+    replacement = _shop_card(OFFENSIVE_PLAY_CATALOG["rb_run"], kind="play")
+
+    class FirstCommonShopRng(CommonShopRng):
+        def choice(self, sequence):
+            return sequence[0]
+
     shop = FootballShop(
         _roster("Repeat"),
-        rng=CommonShopRng(31),
-        catalogs={FootballShopSection.PLAYS_SCHEMES: (card,)},
+        rng=FirstCommonShopRng(31),
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (card, replacement)},
     )
+    shop._offers[FootballShopSection.PLAYS_SCHEMES] = [card, card, card, card]
 
     shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
-    shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+    slots = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
+    assert all(slot.card is replacement for slot in slots[:4])
+    with pytest.raises(ValueError, match="not in the current offer"):
+        shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
+
     shop.move_to_next_day()
     assert shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0].card is card
     shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
@@ -250,8 +261,8 @@ def test_named_play_can_be_rebought_from_one_offer_and_reoffered_next_day() -> N
     copies = tuple(
         copy for copy in shop.offensive_deck if copy.card_id == definition.card_id
     )
-    assert len(copies) == 3
-    assert len({copy.copy_id for copy in copies}) == 3
+    assert len(copies) == 2
+    assert len({copy.copy_id for copy in copies}) == 2
 
 
 def test_standardized_expected_yardage_hierarchy_covers_every_variant() -> None:

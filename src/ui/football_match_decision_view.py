@@ -28,6 +28,7 @@ from src.ui.football_card_art import (
     scheme_card_art,
 )
 from src.ui.football_match_interaction import MatchInteraction
+from src.ui.stat_icons import without_stat_icons
 from src.ui.football_match_palette import (
     MATCH_PANEL as _MATCH_PANEL, MATCH_PANEL_EDGE as _MATCH_PANEL_EDGE,
     MATCH_CHALK as _MATCH_CHALK, MATCH_MUTED as _MATCH_MUTED,
@@ -341,11 +342,12 @@ class FootballMatchDecisionView:
                 draw_card_art(surface, art_name, art_rect)
                 text_left = art_rect.right + 6
                 text_width = card_rect.right - text_left - 6
+                name_font = without_stat_icons(self._small_font)
                 draw_text(
                     surface,
-                    _fit_text(label, self._small_font, text_width),
+                    _fit_text(label, name_font, text_width),
                     (text_left, card_rect.top + 3),
-                    self._small_font,
+                    name_font,
                     _MATCH_CHALK,
                 )
                 if bonus is not None:
