@@ -4,6 +4,7 @@ import pygame
 
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballConversionAction,
     OffensivePlayAction,
 )
 from src.engine.football_controller import (
@@ -15,23 +16,13 @@ from src.engine.football_controller import (
 from src.engine.football_shop import FootballShopSection
 from src.ui.coach_fonts import staff_font
 from src.ui.football_result import FootballResultView
-from src.ui.football_display import (
-    _SCHEME_LABELS,
-)
 from src.ui.football_review_view import FootballReviewView
 from src.ui.football_depth_chart import DepthChartButton
 from src.ui.football_shop_view import FootballShopView
 from src.ui.football_player_draft_view import FootballPlayerDraftView
 from src.ui.football_coach_view import FootballCoachView
-from src.ui.football_match_field import draw_match_field
-from src.ui.football_match_decision_view import FootballMatchDecisionView
-from src.ui.football_match_palette import (
-    MATCH_CANVAS as _MATCH_CANVAS, MATCH_PANEL as _MATCH_PANEL,
-    MATCH_PANEL_EDGE as _MATCH_PANEL_EDGE, MATCH_CHALK as _MATCH_CHALK,
-    MATCH_OPPONENT as _MATCH_OPPONENT, MATCH_FOCUS as _MATCH_FOCUS,
-)
-from src.ui.football_match_status import FootballMatchStatusView
 from src.ui.football_match_interaction import HandEventKind, MatchInteraction
+from src.ui.football_match_screen import FootballMatchScreen, MatchActions
 from src.ui.football_draft_interaction import CoachInspection, PlayerInspection
 from src.ui.football_shop_review import ShopReviewInteraction
 from src.ui.layout import Layout
@@ -55,7 +46,7 @@ class FootballRunScreen(Screen):
         self.state: FootballGameControllerState | None = None
         self.last_error: str | None = None
         self.confirm_exit = False
-        self.match_interaction = MatchInteraction()
+        self.match_screen = FootballMatchScreen(theme, self._small_font, self._label_font)
         self.coach_inspection = CoachInspection()
         self.player_inspection = PlayerInspection()
         self._staff_body_font = staff_font(16)
@@ -84,7 +75,7 @@ class FootballRunScreen(Screen):
         self.state = controller.state
         self.last_error = None
         self.confirm_exit = False
-        self.match_interaction = MatchInteraction()
+        self.match_screen.reset()
         self.coach_inspection = CoachInspection()
         self.player_inspection = PlayerInspection()
         self.buttons = []
@@ -95,8 +86,21 @@ class FootballRunScreen(Screen):
         self._shop_view_instance = None
         self._focus_shop_navigation_after_details = False
 
+    @property
+    def match_interaction(self) -> MatchInteraction:
+        return self.match_screen.interaction
+
+    def _match_screen_active(self, state: FootballGameControllerState) -> bool:
+        return (
+            state.phase is FootballRunPhase.MATCH
+            or self.match_screen.holds_final_playback(state)
+        )
+
     def handle_event(self, event: pygame.event.Event) -> None:
         state = self._current_state()
+        if self._match_screen_active(state):
+            self._handle_match_event(event)
+            return
         if (
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is None
@@ -132,18 +136,6 @@ class FootballRunScreen(Screen):
                 return
             if self.shop_review.handle_scroll(event):
                 return
-        if state.phase is FootballRunPhase.MATCH and not self.confirm_exit:
-            hand_event = self.match_interaction.handle_event(event)
-            if hand_event.kind is HandEventKind.SELECTED:
-                assert hand_event.copy_id is not None
-                self._submit_match_hand_card(hand_event.copy_id)
-                return
-            if hand_event.kind is HandEventKind.INVALID_DROP:
-                self.last_error = "Invalid drop. Place the card in the play area."
-                self.state = self._require_controller().state
-                return
-            if hand_event.kind is HandEventKind.HANDLED:
-                return
         if self._current_state().phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
             self.coach_inspection.handle_event(event)
             if (
@@ -171,16 +163,6 @@ class FootballRunScreen(Screen):
             self.hover_index = None
             self.pressed_index = None
             return
-        if (
-            event.type == pygame.KEYDOWN
-            and not self.confirm_exit
-            and self._current_state().phase is FootballRunPhase.MATCH
-            and pygame.K_1 <= event.key <= pygame.K_6
-        ):
-            choice_index = event.key - pygame.K_1
-            if choice_index < len(self.buttons) - 1:
-                self.buttons[choice_index].action()
-                return
         previous_focus = self.focus_index
         super().handle_event(event)
         if (
@@ -191,12 +173,31 @@ class FootballRunScreen(Screen):
         ):
             self._focus(previous_focus)
 
+    def _handle_match_event(self, event: pygame.event.Event) -> None:
+        if self.confirm_exit:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self._keep_playing()
+                return
+            super().handle_event(event)
+            return
+        hand_event = self.match_screen.handle_event(event)
+        if hand_event.kind is HandEventKind.SELECTED:
+            assert hand_event.copy_id is not None
+            self._submit_match_hand_card(hand_event.copy_id)
+            return
+        if hand_event.kind is HandEventKind.INVALID_DROP:
+            self.last_error = "Drop the card on the field to play it."
+            self.state = self._require_controller().state
+            return
+        if hand_event.kind is HandEventKind.HANDLED:
+            self.hover_index = None if self.match_screen.popup.open else self.hover_index
+            return
+        super().handle_event(event)
+
     def draw(self, surface: pygame.Surface) -> None:
         state = self._current_state()
-        if state.phase is FootballRunPhase.MATCH:
+        if self._match_screen_active(state):
             self._draw_match_screen(surface, state)
-            if self.last_error is not None:
-                self._draw_match_error(surface, self.last_error)
             if self.confirm_exit:
                 self._draw_exit_confirmation(surface)
             return
@@ -365,78 +366,32 @@ class FootballRunScreen(Screen):
         surface: pygame.Surface,
         state: FootballGameControllerState,
     ) -> None:
-        match = state.match
-        if match is None:
-            raise RuntimeError("The controller did not provide an active match state.")
-
-        surface.fill(_MATCH_CANVAS)
-        width, height = surface.get_size()
-        margin = max(24, min(round(width * 0.035), 48))
-        content_width = width - margin * 2
-        team_accent = self.theme.primary_accent
-        opponent_accent = _MATCH_OPPONENT
-
-        scoreboard = pygame.Rect(margin, 24, content_width, 92)
-        status = FootballMatchStatusView(self._small_font)
-        status.draw_scoreboard(surface, scoreboard, state, team_accent, opponent_accent)
-
-        field = pygame.Rect(margin, scoreboard.bottom + 14, content_width, 286)
-        draw_match_field(
-            surface, field, match, team_accent, opponent_accent,
-            self._small_font, self.match_interaction, _SCHEME_LABELS,
-        )
-
-        history = pygame.Rect(margin, field.bottom + 12, content_width, 50)
-        status.draw_history(surface, history, state)
-
-        decision_rect = pygame.Rect(
-            margin,
-            history.bottom + 15,
-            content_width,
-            max(1, height - history.bottom - 42),
-        )
-        decision_view = FootballMatchDecisionView(
-            self._small_font, self._label_font, self.match_interaction,
-            self.focus_index, self.hover_index, self.pressed_index,
-            self._submit_match_hand_card,
-            lambda action: self._submit_match_action(
-                lambda: self._require_controller().choose_fourth_down(action)
+        controller = self._require_controller
+        self.match_screen.theme = self.theme
+        actions = MatchActions(
+            play_card=self._submit_match_hand_card,
+            fallback=self._submit_match_fallback,
+            fourth_down=lambda action: self._submit_match_action(
+                lambda: controller().choose_fourth_down(action)
             ),
-            lambda action, copy_id: self._submit_match_action(
-                lambda: self._require_controller().choose_conversion(action, copy_id)
+            conversion=lambda action, copy_id: self._submit_match_action(
+                lambda: controller().choose_conversion(action, copy_id)
             ),
-            self._submit_match_fallback,
-            lambda accept: self._submit_match_action(
-                lambda: self._require_controller().respond_to_challenge(accept)
+            challenge=lambda accept: self._submit_match_action(
+                lambda: controller().respond_to_challenge(accept)
             ),
-            lambda: self._submit_match_action(
-                self._require_controller().challenge_touchdown
+            challenge_touchdown=lambda: self._submit_match_action(
+                controller().challenge_touchdown
             ),
+            end_run=self._request_exit,
         )
-        self.buttons = decision_view.draw(surface, decision_rect, state)
-
-        pause_rect = pygame.Rect(scoreboard.right - 102, scoreboard.top + 13, 82, 32)
-        self.buttons.append(
-            Button("PAUSE", self._request_exit, pause_rect, variant="quiet")
+        buttons = self.match_screen.draw(
+            surface, state, actions,
+            focus_index=self.focus_index, hover_index=self.hover_index,
+            pressed_index=self.pressed_index, error=self.last_error,
         )
-        self._set_buttons(self.buttons)
-        for index, button in enumerate(self.buttons[:-1]):
-            if button.variant != "hand-card":
-                decision_view.draw_call_button(
-                    surface,
-                    button,
-                    index + 1,
-                    focused=button.focused,
-                    hovered=self.hover_index == index,
-                    pressed=self.pressed_index == index,
-                )
-        self._draw_match_pause_button(
-            surface,
-            self.buttons[-1],
-            focused=self.buttons[-1].focused,
-            hovered=self.hover_index == len(self.buttons) - 1,
-            pressed=self.pressed_index == len(self.buttons) - 1,
-        )
+        if not self.confirm_exit:
+            self._set_buttons(buttons)
 
     def _submit_match_hand_card(self, copy_id: str) -> None:
         state = self._current_state()
@@ -448,6 +403,12 @@ class FootballRunScreen(Screen):
         elif decision is FootballHumanDecision.DEFENSIVE_SCHEME:
             self._submit_match_action(
                 lambda: self._require_controller().choose_defensive_scheme(copy_id)
+            )
+        elif decision is FootballHumanDecision.CONVERSION:
+            self._submit_match_action(
+                lambda: self._require_controller().choose_conversion(
+                    FootballConversionAction.TWO_POINT, copy_id
+                )
             )
         elif decision is FootballHumanDecision.CHALLENGE:
             raise RuntimeError("Challenge prompts use the explicit decision buttons.")
@@ -463,39 +424,8 @@ class FootballRunScreen(Screen):
             )
         )
 
-    def _draw_match_pause_button(
-        self,
-        surface: pygame.Surface,
-        button: Button,
-        *,
-        focused: bool,
-        hovered: bool,
-        pressed: bool,
-    ) -> None:
-        rect = button.rect.move(0, 2) if pressed else button.rect
-        fill = _MATCH_PANEL if not hovered else pygame.Color("#2b382e")
-        pygame.draw.rect(surface, fill, rect)
-        pygame.draw.rect(
-            surface,
-            _MATCH_FOCUS if focused else _MATCH_PANEL_EDGE,
-            rect,
-            width=2 if focused else 1,
-        )
-        label = self._small_font.render("PAUSE  [ESC]", True, _MATCH_CHALK)
-        surface.blit(label, label.get_rect(center=rect.center))
-
     def _submit_match_action(self, action: Callable[[], object]) -> None:
         self._submit(action)
-
-    def _draw_match_error(self, surface: pygame.Surface, message: str) -> None:
-        rect = pygame.Rect(24, surface.get_height() - 24, surface.get_width() - 48, 18)
-        draw_text(
-            surface,
-            f"CALL FAILED: {message}",
-            rect.topleft,
-            self._small_font,
-            self.theme.danger,
-        )
 
     def _draw_buttons(self, surface: pygame.Surface) -> None:
         for index, button in enumerate(self.buttons):

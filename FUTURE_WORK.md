@@ -64,6 +64,13 @@ or the design changes.
   resolution, Hard AI decisions, and desktop previews.
 - [x] Add shop Depth Chart and Playbook review screens and a match UI for the
   human hand, card selection, matchup previews, and drag/drop calls.
+- [x] Redesign the match screen: navy stadium theme, detailed scoreboard and
+  field, latest-play lines colored by run/pass/other, an outcome strip that
+  also holds fourth-down/conversion/Challenge calls, sequential AI playback
+  with Skip, both hands visible, an ACTIVE scheme slot, deck/discard piles,
+  opponent hand counts, and a pause menu with Depth Chart and Play Log.
+- [ ] Match screen polish ideas: on-card number-key hints, a play-log filter
+  by drive or team, and an optional playback-speed setting.
 - [x] Add the first named coach-upgrade catalog, run-unique purchase history,
   typed effects in match resolution/estimates, future-shop AP bonuses, and a
   one-time Bye Week purchase that skips a scheduled game without a match.

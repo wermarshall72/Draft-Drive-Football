@@ -219,8 +219,15 @@ def _draw_staff(surface: pygame.Surface, rect: pygame.Rect,
     return actual.height
 
 
+def _match_wording(text: str, in_match: bool) -> str:
+    """During a match the pending temporary upgrades are the ones in effect."""
+    if not in_match:
+        return text
+    return text.replace("PENDING NEXT MATCH", "ACTIVE THIS MATCH").replace("next match", "this match")
+
+
 def _draw_roster(surface: pygame.Surface, rect: pygame.Rect, state: FootballGameControllerState,
-                 interaction: ShopReviewInteraction) -> int:
+                 interaction: ShopReviewInteraction, in_match: bool = False) -> int:
     shop = state.shop
     if shop is None:
         raise RuntimeError("The controller did not provide the active shop state.")
@@ -262,7 +269,8 @@ def _draw_roster(surface: pygame.Surface, rect: pygame.Rect, state: FootballGame
     _panel(surface, actual)
     draw_text(surface, "TEAM DEPTH CHART", (rect.left + 12, rect.top + 8), _font(16, True), _TEXT)
     if shop.pending_player_upgrades:
-        pending_text = f"{len(shop.pending_player_upgrades)} PENDING NEXT MATCH / DETAILS"
+        pending_text = _match_wording(
+            f"{len(shop.pending_player_upgrades)} PENDING NEXT MATCH / DETAILS", in_match)
         draw_text(surface, pending_text,
                   (rect.right - 12 - font.size(pending_text)[0], rect.top + 10), font, _MUTED)
     top = rect.top + 30
@@ -309,7 +317,7 @@ def _draw_roster(surface: pygame.Surface, rect: pygame.Rect, state: FootballGame
 
 
 def _draw_details(surface: pygame.Surface, rect: pygame.Rect,
-                  state: FootballGameControllerState) -> int:
+                  state: FootballGameControllerState, in_match: bool = False) -> int:
     shop = state.shop
     if shop is None:
         raise RuntimeError("The controller did not provide the active shop state.")
@@ -344,6 +352,7 @@ def _draw_details(surface: pygame.Surface, rect: pygame.Rect,
         )
         for upgrade in upgrades:
             rows.append(f"PENDING NEXT MATCH / {upgrade.name}: {upgrade.description}")
+    rows = [_match_wording(row, in_match) for row in rows]
     for card in shop.owned_coach_upgrades:
         sections = coach_upgrade_detail_sections(card)
         rows.append("\n".join((f"COACH / {sections[0]}", *sections[1:])))
@@ -374,6 +383,8 @@ def draw_depth_chart(
     surface: pygame.Surface, content: pygame.Rect, state: FootballGameControllerState,
     theme: Theme, font: pygame.font.Font, heading_font: pygame.font.Font,
     interaction: ShopReviewInteraction, leave: Callable[[], None],
+    *, back_label: str = "BACK TO SHOP", subtitle: str = "CURRENT RUN SNAPSHOT",
+    in_match: bool = False,
 ) -> list[Button]:
     if state.shop is None:
         raise RuntimeError("The controller did not provide the active shop state.")
@@ -384,7 +395,7 @@ def draw_depth_chart(
                      (content.left + 76, content.top + 50), 2)
     draw_text(surface, "COLLEGE FOOTBALL / DEPTH CHART", (content.left, content.top),
               title_font, _TEXT)
-    team = f"{state.shop.roster.team_name.upper()}  /  CURRENT RUN SNAPSHOT"
+    team = f"{state.shop.roster.team_name.upper()}  /  {subtitle}"
     draw_text(surface, team, (content.left + 2, content.top + 33), _font(13), _MUTED)
     body = pygame.Rect(content.left, content.top + 56, content.width, max(1, content.height - 111))
     if interaction.depth_viewport_size != body.size:
@@ -394,18 +405,19 @@ def draw_depth_chart(
     surface.set_clip(body.clip(clip))
     y = body.top - interaction.depth_scroll
     if interaction.depth_details:
-        total_height = _draw_details(surface, pygame.Rect(body.left, y, body.width, body.height), state)
+        total_height = _draw_details(
+            surface, pygame.Rect(body.left, y, body.width, body.height), state, in_match)
     elif body.width < 720:
         staff_rect = pygame.Rect(body.left, y, body.width, 1)
         staff_height = _draw_staff(surface, staff_rect, state, theme)
         roster_rect = pygame.Rect(body.left, y + staff_height + 10, body.width, 1)
-        total_height = staff_height + 10 + _draw_roster(surface, roster_rect, state, interaction)
+        total_height = staff_height + 10 + _draw_roster(surface, roster_rect, state, interaction, in_match)
     else:
         staff_width = max(240, min(300, round(body.width * 0.25)))
         staff_rect = pygame.Rect(body.left, y, staff_width, body.height)
         roster_rect = pygame.Rect(staff_rect.right + 10, y, body.width - staff_width - 10, body.height)
         total_height = max(_draw_staff(surface, staff_rect, state, theme),
-                           _draw_roster(surface, roster_rect, state, interaction))
+                           _draw_roster(surface, roster_rect, state, interaction, in_match))
     interaction.depth_max_scroll = max(0, total_height - body.height)
     interaction.depth_scroll = min(interaction.depth_scroll, interaction.depth_max_scroll)
     surface.set_clip(clip)
@@ -421,7 +433,7 @@ def draw_depth_chart(
         DepthChartButton(label, interaction.toggle_stats, pygame.Rect(content.left, footer_y, toggle_width, 32)),
         DepthChartButton(detail_label, interaction.toggle_depth_details,
                pygame.Rect(content.left + toggle_width + 10, footer_y, details_width, 32)),
-        DepthChartButton("BACK TO SHOP", leave, pygame.Rect(content.right - back_width, footer_y, back_width, 32)),
+        DepthChartButton(back_label, leave, pygame.Rect(content.right - back_width, footer_y, back_width, 32)),
     ]
     hint = ("Scroll: wheel / Page Up / Page Down" if interaction.depth_max_scroll else
             "Modified power excludes partnership, fatigue and scheme; "

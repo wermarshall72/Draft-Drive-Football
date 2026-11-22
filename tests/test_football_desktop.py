@@ -10,6 +10,8 @@ import pytest
 
 from src.application import ApplicationController
 from src.engine.football import (
+    FootballAutomaticAction,
+    FootballCardFamily,
     DefensiveSchemeAction,
     FootballBonusCardAction,
     FootballCardCopy,
@@ -70,7 +72,6 @@ from src.engine.football_shop import (
 from src.ui.application import DesktopApplication
 from src.ui import coach_art
 from src.ui import football_run_screen as football_run_screen_module
-from src.ui import football_match_decision_view as football_match_decision_module
 from src.ui.football_display import _PLAY_LABELS, _POSITION_LABELS
 from src.ui import football_coach_view as football_coach_module
 from src.ui import football_review_view as football_review_module
@@ -83,7 +84,23 @@ from src.ui.football_card_art import (
     scheme_card_art,
 )
 from src.ui import football_player_draft_view as football_player_draft_module
-from src.ui.football_match_status import FootballMatchStatusView
+from src.engine.football_simulator import adjusted_offensive_play_clock_seconds
+from src.ui.football_match_events import OutcomeEmphasis, PlayLineKind, outcome
+from src.ui.football_match_hand import HandView, layout_groups
+from src.ui.football_match_outcome import draw_outcome_strip
+from src.ui.football_match_playback import EVENT_DURATION_MS
+from src.ui.football_match_palette import match_font, plain_font, text_audit
+from src.ui.football_match_piles import pile_cards, pile_counts
+from src.ui.football_match_events import is_real_play, kickoff_pending, replay_label, snapshot_state
+from src.ui.football_match_field import FieldOverlay, draw_match_field
+from src.ui.football_match_hand import FALLBACK_DISPLAY_ID
+from src.ui.football_match_scoreboard import (
+    ball_spot_text, down_text, draw_scoreboard, opponent_hand_counts,
+)
+from src.ui.football_match_screen import (
+    FIELD_RECT, HAND_RECT, LEFT_PILES_RECT, POST_REPLAY_NOTE, RIGHT_PILES_RECT,
+    SCOREBOARD_RECT as SCOREBOARD_RECT_FOR_TESTS, STRIP_RECT, FootballMatchScreen, MatchActions,
+)
 from src.ui import player_art
 from src.ui.layout import LOGICAL_SIZE
 from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
@@ -155,6 +172,10 @@ def _activate(
 ) -> None:
     desktop.router.draw(_surface())
     screen = desktop.router.current
+    if screen is desktop.run_screen and label != "SKIP >>":
+        if screen.match_screen.playback.blocking() and not screen.match_screen.popup.open:
+            screen.match_screen.playback.skip()
+            desktop.router.draw(_surface())
     matching = [button for button in screen.buttons if button.label == label]
     button = matching[index]
     if keyboard:
@@ -201,8 +222,52 @@ def _start_match(desktop: DesktopApplication) -> None:
     _activate(desktop, "FINISH SHOP / START MATCH")
 
 
-def _play_first_match_card(desktop: DesktopApplication) -> None:
+def _skip_match_playback(desktop: DesktopApplication) -> None:
+    """Press Skip if an AI replay is blocking input, leaving the screen drawn."""
     desktop.router.draw(_surface())
+    match_screen = desktop.run_screen.match_screen
+    if match_screen.playback.blocking():
+        match_screen.playback.skip()
+        desktop.router.draw(_surface())
+
+
+def _play_human_decision(desktop: DesktopApplication) -> None:
+    _skip_match_playback(desktop)
+    screen = desktop.run_screen
+    decision = desktop.football_controller.state.human_decision
+    buttons = screen.buttons
+    if decision in (FootballHumanDecision.OFFENSIVE_PLAY, FootballHumanDecision.DEFENSIVE_SCHEME):
+        next(b for b in buttons if b.variant in ("hand-card", "hand-fallback") and b.enabled).action()
+    elif decision is FootballHumanDecision.FOURTH_DOWN:
+        next(b for b in buttons if b.label == "PUNT").action()
+    elif decision is FootballHumanDecision.CONVERSION:
+        next(b for b in buttons if b.label == "EXTRA POINT").action()
+    elif decision is FootballHumanDecision.CHALLENGE:
+        next(b for b in buttons if b.label == "DECLINE").action()
+
+
+def _recording_actions(**overrides) -> MatchActions:
+    def ignore(*_args) -> None:
+        return None
+
+    fields = {
+        name: ignore
+        for name in (
+            "play_card", "fallback", "fourth_down", "conversion", "challenge",
+            "challenge_touchdown", "end_run",
+        )
+    }
+    fields.update(overrides)
+    return MatchActions(**fields)
+
+
+def _assert_text_fits(records) -> None:
+    for text, rect, container in records:
+        assert container.inflate(2, 2).contains(rect), (text, rect, container)
+
+
+def _play_first_match_card(desktop: DesktopApplication) -> None:
+    _skip_match_playback(desktop)
     button = next(
         button
         for button in desktop.run_screen.buttons
@@ -1847,6 +1912,16 @@ def test_temporary_upgrade_pending_display_and_pause_resume(tmp_path: Path, monk
         max(0, before.shop.roster.players[FootballPosition.QB].volatility - card.upgrade.amount)
     )
     _activate(desktop, "PAUSE")
+    assert desktop.run_screen.match_screen.popup.kind == "pause"
+    _activate(desktop, "DEPTH CHART")
+    _activate(desktop, "UPGRADES / PERK DETAILS")
+    labels.clear()
+    desktop.router.draw(_surface())
+    # In the match the temporary upgrade is labeled as active for this match.
+    assert any("ACTIVE THIS MATCH" in text and "Volatility" in text for text in labels)
+    assert not any("PENDING NEXT MATCH" in text for text in labels)
+    _activate(desktop, "CLOSE [ESC]")
+    _activate(desktop, "END RUN")
     assert desktop.run_screen.confirm_exit
     desktop.run_screen._keep_playing()
     assert controller.state == started
@@ -3194,158 +3269,6 @@ def test_coach_details_do_not_activate_obscured_shop_buttons(
     assert controller.state.shop.remaining_ap < ap_before
 
 
-def test_match_hand_clock_preview_matches_resolved_play_and_incomplete_rule(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_run(desktop)
-    _draft_to_shop(desktop)
-    _activate(desktop, "FINISH SHOP / START MATCH")
-    controller = desktop.football_controller
-    screen = desktop.run_screen
-    assert controller is not None
-    base_state = controller.state
-    assert base_state.match is not None
-    match = base_state.match
-    assert match.team_a_offense_deck is not None
-
-    drawn_text: list[str] = []
-    original_draw_text = football_match_decision_module.draw_text
-
-    def capture_text(surface, text, position, font, color):
-        drawn_text.append(text)
-        original_draw_text(surface, text, position, font, color)
-
-    monkeypatch.setattr(
-        football_match_decision_module, "draw_text", capture_text
-    )
-    view = football_match_decision_module.FootballMatchDecisionView(
-        screen._small_font,
-        screen._label_font,
-        screen.match_interaction,
-        0,
-        None,
-        None,
-        lambda _copy_id: None,
-        lambda _action: None,
-        lambda _action, _copy_id: None,
-        lambda _offensive: None,
-    )
-    surface = _surface()
-    hand_rect = pygame.Rect(30, 40, LOGICAL_SIZE[0] - 60, 320)
-    upgrade_sets = (
-        (),
-        (_coach_card_effect("tempo_install"),),
-        (_coach_card_effect("huddle_up"),),
-        (
-            _coach_card_effect("tempo_install"),
-            _coach_card_effect("huddle_up"),
-        ),
-    )
-    for upgrades in upgrade_sets:
-        play = FootballCardCopy("preview:rb_run", OffensivePlayAction.RB_RUN.value)
-        other_cards = (
-            FootballCardCopy(
-                "preview:short_pass",
-                OffensivePlayAction.SHORT_PASS.value,
-            ),
-            FootballCardCopy(
-                "preview:medium_pass",
-                OffensivePlayAction.MEDIUM_PASS.value,
-            ),
-        )
-        hand = (play, *other_cards)
-        match_with_upgrades = replace(
-            match,
-            possession=FootballTeamSide.TEAM_A,
-            awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
-            current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
-            team_a_offense_deck=replace(
-                match.team_a_offense_deck,
-                owned=hand,
-                draw_pile=(),
-                hand=hand,
-                discard_pile=(),
-            ),
-            team_a_coach_upgrades=upgrades,
-        )
-        state = replace(
-            base_state,
-            match=match_with_upgrades,
-            human_decision=FootballHumanDecision.OFFENSIVE_PLAY,
-        )
-        simulator = FootballMatchSimulator(match_with_upgrades)
-        simulator.rng.random = lambda: 0.99
-        simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
-        result = simulator.state.match_events[-1].play_result
-        assert result is not None and not result.incomplete
-
-        drawn_text.clear()
-        view.draw(surface, hand_rect, state)
-        preview = next(text for text in drawn_text if text.startswith("LIVE ~"))
-        assert f"LIVE NORMAL CLOCK {result.clock_seconds_used}s" in preview
-        card_rect = screen.match_interaction.card_rects[play.copy_id]
-        assert screen._small_font.size(preview)[0] <= card_rect.width - 12
-
-    tempo = _coach_card_effect("tempo_install")
-    deep_pass = FootballCardCopy(
-        "preview:deep_pass",
-        OffensivePlayAction.DEEP_PASS.value,
-    )
-    incomplete_hand = (
-        deep_pass,
-        FootballCardCopy(
-            "preview:deep_short",
-            OffensivePlayAction.SHORT_PASS.value,
-        ),
-        FootballCardCopy(
-            "preview:deep_medium",
-            OffensivePlayAction.MEDIUM_PASS.value,
-        ),
-    )
-    incomplete_match = replace(
-        match,
-        possession=FootballTeamSide.TEAM_A,
-        awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
-        current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
-        team_a_offense_deck=replace(
-            match.team_a_offense_deck,
-            owned=incomplete_hand,
-            draw_pile=(),
-            hand=incomplete_hand,
-            discard_pile=(),
-        ),
-        team_a_coach_upgrades=(tempo,),
-    )
-    incomplete_state = replace(
-        base_state,
-        match=incomplete_match,
-        human_decision=FootballHumanDecision.OFFENSIVE_PLAY,
-    )
-    simulator = FootballMatchSimulator(incomplete_match)
-    rolls = iter((0.99, 0.0))
-    simulator.rng.random = lambda: next(rolls)
-    simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
-    incomplete_result = simulator.state.match_events[-1].play_result
-    assert incomplete_result is not None and incomplete_result.incomplete
-    assert incomplete_result.clock_seconds_used == 5
-
-    drawn_text.clear()
-    view.draw(surface, hand_rect, incomplete_state)
-    preview = next(text for text in drawn_text if text.startswith("LIVE ~"))
-    live_normal_seconds = football_match_decision_module.adjusted_offensive_play_clock_seconds(
-        OFFENSIVE_PLAY_CATALOG[OffensivePlayAction.DEEP_PASS.value].clock_seconds,
-        (tempo,),
-    )
-    assert f"LIVE NORMAL CLOCK {live_normal_seconds}s" in preview
-    incomplete_card_rect = screen.match_interaction.card_rects[deep_pass.copy_id]
-    assert screen._small_font.size(preview)[0] <= incomplete_card_rect.width - 12
-    assert any(
-        "INCOMPLETE PASSES USE SEPARATE 5s RULE" in text
-        and "CONVERSIONS & SPECIAL TEAMS UNCHANGED" in text
-        for text in drawn_text
-    )
 
 
 def _coach_card_effect(card_id: str):
@@ -3563,105 +3486,10 @@ def test_supported_desktop_layout_renders_the_actual_shop(tmp_path: Path) -> Non
     assert any(button.label == "BUY" for button in desktop.run_screen.buttons)
 
 
-def test_match_history_labels_turnovers_on_downs(tmp_path: Path) -> None:
-    desktop = _new_desktop(tmp_path)
-    result = FootballPlayResult(
-        offensive_play=OffensivePlayAction.RB_RUN,
-        yards_gained=3.0,
-        clock_seconds_used=18,
-        possession_changed=True,
-        turnover_on_downs=True,
-    )
-    event = FootballMatchEvent(
-        sequence=1,
-        action=OffensivePlayAction.RB_RUN,
-        team_a_score=0,
-        team_b_score=0,
-        possession=FootballTeamSide.TEAM_B,
-        offense_field_position=78.0,
-        down=1,
-        yards_to_go=10.0,
-        game_clock_seconds=882,
-        period=1,
-        status=FootballMatchStatus.IN_PROGRESS,
-        clock_seconds_used=18,
-        play_result=result,
-    )
-
-    text = FootballMatchStatusView(desktop.run_screen._small_font).format_event(event, "Home", "Away")
-
-    assert "Home" in text
-    assert "turnover on downs" in text
 
 
-def test_match_history_play_name_does_not_get_a_power_stat_icon(
-    tmp_path: Path,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    status_view = FootballMatchStatusView(desktop.run_screen._small_font)
-    result = FootballPlayResult(
-        offensive_play=OffensivePlayAction.POWER_TOSS,
-        yards_gained=4.0,
-        clock_seconds_used=18,
-    )
-    event = FootballMatchEvent(
-        sequence=1,
-        action=OffensivePlayAction.POWER_TOSS,
-        team_a_score=0,
-        team_b_score=0,
-        possession=FootballTeamSide.TEAM_A,
-        offense_field_position=25.0,
-        down=1,
-        yards_to_go=10.0,
-        game_clock_seconds=882,
-        period=1,
-        status=FootballMatchStatus.IN_PROGRESS,
-        clock_seconds_used=18,
-        play_result=result,
-    )
-
-    text = status_view.format_event(event, "Home", "Away")
-
-    assert "POWER TOSS" in text
-    assert status_view._event_font(text) is desktop.run_screen._small_font._font
 
 
-def test_match_history_labels_ball_hawk_defensive_touchdown(tmp_path: Path) -> None:
-    desktop = _new_desktop(tmp_path)
-    result = FootballPlayResult(
-        offensive_play=OffensivePlayAction.DEEP_PASS,
-        yards_gained=0.0,
-        clock_seconds_used=18,
-        points_scored=7,
-        turnover=True,
-        possession_changed=True,
-        defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
-        perk_effects=("Ball-Hawk: +10 interception return yards",),
-    )
-    event = FootballMatchEvent(
-        sequence=1,
-        action=OffensivePlayAction.DEEP_PASS,
-        team_a_score=0,
-        team_b_score=7,
-        possession=FootballTeamSide.TEAM_A,
-        offense_field_position=25.0,
-        down=1,
-        yards_to_go=10.0,
-        game_clock_seconds=882,
-        period=1,
-        status=FootballMatchStatus.IN_PROGRESS,
-        clock_seconds_used=18,
-        play_result=result,
-        points_scored=7,
-        scoring_team=FootballTeamSide.TEAM_B,
-        perk_effects=result.perk_effects,
-    )
-
-    text = FootballMatchStatusView(desktop.run_screen._small_font).format_event(event, "Home", "Away")
-
-    assert "Away: defensive touchdown" in text
-    assert "Home's DEEP PASS interception" in text
-    assert "Ball-Hawk: +10 interception return yards" in text
 
 
 def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(
@@ -3745,410 +3573,13 @@ def test_review_escape_cancels_pending_removal_without_spending_ap(
     assert not desktop.run_screen.confirm_exit
 
 
-def test_match_interaction_animation_and_new_run_reset(tmp_path: Path) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    controller = desktop.football_controller
-    assert controller is not None and controller.state.match is not None
-    first = controller.state.match
-    interaction = desktop.run_screen.match_interaction
-    interaction.visual_state = None
-    start = interaction.field_positions(first, 100)
-    assert start == (
-        first.offense_field_position,
-        min(100.0, first.offense_field_position + first.yards_to_go),
-    )
-    _play_first_match_card(desktop)
-    updated = controller.state.match
-    assert updated is not None
-    assert len(updated.match_events) > len(first.match_events)
-    assert interaction.field_positions(updated, 200) == start
-    target = (
-        updated.offense_field_position,
-        min(100.0, updated.offense_field_position + updated.yards_to_go),
-    )
-    assert interaction.field_positions(updated, 380) == pytest.approx(
-        tuple((origin + end) / 2 for origin, end in zip(start, target))
-    )
-    assert interaction.field_positions(updated, 560) == pytest.approx(target)
-    assert not interaction.animation_active
-
-    interaction.hand_scroll = 2
-    interaction.dragging_card_id = "unfinished"
-    desktop.run_screen.shop_review.open_playbook()
-    desktop.run_screen.shop_review.playbook_scroll = 3
-    desktop.run_screen.coach_inspection.hover_index = 1
-    desktop.run_screen.player_inspection.hover_index = 1
-    desktop.run_screen.player_inspection.card_rects.append(pygame.Rect(0, 0, 10, 10))
-    desktop.navigate("main_menu")
-    desktop.seed_factory = lambda: 17
-    _start_run(desktop)
-    reset = desktop.run_screen.match_interaction
-    assert reset is not interaction
-    assert reset.visual_state is None
-    assert reset.hand_scroll == 0
-    assert reset.dragging_card_id is None
-    assert desktop.run_screen.shop_review.mode is None
-    assert desktop.run_screen.shop_review.playbook_scroll == 0
-    assert desktop.run_screen.coach_inspection.hover_index is None
-    assert desktop.run_screen.player_inspection.hover_index is None
-    assert desktop.run_screen.player_inspection.card_rects == []
 
 
-def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
-    tmp_path: Path,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    controller = desktop.football_controller
-    assert controller is not None
-    screen = desktop.run_screen
-    initial = controller.state.match
-    assert initial is not None
-    assert initial.team_a.team_name == "Test Owls"
-    assert initial.team_b.team_name == "Local AI"
-
-    seen_offense = False
-    seen_defense = False
-    seen_ai_play = False
-    seen_two_point = False
-    for _ in range(1200):
-        state = controller.state
-        if state.phase is not FootballRunPhase.MATCH:
-            break
-        assert state.match is not None
-        desktop.router.draw(_surface())
-        labels = {button.label: button for button in screen.buttons}
-        event_count = len(state.match.match_events)
-        expected_copy_id = None
-        if state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY:
-            seen_offense = True
-            deck = state.match.team_a_offense_deck
-            assert deck is not None and deck.hand
-            card = deck.hand[0]
-            expected_copy_id = card.copy_id
-            expected = OFFENSIVE_PLAY_CATALOG[card.card_id].action
-            hand_buttons = [
-                button for button in screen.buttons if button.variant == "hand-card"
-            ]
-            assert len(hand_buttons) == min(3, len(deck.hand))
-            hand_buttons[0].action()
-        elif state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
-            seen_defense = True
-            deck = state.match.team_a_defense_deck
-            assert deck is not None and deck.hand
-            card = deck.hand[0]
-            expected_copy_id = card.copy_id
-            expected = DEFENSIVE_SCHEME_CATALOG[card.card_id].action
-            hand_buttons = [
-                button for button in screen.buttons if button.variant == "hand-card"
-            ]
-            assert len(hand_buttons) == min(3, len(deck.hand))
-            hand_buttons[0].action()
-        elif state.human_decision is FootballHumanDecision.FOURTH_DOWN:
-            expected = FootballFourthDownAction.PUNT
-            assert set(labels) - {"PAUSE"} == {
-                "GO FOR IT",
-                "PUNT",
-                "FIELD GOAL",
-            }
-            labels["PUNT"].action()
-        elif state.human_decision is FootballHumanDecision.CONVERSION:
-            if not seen_two_point:
-                deck = state.match.team_a_offense_deck
-                assert deck is not None
-                if deck.hand:
-                    card = deck.hand[0]
-                    expected_copy_id = card.copy_id
-                    label = f"2PT: {OFFENSIVE_PLAY_CATALOG[card.card_id].name}"
-                    assert label in labels
-                    labels[label].action()
-                else:
-                    labels["2PT: BASIC RUN"].action()
-                expected = FootballConversionAction.TWO_POINT
-                seen_two_point = True
-            else:
-                expected = FootballConversionAction.EXTRA_POINT
-                labels["EXTRA POINT"].action()
-        else:
-            pytest.fail(f"Unexpected match decision: {state.human_decision}")
-
-        updated = controller.state
-        assert updated.match is not None
-        new_events = updated.match.match_events[event_count:]
-        assert new_events
-        assert new_events[0].action is expected
-        if expected_copy_id is not None:
-            assert new_events[0].card_copy_id == expected_copy_id
-        seen_ai_play = seen_ai_play or any(
-            event.possession is FootballTeamSide.TEAM_B
-            and isinstance(event.action, OffensivePlayAction)
-            for event in new_events
-        )
-    else:
-        pytest.fail("The seeded desktop match did not finish.")
-
-    final = controller.state
-    assert final.phase in (
-        FootballRunPhase.READY_FOR_NEXT_GAME,
-        FootballRunPhase.FIRED,
-        FootballRunPhase.PLAYOFFS,
-    )
-    assert final.match is not None
-    assert final.match.status is FootballMatchStatus.COMPLETED
-    assert final.match.final_result is not None
-    assert seen_offense and seen_defense and seen_ai_play and seen_two_point
-    desktop.router.draw(_surface())
-    assert any(
-        button.label in {"OPEN NEXT GAME SHOP", "RETURN TO MAIN MENU"}
-        for button in screen.buttons
-    )
 
 
-def test_match_screen_previews_matchups_without_showing_roster_ratings(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    controller = desktop.football_controller
-    assert controller is not None
-    screen = desktop.run_screen
-
-    rendered_text: list[str] = []
-    draw_text = football_match_decision_module.draw_text
-
-    def capture_text(*args, **kwargs):
-        rendered_text.append(str(args[1]))
-        return draw_text(*args, **kwargs)
-
-    monkeypatch.setattr(football_match_decision_module, "draw_text", capture_text)
-    desktop.router.draw(_surface())
-    assert any("1ST" in text and "YDS" in text for text in rendered_text)
-    match = controller.state.match
-    assert match is not None
-    assert not any(
-        player.name in " ".join(rendered_text)
-        for roster in (match.team_a, match.team_b)
-        for player in roster.players.values()
-    )
-    assert not any("POWER" in text.upper() or "RATING" in text.upper() for text in rendered_text)
-    labels = {button.label: button for button in screen.buttons}
-    match = controller.state.match
-    assert match is not None and match.team_a_offense_deck is not None
-    hand = match.team_a_offense_deck.hand
-    expected_labels = [
-        _PLAY_LABELS[
-            OFFENSIVE_PLAY_CATALOG[card.card_id].action
-        ]
-        for card in hand
-    ]
-    assert [button.label for button in screen.buttons[:-1]] == expected_labels
-    assert screen.buttons[-1].label == "PAUSE"
-
-    desktop.router.handle_event(
-        pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_2})
-    )
-    match = controller.state.match
-    assert match is not None
-    assert match.match_events[-1].action is OFFENSIVE_PLAY_CATALOG[
-        hand[1].card_id
-    ].action
-
-    desktop.router.draw(_surface())
-    next(button for button in screen.buttons if button.label == "PAUSE").action()
-    desktop.router.draw(_surface())
-    assert {button.label for button in screen.buttons} == {
-        "DISCARD RUN",
-        "KEEP PLAYING",
-    }
 
 
-@pytest.mark.parametrize("offensive", [True, False])
-def test_match_decision_view_scrolls_and_selects_exact_card_copies(
-    tmp_path: Path, offensive: bool, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    state = desktop.football_controller.state
-    match = state.match
-    assert match is not None
-    catalog = OFFENSIVE_PLAY_CATALOG if offensive else DEFENSIVE_SCHEME_CATALOG
-    card_id = next(iter(catalog))
-    copies = tuple(FootballCardCopy(f"copy-{index}", card_id) for index in range(7))
-    deck = FootballDeckState(copies, hand=copies)
-    match = replace(match, **{
-        "team_a_offense_deck" if offensive else "team_a_defense_deck": deck,
-    })
-    state = replace(
-        state, match=match,
-        human_decision=(
-            FootballHumanDecision.OFFENSIVE_PLAY if offensive
-            else FootballHumanDecision.DEFENSIVE_SCHEME
-        ),
-    )
-    screen = desktop.run_screen
-    interaction = screen.match_interaction
-    selected: list[str] = []
-    view = football_match_decision_module.FootballMatchDecisionView(
-        screen._small_font, screen._label_font, interaction, 0, None, None,
-        selected.append, lambda action: None, lambda action, copy_id: None,
-        lambda is_offensive: None,
-    )
-    rendered_art: list[tuple[str, pygame.Rect]] = []
-    rendered_text: list[pygame.Rect] = []
-    original_draw_art = football_match_decision_module.draw_card_art
-    original_draw_text = football_match_decision_module.draw_text
 
-    def capture_art(surface, filename, rect):
-        rendered_art.append((filename, pygame.Rect(rect)))
-        return original_draw_art(surface, filename, rect)
-
-    def capture_text(surface, text, position, font, color):
-        rendered_text.append(pygame.Rect(position, font.size(text)))
-        return original_draw_text(surface, text, position, font, color)
-
-    monkeypatch.setattr(football_match_decision_module, "draw_card_art", capture_art)
-    monkeypatch.setattr(football_match_decision_module, "draw_text", capture_text)
-    surface = _surface()
-    area = pygame.Rect(30, 400, 900, 150)
-    buttons = view.draw(surface, area, state)
-    assert list(interaction.card_rects) == [card.copy_id for card in copies[:3]]
-    expected_art = (
-        play_card_art(catalog[card_id].family)
-        if offensive
-        else scheme_card_art(catalog[card_id].family)
-    )
-    assert len(rendered_art) == 3
-    assert all(filename == expected_art for filename, _ in rendered_art)
-    assert all(
-        button.rect.contains(art_rect)
-        for button, (_, art_rect) in zip(buttons, rendered_art)
-    )
-    assert all(
-        not art_rect.colliderect(text_rect)
-        for _, art_rect in rendered_art
-        for text_rect in rendered_text
-    )
-    assert interaction.hand_max_scroll == 2
-    assert len({button.label for button in buttons}) == 1
-    buttons[1].action()
-    assert selected == ["copy-1"]
-
-    desktop.run_screen.match_interaction.handle_event(
-        pygame.event.Event(pygame.MOUSEWHEEL, {"y": -1})
-    )
-    buttons = view.draw(surface, area, state)
-    assert list(interaction.card_rects) == [card.copy_id for card in copies[3:6]]
-    buttons[0].action()
-    assert selected == ["copy-1", "copy-3"]
-    state = replace(state, human_decision=FootballHumanDecision.FOURTH_DOWN)
-    view.draw(surface, area, state)
-    assert interaction.hand_area is None
-    assert interaction.play_area is None
-    assert interaction.card_rects == {}
-
-
-def test_match_decision_view_conversion_and_empty_hand_actions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    state = desktop.football_controller.state
-    match = state.match
-    assert match is not None and match.team_a_offense_deck is not None
-    card_id = match.team_a_offense_deck.hand[0].card_id
-    copies = (FootballCardCopy("first", card_id), FootballCardCopy("second", card_id))
-    deck = FootballDeckState(copies, hand=copies)
-    state = replace(
-        state, match=replace(match, team_a_offense_deck=deck),
-        human_decision=FootballHumanDecision.CONVERSION,
-    )
-    screen = desktop.run_screen
-    conversions: list[tuple[FootballConversionAction, str | None]] = []
-    fourth_down: list[FootballFourthDownAction] = []
-    fallbacks: list[bool] = []
-    challenge_calls: list[bool] = []
-    conversion_art: list[tuple[str, pygame.Rect]] = []
-    original_draw_art = football_match_decision_module.draw_card_art
-
-    def capture_art(surface, filename, rect):
-        conversion_art.append((filename, pygame.Rect(rect)))
-        return original_draw_art(surface, filename, rect)
-
-    monkeypatch.setattr(football_match_decision_module, "draw_card_art", capture_art)
-    view = football_match_decision_module.FootballMatchDecisionView(
-        screen._small_font, screen._label_font, screen.match_interaction, 0, None, None,
-        lambda copy_id: None, fourth_down.append,
-        lambda action, copy_id: conversions.append((action, copy_id)),
-        fallbacks.append,
-        challenge_touchdown=lambda: challenge_calls.append(True),
-    )
-    surface = _surface()
-    area = pygame.Rect(30, 400, 900, 150)
-    buttons = view.draw(surface, area, state)
-    assert [button.label for button in buttons] == [
-        "EXTRA POINT", f"2PT: {OFFENSIVE_PLAY_CATALOG[card_id].name}",
-        f"2PT: {OFFENSIVE_PLAY_CATALOG[card_id].name}",
-    ]
-    for button in buttons:
-        button.action()
-    assert conversions == [
-        (FootballConversionAction.EXTRA_POINT, None),
-        (FootballConversionAction.TWO_POINT, "first"),
-        (FootballConversionAction.TWO_POINT, "second"),
-    ]
-    challenge = FootballCardCopy(
-        "challenge-copy", FootballBonusCardAction.CHALLENGE.value
-    )
-    challenge_deck = FootballDeckState(
-        copies + (challenge,),
-        hand=copies + (challenge,),
-    )
-    challenge_state = replace(
-        state,
-        match=replace(match, team_a_offense_deck=challenge_deck),
-        challenge_available=True,
-    )
-    buttons = view.draw(surface, area, challenge_state)
-    assert [button.label for button in buttons] == [
-        "EXTRA POINT",
-        f"2PT: {OFFENSIVE_PLAY_CATALOG[card_id].name}",
-        f"2PT: {OFFENSIVE_PLAY_CATALOG[card_id].name}",
-        "CHALLENGE / RESTORE TOUCHDOWN",
-    ]
-    view.draw_call_button(
-        surface,
-        buttons[-1],
-        len(buttons),
-        focused=False,
-        hovered=False,
-        pressed=False,
-    )
-    assert conversion_art[-1][0] == bonus_card_art(FootballBonusCardAction.CHALLENGE)
-    assert buttons[-1].rect.contains(conversion_art[-1][1])
-    buttons[-1].action()
-    assert challenge_calls == [True]
-    empty = FootballDeckState(())
-    match = replace(match, team_a_offense_deck=empty, team_a_defense_deck=empty)
-    buttons = view.draw(surface, area, replace(state, match=match))
-    assert [button.label for button in buttons] == ["EXTRA POINT", "2PT: BASIC RUN"]
-    buttons[1].action()
-    assert conversions[-1] == (FootballConversionAction.TWO_POINT, None)
-    for decision, label, offensive in (
-        (FootballHumanDecision.OFFENSIVE_PLAY, "FALLBACK / INSIDE RUN", True),
-        (FootballHumanDecision.DEFENSIVE_SCHEME, "FALLBACK / RUN FIT", False),
-    ):
-        buttons = view.draw(surface, area, replace(state, match=match, human_decision=decision))
-        assert [button.label for button in buttons] == [label]
-        buttons[0].action()
-        assert fallbacks[-1] is offensive
-    buttons = view.draw(
-        surface, area, replace(state, human_decision=FootballHumanDecision.FOURTH_DOWN)
-    )
-    for button in buttons:
-        button.action()
-    assert fourth_down == list(FootballFourthDownAction)
 
 
 def test_match_decision_callbacks_reach_controller_with_fallback_and_copy_id(
@@ -4193,88 +3624,6 @@ def test_match_decision_callbacks_reach_controller_with_fallback_and_copy_id(
     assert screen.last_error is None
 
 
-def test_match_cards_support_click_drag_drop_and_reject_invalid_drops(
-    tmp_path: Path,
-) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    controller = desktop.football_controller
-    assert controller is not None
-    screen = desktop.run_screen
-    desktop.router.draw(_surface())
-    state = controller.state
-    assert state.match is not None and state.match.team_a_offense_deck is not None
-    first_copy = state.match.team_a_offense_deck.hand[0]
-    first_rect = screen.match_interaction.card_rects[first_copy.copy_id]
-    unchanged = controller.state
-
-    desktop.router.handle_event(
-        pygame.event.Event(
-            pygame.MOUSEBUTTONDOWN,
-            {"pos": first_rect.center, "button": 1},
-        )
-    )
-    desktop.router.handle_event(
-        pygame.event.Event(
-            pygame.MOUSEBUTTONUP,
-            {"pos": (5, 5), "button": 1},
-        )
-    )
-    assert controller.state == unchanged
-    assert screen.last_error == "Invalid drop. Place the card in the play area."
-
-    desktop.router.draw(_surface())
-    first_rect = screen.match_interaction.card_rects[first_copy.copy_id]
-    desktop.router.handle_event(
-        pygame.event.Event(
-            pygame.MOUSEBUTTONDOWN,
-            {"pos": first_rect.center, "button": 1},
-        )
-    )
-    desktop.router.handle_event(
-        pygame.event.Event(
-            pygame.MOUSEBUTTONUP,
-            {"pos": first_rect.center, "button": 1},
-        )
-    )
-    after_click = controller.state
-    assert after_click.match is not None
-    assert first_copy in after_click.match.team_a_offense_deck.discard_pile
-
-    desktop.router.draw(_surface())
-    decision = controller.state.human_decision
-    match = controller.state.match
-    assert match is not None
-    if decision is FootballHumanDecision.OFFENSIVE_PLAY:
-        deck = match.team_a_offense_deck
-    else:
-        assert decision is FootballHumanDecision.DEFENSIVE_SCHEME
-        deck = match.team_a_defense_deck
-    assert deck is not None and deck.hand
-    dragged_copy = deck.hand[0]
-    dragged_rect = screen.match_interaction.card_rects[dragged_copy.copy_id]
-    assert screen.match_interaction.play_area is not None
-    desktop.router.handle_event(
-        pygame.event.Event(
-            pygame.MOUSEBUTTONDOWN,
-            {"pos": dragged_rect.center, "button": 1},
-        )
-    )
-    desktop.router.handle_event(
-        pygame.event.Event(
-            pygame.MOUSEBUTTONUP,
-            {"pos": screen.match_interaction.play_area.center, "button": 1},
-        )
-    )
-    after_drop = controller.state.match
-    assert after_drop is not None
-    resulting_deck = (
-        after_drop.team_a_offense_deck
-        if decision is FootballHumanDecision.OFFENSIVE_PLAY
-        else after_drop.team_a_defense_deck
-    )
-    assert resulting_deck is not None
-    assert dragged_copy in resulting_deck.discard_pile
 
 
 @pytest.mark.parametrize(
@@ -4493,3 +3842,1154 @@ def test_escape_requests_explicit_discard_confirmation(tmp_path: Path) -> None:
     _activate(desktop, "KEEP PLAYING")
     assert desktop.router.current_id == "football_run"
     assert not screen.confirm_exit
+
+
+def test_match_hand_clock_preview_matches_resolved_play_and_incomplete_rule(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    base_state = controller.state
+    match = base_state.match
+    assert match is not None and match.team_a_offense_deck is not None
+    view = HandView()
+    upgrade_sets = (
+        (),
+        (_coach_card_effect("tempo_install"),),
+        (_coach_card_effect("huddle_up"),),
+        (_coach_card_effect("tempo_install"), _coach_card_effect("huddle_up")),
+    )
+    hand = (
+        FootballCardCopy("preview:rb_run", OffensivePlayAction.RB_RUN.value),
+        FootballCardCopy("preview:short_pass", OffensivePlayAction.SHORT_PASS.value),
+        FootballCardCopy("preview:deep_pass", OffensivePlayAction.DEEP_PASS.value),
+    )
+    for upgrades in upgrade_sets:
+        live_match = replace(
+            match,
+            possession=FootballTeamSide.TEAM_A,
+            awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+            current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+            team_a_offense_deck=FootballDeckState(hand, hand=hand),
+            team_a_coach_upgrades=upgrades,
+        )
+        simulator = FootballMatchSimulator(live_match)
+        simulator.rng.random = lambda: 0.99
+        simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+        result = simulator.state.match_events[-1].play_result
+        assert result is not None and not result.incomplete
+        preview = view.card_preview(live_match, OffensivePlayAction.RB_RUN.value)
+        assert preview.live
+        assert preview.clock == f"{result.clock_seconds_used}s"
+        assert preview.yards.startswith("~")
+
+        # An incomplete pass uses the separate 5s rule; the card shows the live normal clock.
+        simulator = FootballMatchSimulator(live_match)
+        rolls = iter((0.99, 0.0))
+        simulator.rng.random = lambda: next(rolls)
+        simulator.resolve_offensive_play(OffensivePlayAction.DEEP_PASS)
+        incomplete = simulator.state.match_events[-1].play_result
+        assert incomplete is not None and incomplete.incomplete
+        assert incomplete.clock_seconds_used == 5
+        deep = view.card_preview(live_match, OffensivePlayAction.DEEP_PASS.value)
+        assert deep.clock == "{}s".format(adjusted_offensive_play_clock_seconds(
+            OFFENSIVE_PLAY_CATALOG[OffensivePlayAction.DEEP_PASS.value].clock_seconds, upgrades,
+        ))
+
+    # Off the ball the cards fall back to printed values, labeled as base.
+    defending = replace(match, possession=FootballTeamSide.TEAM_B)
+    base = view.card_preview(defending, OffensivePlayAction.DEEP_PASS.value)
+    assert not base.live
+    assert base.clock == f"{OFFENSIVE_PLAY_CATALOG['deep_pass'].clock_seconds}s"
+
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    texts = [text for text, _, _ in records]
+    assert any(text.startswith("~") for text in texts)
+    assert "YDS LIVE" in texts and "CLOCK" in texts
+    assert not any("1ST" in text and "%" in text for text in texts)
+
+
+def test_match_outcome_labels_turnovers_on_downs() -> None:
+    result = FootballPlayResult(
+        offensive_play=OffensivePlayAction.RB_RUN,
+        yards_gained=3.0,
+        clock_seconds_used=18,
+        possession_changed=True,
+        turnover_on_downs=True,
+    )
+    event = FootballMatchEvent(
+        sequence=1, action=OffensivePlayAction.RB_RUN, team_a_score=0, team_b_score=0,
+        possession=FootballTeamSide.TEAM_B, offense_field_position=78.0, down=1,
+        yards_to_go=10.0, game_clock_seconds=882, period=1,
+        status=FootballMatchStatus.IN_PROGRESS, clock_seconds_used=18, play_result=result,
+    )
+    text = outcome(event, None, "Home", "Away")
+    assert text.headline == "+3 YARDS · TURNOVER ON DOWNS"
+    assert text.detail == f"{OFFENSIVE_PLAY_CATALOG['rb_run'].name.upper()} · HOME"
+    assert text.kind is PlayLineKind.RUN
+
+
+def test_match_outcome_play_name_does_not_get_a_power_stat_icon() -> None:
+    pygame.font.init()
+    result = FootballPlayResult(
+        offensive_play=OffensivePlayAction.POWER_TOSS, yards_gained=4.0, clock_seconds_used=18,
+    )
+    event = FootballMatchEvent(
+        sequence=1, action=OffensivePlayAction.POWER_TOSS, team_a_score=0, team_b_score=0,
+        possession=FootballTeamSide.TEAM_A, offense_field_position=25.0, down=1,
+        yards_to_go=10.0, game_clock_seconds=882, period=1,
+        status=FootballMatchStatus.IN_PROGRESS, clock_seconds_used=18, play_result=result,
+    )
+    text = outcome(event, None, "Home", "Away")
+    assert text.detail == "POWER TOSS · HOME"
+    with text_audit() as records:
+        draw_outcome_strip(
+            _surface(), pygame.Rect(16, 400, 1248, 64), text,
+            prompt="", actions=[], playback_label=None, elapsed_ms=0,
+        )
+    detail_rect = next(rect for value, rect, _ in records if value == text.detail)
+    assert detail_rect.width == plain_font(14).size(text.detail)[0]
+    assert match_font(14).size(text.detail) != plain_font(14).size(text.detail)
+
+
+def test_match_outcome_and_log_label_ball_hawk_defensive_touchdown() -> None:
+    pygame.font.init()
+    result = FootballPlayResult(
+        offensive_play=OffensivePlayAction.DEEP_PASS, yards_gained=0.0, clock_seconds_used=18,
+        points_scored=6, turnover=True, possession_changed=True,
+        defensive_scheme=DefensiveSchemeAction.DEEP_PASS,
+        perk_effects=("Ball-Hawk: +10 interception return yards",),
+    )
+    event = FootballMatchEvent(
+        sequence=1, action=OffensivePlayAction.DEEP_PASS, team_a_score=0, team_b_score=6,
+        possession=FootballTeamSide.TEAM_B, offense_field_position=98.0, down=1,
+        yards_to_go=2.0, game_clock_seconds=882, period=1,
+        status=FootballMatchStatus.IN_PROGRESS, clock_seconds_used=18, play_result=result,
+        points_scored=6, scoring_team=FootballTeamSide.TEAM_B, perk_effects=result.perk_effects,
+    )
+    text = outcome(event, None, "Home", "Away")
+    assert text.headline == "INTERCEPTION · RETURNED FOR TD!"
+    assert text.detail == "DEEP PASS · HOME"
+    assert text.emphasis is OutcomeEmphasis.TURNOVER
+
+
+def test_match_playback_replays_ai_drive_in_order_blocks_input_and_skips(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    now = [100_000]
+    screen.match_screen.clock = lambda: now[0]
+    for _ in range(200):
+        _skip_match_playback(desktop)
+        state = controller.state
+        if state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+            before = len(state.match.match_events)
+            card = next(b for b in screen.buttons if b.variant == "hand-card")
+            card.action()
+            if len(controller.state.match.match_events) - before >= 3:
+                break
+        else:
+            _play_human_decision(desktop)
+    else:
+        pytest.fail("No multi-event AI drive followed a defensive call.")
+    match = controller.state.match
+    total = len(match.match_events)
+    desktop.router.draw(_surface())
+    playback = screen.match_screen.playback
+    assert playback.blocking()
+    shown = [len(screen.match_screen.display_match(match).match_events)]
+    labels = [button.label for button in screen.buttons]
+    assert labels[0] == "SKIP >>"
+    assert not any(button.variant == "hand-card" for button in screen.buttons)
+    assert screen.match_interaction.card_rects == {}
+    unchanged = controller.state
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_2}))
+    first_hand_card = HAND_RECT.center
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(pygame.event.Event(event_type, {"pos": first_hand_card, "button": 1}))
+    assert controller.state == unchanged
+    for _ in range(3):
+        now[0] += EVENT_DURATION_MS
+        desktop.router.draw(_surface())
+        shown.append(len(screen.match_screen.display_match(match).match_events))
+    assert shown == sorted(shown) and shown[0] == before + 1 and shown[1] == before + 2
+    # The displayed scoreboard snapshot is that event's recorded snapshot.
+    display = screen.match_screen.display_match(match)
+    event = match.match_events[len(display.match_events) - 1]
+    assert (display.team_a_score, display.team_b_score) == (event.team_a_score, event.team_b_score)
+    assert display.game_clock_seconds == event.game_clock_seconds
+    if playback.blocking():
+        with text_audit() as records:
+            desktop.router.draw(_surface())
+        assert POST_REPLAY_NOTE in [text for text, _, _ in records]
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_s}))
+    assert not playback.blocking()
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    assert POST_REPLAY_NOTE not in [text for text, _, _ in records]
+    assert len(screen.match_screen.display_match(match).match_events) == total
+    assert any(button.variant == "hand-card" for button in screen.buttons)
+
+
+def test_match_screen_shows_both_hands_with_only_the_active_group_selectable(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    seen = set()
+    for _ in range(200):
+        _skip_match_playback(desktop)
+        state = controller.state
+        decision = state.human_decision
+        match = state.match
+        if decision in (FootballHumanDecision.OFFENSIVE_PLAY, FootballHumanDecision.DEFENSIVE_SCHEME):
+            with text_audit() as records:
+                desktop.router.draw(_surface())
+            texts = {text for text, _, _ in records}
+            offense = [OFFENSIVE_PLAY_CATALOG[c.card_id].name.upper() for c in match.team_a_offense_deck.hand]
+            defense = [DEFENSIVE_SCHEME_CATALOG[c.card_id].name.upper() for c in match.team_a_defense_deck.hand]
+            for name in offense + defense:
+                assert any(name.startswith(text) or text in name for text in texts), name
+            selectable = [b.label for b in screen.buttons if b.variant == "hand-card"]
+            assert selectable == (offense if decision is FootballHumanDecision.OFFENSIVE_PLAY else defense)
+            assert "OFFENSE HAND" in texts and "DEFENSE HAND" in texts
+            seen.add(decision)
+            if len(seen) == 2:
+                break
+        _play_human_decision(desktop)
+    assert len(seen) == 2
+
+
+def test_match_piles_match_owned_cards_and_open_read_only_popups(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    for _ in range(6):
+        _skip_match_playback(desktop)
+        _play_human_decision(desktop)
+    _skip_match_playback(desktop)
+    match = controller.state.match
+    for deck in (match.team_a_offense_deck, match.team_a_defense_deck):
+        counts = pile_counts(deck)
+        assert counts.consistent
+        assert counts.owned == len(deck.owned)
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    for rect, deck in ((LEFT_PILES_RECT, match.team_a_offense_deck),
+                       (RIGHT_PILES_RECT, match.team_a_defense_deck)):
+        numbers = [text for text, drawn, _ in records if rect.contains(drawn) and text.isdigit()]
+        assert numbers == [str(len(deck.draw_pile)), str(len(deck.discard_pile))]
+        assert any(text == f"{len(deck.owned)} OWNED" for text, drawn, _ in records if rect.contains(drawn))
+    unchanged = controller.state
+    _activate(desktop, "OFFENSE DISCARD")
+    desktop.router.draw(_surface())
+    assert screen.match_screen.popup.kind == "pile"
+    assert [button.label for button in screen.buttons] == ["CLOSE [ESC]"]
+    discard = pile_cards(match.team_a_offense_deck, "offense_discard", offensive=True)
+    assert discard == tuple(reversed(match.team_a_offense_deck.discard_pile))
+    draw = pile_cards(match.team_a_offense_deck, "offense_draw", offensive=True)
+    assert sorted(card.copy_id for card in draw) == sorted(c.copy_id for c in match.team_a_offense_deck.draw_pile)
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_ESCAPE}))
+    assert not screen.match_screen.popup.open
+    _activate(desktop, "DEFENSE DRAW")
+    _activate(desktop, "CLOSE [ESC]")
+    assert not screen.match_screen.popup.open
+    assert controller.state == unchanged
+
+
+def test_opponent_hand_shows_counts_without_revealing_card_identities(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    simulator = controller._simulator
+    secret_offense = tuple(
+        FootballCardCopy(f"ai-off-{index}", card_id)
+        for index, card_id in enumerate(("go_ball", "double_move", "corner_route", "seam_pass"))
+    )
+    secret_defense = tuple(
+        FootballCardCopy(f"ai-def-{index}", card_id)
+        for index, card_id in enumerate(("prevent_coverage", "robber_coverage"))
+    )
+    simulator.state = replace(
+        simulator.state,
+        team_b_offense_deck=FootballDeckState(secret_offense, hand=secret_offense),
+        team_b_defense_deck=FootballDeckState(secret_defense, hand=secret_defense),
+    )
+    desktop.run_screen.state = controller.state
+    assert opponent_hand_counts(controller.state.match) == (4, 2)
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    texts = [text for text, _, _ in records]
+    assert "OFF ×4" in texts and "DEF ×2" in texts
+    secrets = [OFFENSIVE_PLAY_CATALOG[c.card_id].name.upper() for c in secret_offense] + [
+        DEFENSIVE_SCHEME_CATALOG[c.card_id].name.upper() for c in secret_defense
+    ]
+    joined = " | ".join(text.upper() for text in texts)
+    assert not any(secret in joined for secret in secrets)
+
+
+def test_pause_menu_opens_depth_chart_and_play_log_and_keeps_exit_confirmation(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    unchanged = controller.state
+    escape = pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_ESCAPE})
+    desktop.router.handle_event(escape)
+    desktop.router.draw(_surface())
+    assert [button.label for button in screen.buttons] == [
+        "RESUME", "DEPTH CHART", "PLAY LOG", "END RUN",
+    ]
+    _activate(desktop, "DEPTH CHART")
+    desktop.router.draw(_surface())
+    assert screen.match_screen.popup.kind == "depth"
+    assert "CLOSE [ESC]" in [button.label for button in screen.buttons]
+    desktop.router.handle_event(escape)
+    assert screen.match_screen.popup.kind == "pause"
+    _activate(desktop, "PLAY LOG")
+    assert screen.match_screen.popup.kind == "log"
+    _activate(desktop, "CLOSE [ESC]")
+    assert screen.match_screen.popup.kind == "pause"
+    _activate(desktop, "RESUME")
+    assert not screen.match_screen.popup.open
+    _activate(desktop, "PAUSE")
+    assert screen.match_screen.popup.kind == "pause"
+    _activate(desktop, "END RUN")
+    assert screen.confirm_exit
+    desktop.router.draw(_surface())
+    assert {button.label for button in screen.buttons} == {"DISCARD RUN", "KEEP PLAYING"}
+    _activate(desktop, "KEEP PLAYING")
+    assert not screen.confirm_exit
+    assert screen.match_screen.popup.kind == "pause"
+    desktop.router.handle_event(escape)
+    assert not screen.match_screen.popup.open
+    assert controller.state == unchanged
+    assert desktop.router.current_id != "main_menu"
+
+
+def test_match_interaction_reset_between_runs(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    screen = desktop.run_screen
+    match_screen = screen.match_screen
+    match_screen.interaction.group_scroll["offense"] = 2
+    match_screen.interaction.dragging_card_id = "unfinished"
+    match_screen.open_play_log()
+    screen.shop_review.open_playbook()
+    screen.shop_review.playbook_scroll = 3
+    screen.coach_inspection.hover_index = 1
+    screen.player_inspection.hover_index = 1
+    screen.player_inspection.card_rects.append(pygame.Rect(0, 0, 10, 10))
+    desktop.navigate("main_menu")
+    desktop.seed_factory = lambda: 17
+    _start_run(desktop)
+    assert screen.match_screen is match_screen
+    assert match_screen.interaction.group_scroll["offense"] == 0
+    assert match_screen.interaction.dragging_card_id is None
+    assert not match_screen.popup.open
+    assert match_screen.playback.match_key is None
+    assert screen.shop_review.mode is None
+    assert screen.shop_review.playbook_scroll == 0
+    assert screen.coach_inspection.hover_index is None
+    assert screen.player_inspection.hover_index is None
+    assert screen.player_inspection.card_rects == []
+
+
+def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
+    tmp_path: Path,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    assert controller is not None
+    screen = desktop.run_screen
+    initial = controller.state.match
+    assert initial is not None
+    assert initial.team_a.team_name == "Test Owls"
+    assert initial.team_b.team_name == "Local AI"
+
+    seen_offense = seen_defense = seen_ai_play = seen_two_point = False
+    for _ in range(1200):
+        state = controller.state
+        if state.phase is not FootballRunPhase.MATCH:
+            break
+        assert state.match is not None
+        _skip_match_playback(desktop)
+        strip = {b.label: b for b in screen.buttons if b.variant.startswith("strip")}
+        hand_buttons = [b for b in screen.buttons if b.variant == "hand-card"]
+        event_count = len(state.match.match_events)
+        expected_copy_id = None
+        if state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY:
+            seen_offense = True
+            deck = state.match.team_a_offense_deck
+            assert deck is not None and deck.hand and not strip
+            card = deck.hand[0]
+            expected_copy_id = card.copy_id
+            expected = OFFENSIVE_PLAY_CATALOG[card.card_id].action
+            assert len(hand_buttons) == len(deck.hand)
+            hand_buttons[0].action()
+        elif state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+            seen_defense = True
+            deck = state.match.team_a_defense_deck
+            assert deck is not None and deck.hand and not strip
+            card = deck.hand[0]
+            expected_copy_id = card.copy_id
+            expected = DEFENSIVE_SCHEME_CATALOG[card.card_id].action
+            assert len(hand_buttons) == len(deck.hand)
+            hand_buttons[0].action()
+        elif state.human_decision is FootballHumanDecision.FOURTH_DOWN:
+            expected = FootballFourthDownAction.PUNT
+            assert list(strip)[:2] == ["GO FOR IT", "PUNT"]
+            assert list(strip)[2].startswith("FIELD GOAL · ")
+            assert hand_buttons == []  # both hands stay visible but not playable
+            strip["PUNT"].action()
+        elif state.human_decision is FootballHumanDecision.CONVERSION:
+            assert "EXTRA POINT" in strip
+            if not seen_two_point:
+                deck = state.match.team_a_offense_deck
+                assert deck is not None
+                if any(c.card_id in OFFENSIVE_PLAY_CATALOG for c in deck.hand):
+                    card = next(c for c in deck.hand if c.card_id in OFFENSIVE_PLAY_CATALOG)
+                    expected_copy_id = card.copy_id
+                    button = next(
+                        b for b in hand_buttons
+                        if b.label == OFFENSIVE_PLAY_CATALOG[card.card_id].name.upper()
+                    )
+                    button.action()
+                else:
+                    strip["2-PT · BASIC RUN"].action()
+                expected = FootballConversionAction.TWO_POINT
+                seen_two_point = True
+            else:
+                expected = FootballConversionAction.EXTRA_POINT
+                strip["EXTRA POINT"].action()
+        else:
+            pytest.fail(f"Unexpected match decision: {state.human_decision}")
+
+        updated = controller.state
+        assert updated.match is not None
+        new_events = updated.match.match_events[event_count:]
+        assert new_events
+        assert new_events[0].action is expected
+        if expected_copy_id is not None:
+            assert new_events[0].card_copy_id == expected_copy_id
+        seen_ai_play = seen_ai_play or any(
+            event.possession is FootballTeamSide.TEAM_B
+            and isinstance(event.action, OffensivePlayAction)
+            for event in new_events
+        )
+    else:
+        pytest.fail("The seeded desktop match did not finish.")
+
+    final = controller.state
+    assert final.phase in (
+        FootballRunPhase.READY_FOR_NEXT_GAME, FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS,
+    )
+    assert final.match is not None and final.match.final_result is not None
+    assert seen_offense and seen_defense and seen_ai_play and seen_two_point
+    # The final plays replay on the match screen before the result appears.
+    desktop.router.draw(_surface())
+    if screen.match_screen.playback.blocking():
+        assert screen.buttons[0].label == "SKIP >>"
+        screen.buttons[0].action()
+    desktop.router.draw(_surface())
+    assert any(
+        button.label in {"OPEN NEXT GAME SHOP", "RETURN TO MAIN MENU"}
+        for button in screen.buttons
+    )
+
+
+def test_match_screen_previews_matchups_without_showing_roster_ratings(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    texts = [text for text, _, _ in records]
+    assert any(text.startswith("~") for text in texts)
+    match = controller.state.match
+    joined = " ".join(texts)
+    assert not any(
+        player.name in joined
+        for roster in (match.team_a, match.team_b)
+        for player in roster.players.values()
+    )
+    assert not any("POWER" == text.upper() or "RATING" in text.upper() for text in texts)
+    hand = match.team_a_offense_deck.hand
+    cards = [button for button in screen.buttons if button.variant == "hand-card"]
+    assert [button.label for button in cards] == [
+        _PLAY_LABELS[OFFENSIVE_PLAY_CATALOG[card.card_id].action] for card in hand
+    ]
+    assert screen.buttons[-1].label == "PAUSE"
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_2}))
+    match = controller.state.match
+    played = next(
+        event for event in reversed(match.match_events)
+        if event.card_copy_id == hand[1].copy_id
+    )
+    assert played.action is OFFENSIVE_PLAY_CATALOG[hand[1].card_id].action
+
+
+@pytest.mark.parametrize("offensive", [True, False])
+def test_match_hand_scrolls_and_selects_exact_card_copies(
+    tmp_path: Path, offensive: bool,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = state.match
+    catalog = OFFENSIVE_PLAY_CATALOG if offensive else DEFENSIVE_SCHEME_CATALOG
+    card_id = next(iter(catalog))
+    copies = tuple(FootballCardCopy(f"copy-{index}", card_id) for index in range(12))
+    deck = FootballDeckState(copies, hand=copies)
+    match = replace(match, **{"team_a_offense_deck" if offensive else "team_a_defense_deck": deck})
+    if not offensive:
+        match = replace(match, possession=FootballTeamSide.TEAM_B,
+                        awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+                        current_drive_defensive_scheme=None)
+    state = replace(
+        state, match=match,
+        human_decision=(
+            FootballHumanDecision.OFFENSIVE_PLAY if offensive
+            else FootballHumanDecision.DEFENSIVE_SCHEME
+        ),
+    )
+    selected: list[str] = []
+    match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                       desktop.run_screen._label_font, clock=lambda: 0)
+    actions = _recording_actions(play_card=selected.append)
+    surface = _surface()
+
+    def draw():
+        return match_screen.draw(surface, state, actions, focus_index=0, hover_index=None,
+                                 pressed_index=None, error=None)
+
+    buttons = draw()
+    interaction = match_screen.interaction
+    group = "offense" if offensive else "defense"
+    visible = list(interaction.card_rects)
+    assert visible == [card.copy_id for card in copies[: len(visible)]]
+    assert 1 <= len(visible) < len(copies)
+    assert interaction.group_max_scroll[group] == len(copies) - len(visible)
+    rects = list(interaction.card_rects.values())
+    assert all(HAND_RECT.contains(rect) for rect in rects)
+    assert not any(a.colliderect(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+    cards = [b for b in buttons if b.variant == "hand-card"]
+    cards[1].action()
+    assert selected == ["copy-1"]
+    interaction.pointer = interaction.group_areas[group].center
+    interaction.handle_event(pygame.event.Event(pygame.MOUSEWHEEL, {"y": -1}))
+    draw()
+    assert list(interaction.card_rects)[0] == "copy-1"
+    scroll_right = next(b for b in match_screen.buttons if b.label == f"SCROLL {group.upper()} RIGHT")
+    scroll_right.action()
+    buttons = draw()
+    assert list(interaction.card_rects)[0] == "copy-2"
+    [b for b in buttons if b.variant == "hand-card"][0].action()
+    assert selected == ["copy-1", "copy-2"]
+    state = replace(state, human_decision=FootballHumanDecision.FOURTH_DOWN)
+    draw()
+    assert interaction.card_rects == {}
+
+
+def test_large_mixed_hand_fits_without_overlap(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = state.match
+    offense = tuple(
+        FootballCardCopy(f"o{index}", card_id)
+        for index, card_id in enumerate(("rb_run", "offensive_draw", "challenge", "deep_pass", "go_ball", "inside_zone"))
+    )
+    defense = tuple(
+        FootballCardCopy(f"d{index}", card_id)
+        for index, card_id in enumerate(("rb_run", "deep_pass", "prevent_coverage"))
+    )
+    match = replace(
+        match,
+        team_a_offense_deck=FootballDeckState(offense, hand=offense),
+        team_a_defense_deck=FootballDeckState(defense, hand=defense),
+    )
+    for decision in (FootballHumanDecision.OFFENSIVE_PLAY, FootballHumanDecision.CONVERSION):
+        view = replace(state, match=match, human_decision=decision)
+        match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                           desktop.run_screen._label_font, clock=lambda: 0)
+        with text_audit() as records:
+            buttons = match_screen.draw(_surface(), view, _recording_actions(), focus_index=0,
+                                        hover_index=None, pressed_index=None, error=None)
+        offense_layout, defense_layout = layout_groups(HAND_RECT, len(offense), len(defense), {})
+        rects = list(offense_layout.card_rects) + list(defense_layout.card_rects) + [defense_layout.active_slot]
+        assert len(offense_layout.card_rects) + len(defense_layout.card_rects) >= 8
+        # Nine cards do not all fit, so the offense group scrolls to reach the rest.
+        assert offense_layout.max_scroll + defense_layout.max_scroll == 1
+        assert all(HAND_RECT.contains(rect) for rect in rects)
+        assert not any(a.colliderect(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+        assert not offense_layout.area.colliderect(defense_layout.area)
+        cards = {b.label: b for b in buttons if b.variant == "hand-card"}
+        assert set(cards) >= {"OFFENSIVE DRAW", "CHALLENGE"}
+        if decision is FootballHumanDecision.CONVERSION:
+            # Two-point tries take a legal play card only; bonus cards stay visible but disabled.
+            assert not cards["OFFENSIVE DRAW"].enabled
+            assert cards[OFFENSIVE_PLAY_CATALOG["rb_run"].name.upper()].enabled
+        else:
+            assert cards["OFFENSIVE DRAW"].enabled
+            assert not cards["CHALLENGE"].enabled
+        # Bonus cards show their 10-second cost even at the narrowest card width.
+        assert any(text.startswith("10s") for text, _, _ in records)
+        _assert_text_fits(records)
+
+
+def test_outcome_strip_holds_decisions_while_hands_stay_visible(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = state.match
+    card_id = match.team_a_offense_deck.hand[0].card_id
+    copies = (FootballCardCopy("first", card_id), FootballCardCopy("second", card_id))
+    challenge = FootballCardCopy("challenge-copy", FootballBonusCardAction.CHALLENGE.value)
+    calls: list[tuple] = []
+    actions = _recording_actions(
+        play_card=lambda copy_id: calls.append(("card", copy_id)),
+        fallback=lambda offensive: calls.append(("fallback", offensive)),
+        fourth_down=lambda action: calls.append(("fourth", action)),
+        conversion=lambda action, copy_id: calls.append(("conversion", action, copy_id)),
+        challenge=lambda accept: calls.append(("challenge", accept)),
+        challenge_touchdown=lambda: calls.append(("challenge_td",)),
+    )
+    match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                       desktop.run_screen._label_font, clock=lambda: 0)
+
+    def draw(view_state):
+        with text_audit() as records:
+            buttons = match_screen.draw(_surface(), view_state, actions, focus_index=0,
+                                        hover_index=None, pressed_index=None, error=None)
+        _assert_text_fits(records)
+        strip = [b for b in buttons if b.variant.startswith("strip")]
+        assert all(STRIP_RECT.contains(b.rect) for b in strip)
+        return strip, [b for b in buttons if b.variant == "hand-card"], {t for t, _, _ in records}
+
+    fourth = replace(state, human_decision=FootballHumanDecision.FOURTH_DOWN,
+                     match=replace(match, down=4, awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION))
+    strip, cards, texts = draw(fourth)
+    assert [b.label for b in strip][:2] == ["GO FOR IT", "PUNT"]
+    assert cards == []
+    assert any(name in texts for name in ("OFFENSE HAND", "OFFENSE"))
+    for button in strip:
+        button.action()
+    assert [call[1] for call in calls] == list(FootballFourthDownAction)
+
+    calls.clear()
+    conversion_match = replace(match, team_a_offense_deck=FootballDeckState(copies + (challenge,), hand=copies + (challenge,)))
+    conversion = replace(state, human_decision=FootballHumanDecision.CONVERSION,
+                         match=conversion_match, challenge_available=True)
+    strip, cards, _ = draw(conversion)
+    assert [b.label for b in strip] == ["EXTRA POINT", "CHALLENGE TD"]
+    assert [b.label for b in cards if b.enabled] == [OFFENSIVE_PLAY_CATALOG[card_id].name.upper()] * 2
+    strip[0].action()
+    [b for b in cards if b.enabled][1].action()
+    strip[1].action()
+    assert calls == [
+        ("conversion", FootballConversionAction.EXTRA_POINT, None),
+        ("card", "second"),
+        ("challenge_td",),
+    ]
+
+    calls.clear()
+    empty = FootballDeckState(())
+    empty_match = replace(match, team_a_offense_deck=empty, team_a_defense_deck=empty)
+    strip, cards, _ = draw(replace(conversion, match=empty_match, challenge_available=False))
+    assert [b.label for b in strip] == ["EXTRA POINT", "2-PT · BASIC RUN"]
+    strip[1].action()
+    assert calls[-1] == ("conversion", FootballConversionAction.TWO_POINT, None)
+    for decision, label, offensive in (
+        (FootballHumanDecision.OFFENSIVE_PLAY, "FALLBACK / INSIDE RUN", True),
+        (FootballHumanDecision.DEFENSIVE_SCHEME, "FALLBACK / RUN FIT", False),
+    ):
+        buttons = match_screen.draw(_surface(), replace(state, match=empty_match, human_decision=decision),
+                                    actions, focus_index=0, hover_index=None, pressed_index=None, error=None)
+        fallback = [b for b in buttons if b.variant == "hand-fallback"]
+        assert [b.label for b in fallback] == [label]
+        fallback[0].action()
+        assert calls[-1] == ("fallback", offensive)
+
+    calls.clear()
+    strip, cards, _ = draw(replace(state, human_decision=FootballHumanDecision.CHALLENGE))
+    assert [b.label for b in strip] == ["CHALLENGE", "DECLINE"]
+    assert cards == []
+    for button in strip:
+        button.action()
+    assert calls == [("challenge", True), ("challenge", False)]
+
+
+def test_match_cards_support_click_drag_drop_and_reject_invalid_drops(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    desktop.router.draw(_surface())
+    state = controller.state
+    first_copy = state.match.team_a_offense_deck.hand[0]
+    first_rect = screen.match_interaction.card_rects[first_copy.copy_id]
+    unchanged = controller.state
+    for event_type, pos in ((pygame.MOUSEBUTTONDOWN, first_rect.center),
+                            (pygame.MOUSEMOTION, (5, 700)),
+                            (pygame.MOUSEBUTTONUP, (5, 700))):
+        payload = {"pos": pos, "button": 1} if event_type != pygame.MOUSEMOTION else {"pos": pos, "rel": (0, 0), "buttons": (1, 0, 0)}
+        desktop.router.handle_event(pygame.event.Event(event_type, payload))
+    assert controller.state == unchanged
+    assert screen.last_error == "Drop the card on the field to play it."
+
+    desktop.router.draw(_surface())
+    first_rect = screen.match_interaction.card_rects[first_copy.copy_id]
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(pygame.event.Event(event_type, {"pos": first_rect.center, "button": 1}))
+    assert first_copy in controller.state.match.team_a_offense_deck.discard_pile
+
+    _skip_match_playback(desktop)
+    decision = controller.state.human_decision
+    match = controller.state.match
+    if decision is FootballHumanDecision.OFFENSIVE_PLAY:
+        deck = match.team_a_offense_deck
+    else:
+        assert decision is FootballHumanDecision.DEFENSIVE_SCHEME
+        deck = match.team_a_defense_deck
+    dragged_copy = deck.hand[0]
+    dragged_rect = screen.match_interaction.card_rects[dragged_copy.copy_id]
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEBUTTONDOWN, {"pos": dragged_rect.center, "button": 1}))
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEMOTION, {"pos": FIELD_RECT.center, "rel": (0, 0), "buttons": (1, 0, 0)}))
+    assert screen.match_interaction.dragging
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    assert "RELEASE TO PLAY" in {text for text, _, _ in records}
+    desktop.router.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, {"pos": FIELD_RECT.center, "button": 1}))
+    after = controller.state.match
+    resulting = after.team_a_offense_deck if decision is FootballHumanDecision.OFFENSIVE_PLAY else after.team_a_defense_deck
+    assert dragged_copy in resulting.discard_pile
+
+
+def test_match_screen_text_fits_across_states_and_team_names(tmp_path: Path) -> None:
+    for name in ("Test Owls", "Northwestern Mountain Ridgeback Thunder"):
+        desktop = _new_desktop(tmp_path / name.replace(" ", "_"), team_name=name)
+        _start_match(desktop)
+        controller = desktop.football_controller
+        screen = desktop.run_screen
+        screen.match_screen.clock = lambda: 50_000
+        checked = 0
+        for _ in range(140):
+            if controller.state.phase is not FootballRunPhase.MATCH:
+                break
+            with text_audit() as records:
+                desktop.router.draw(_surface())
+            _assert_text_fits(records)
+            checked += 1
+            _skip_match_playback(desktop)
+            _play_human_decision(desktop)
+        match = controller.state.match
+        # Every recorded outcome type renders within the strip when replayed.
+        for index in range(1, len(match.match_events)):
+            screen.match_screen.playback.debug_show(index, 49_000)
+            with text_audit() as records:
+                desktop.router.draw(_surface())
+            _assert_text_fits(records)
+        assert checked > 20
+
+
+def _set_human_offense_hand(desktop: DesktopApplication, card_ids: tuple[str, ...], *, defense_all_in_hand: bool = False) -> None:
+    """Drive to a human offensive call and replace the offensive hand with ``card_ids``."""
+    controller = desktop.football_controller
+    for _ in range(200):
+        _skip_match_playback(desktop)
+        if controller.state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY:
+            break
+        _play_human_decision(desktop)
+    simulator = controller._simulator
+    state = simulator.state
+    offense = state.team_a_offense_deck
+    hand = tuple(FootballCardCopy(f"bonus-hand-{i}", card_id) for i, card_id in enumerate(card_ids))
+    # Keep the play cards owned (in the draw pile) so the deck stays valid and cycles.
+    replaced = FootballDeckState(offense.owned + hand, draw_pile=offense.draw_pile + offense.hand,
+                                 hand=hand, discard_pile=offense.discard_pile)
+    defense = state.team_a_defense_deck
+    if defense_all_in_hand:
+        defense = FootballDeckState(defense.owned, hand=defense.owned)
+    simulator.state = replace(state, team_a_offense_deck=replaced, team_a_defense_deck=defense)
+    desktop.run_screen.state = controller.state
+    desktop.router.draw(_surface())
+
+
+@pytest.mark.parametrize(
+    ("card_ids", "defense_all_in_hand", "bonus_enabled"),
+    (
+        (("challenge",), False, False),
+        (("defensive_draw",), True, False),
+        (("offensive_draw",), False, True),
+    ),
+)
+def test_bonus_only_offense_hand_offers_the_basic_run_fallback(
+    tmp_path: Path, card_ids, defense_all_in_hand, bonus_enabled,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _set_human_offense_hand(desktop, card_ids, defense_all_in_hand=defense_all_in_hand)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    assert controller.state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY
+    assert not controller.state.challenge_available
+    cards = [b for b in screen.buttons if b.variant == "hand-card"]
+    fallback = [b for b in screen.buttons if b.variant == "hand-fallback"]
+    assert [b.label for b in fallback] == ["FALLBACK / INSIDE RUN"]
+    assert [b.enabled for b in cards] == [bonus_enabled]
+    assert fallback[0].enabled
+    assert not cards[0].rect.colliderect(fallback[0].rect)
+    assert HAND_RECT.contains(fallback[0].rect)
+    assert any(b.enabled and b.variant in ("hand-card", "hand-fallback") for b in screen.buttons)
+    # The fallback is reachable by keyboard focus + Enter.
+    before = len(controller.state.match.match_events)
+    screen.focus_index = screen.buttons.index(fallback[0])
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+    played = controller.state.match.match_events[before]
+    assert played.action is OffensivePlayAction.RB_RUN
+    assert played.card_copy_id is None
+    assert screen.last_error is None
+
+
+def test_bonus_only_fallback_is_a_number_key_target(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _set_human_offense_hand(desktop, ("challenge",))
+    controller = desktop.football_controller
+    targets = desktop.run_screen.match_screen.shortcut_targets()
+    assert [b.label for b in targets] == ["FALLBACK / INSIDE RUN"]
+    before = len(controller.state.match.match_events)
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_1}))
+    assert controller.state.match.match_events[before].action is OffensivePlayAction.RB_RUN
+
+
+def test_fallback_slot_layout_fits_at_any_hand_size() -> None:
+    for offense in range(0, 9):
+        for defense in range(0, 7):
+            off, de = layout_groups(HAND_RECT, offense, defense, {}, offense_fallback=True)
+            rects = [*off.card_rects, off.fallback_slot, *de.card_rects, de.active_slot]
+            assert all(HAND_RECT.contains(rect) for rect in rects), (offense, defense)
+            assert not any(a.colliderect(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+            assert not off.area.colliderect(de.area)
+
+
+def test_scoreboard_shows_conversion_wording_for_human_and_ai_tries(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    match = desktop.football_controller.state.match
+    for side in (FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B):
+        conversion = replace(
+            match, possession=side, down=1, yards_to_go=2.0, offense_field_position=98.0,
+            awaited_action=FootballAwaitedAction.CONVERSION, conversion_team=side,
+            current_drive_defensive_scheme=DefensiveSchemeAction.GOAL_LINE_FRONT,
+        )
+        with text_audit() as records:
+            draw_scoreboard(_surface(), SCOREBOARD_RECT_FOR_TESTS, conversion, desktop.run_screen.theme,
+                            game_number=1, wins=0, losses=0)
+        texts = [text for text, _, _ in records]
+        situation = next(text for text in texts if "PAT / 2-PT TRY" in text)
+        assert "1ST & GOAL" not in situation and "BALL ON" not in situation
+        _assert_text_fits(records)
+    # Replay snapshots of a touchdown use the same wording.
+    touchdown = FootballMatchEvent(
+        sequence=1, action=OffensivePlayAction.SHORT_PASS, team_a_score=6, team_b_score=0,
+        possession=FootballTeamSide.TEAM_A, offense_field_position=98.0, down=1, yards_to_go=2.0,
+        game_clock_seconds=800, period=1, status=FootballMatchStatus.IN_PROGRESS,
+        clock_seconds_used=20, points_scored=6, scoring_team=FootballTeamSide.TEAM_A,
+        play_result=FootballPlayResult(OffensivePlayAction.SHORT_PASS, 9.0, 20, points_scored=6,
+                                       possession_changed=True),
+    )
+    later = replace(touchdown, sequence=2, action=FootballConversionAction.EXTRA_POINT,
+                    play_result=None, team_a_score=7, points_scored=1,
+                    offense_field_position=25.0, yards_to_go=10.0, clock_seconds_used=0,
+                    possession=FootballTeamSide.TEAM_B)
+    full = replace(match, match_events=(touchdown, later), team_a_score=7)
+    snapshot = snapshot_state(full, 1)
+    assert down_text(snapshot) == "PAT / 2-PT TRY"
+
+
+def test_replay_label_counts_real_plays_and_indicator_tracks_blocking(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    controller = desktop.football_controller
+    screen = desktop.run_screen
+    now = [100_000]
+    screen.match_screen.clock = lambda: now[0]
+    for _ in range(200):
+        _skip_match_playback(desktop)
+        state = controller.state
+        before = len(state.match.match_events)
+        if state.human_decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+            next(b for b in screen.buttons if b.variant == "hand-card").action()
+            events = controller.state.match.match_events
+            new = events[before:]
+            if len(new) >= 3 and isinstance(new[0].action, DefensiveSchemeAction):
+                break
+        else:
+            _play_human_decision(desktop)
+    else:
+        pytest.fail("No replay starting with a scheme call was found.")
+    plays = [event for event in new if is_real_play(event)]
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    texts = [text for text, _, _ in records]
+    assert screen.match_screen.playback.blocking()
+    # The first replayed event is the scheme call, which is not counted as a play.
+    assert f"REPLAYING · {len(plays)} PLAYS · [S] SKIP" in texts or f"REPLAYING · {len(plays)} PLAY · [S] SKIP" in texts
+    assert POST_REPLAY_NOTE in texts
+    assert not any(text.startswith("REPLAYING · PLAY 1 OF") and "DEFENSE" in text for text in texts)
+    first_play = next(index for index, event in enumerate(new) if is_real_play(event))
+    now[0] += EVENT_DURATION_MS * first_play
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    texts = [text for text, _, _ in records]
+    assert f"REPLAYING · PLAY 1 OF {len(plays)} · [S] SKIP" in texts
+    assert POST_REPLAY_NOTE in texts
+    assert "SKIP >>" in [b.label for b in screen.buttons]
+    # The note disappears once the replay finishes on its own.
+    now[0] += EVENT_DURATION_MS * len(new)
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    assert not screen.match_screen.playback.blocking()
+    assert POST_REPLAY_NOTE not in [text for text, _, _ in records]
+    assert replay_label(new, 0, 1, 1) == "REPLAYING · [S] SKIP"  # scheme-only replays
+
+
+def test_only_the_first_challenge_copy_is_playable(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = state.match
+    copies = (FootballCardCopy("challenge-a", "challenge"), FootballCardCopy("challenge-b", "challenge"))
+    deck = FootballDeckState(copies, hand=copies)
+    view = replace(state, match=replace(match, team_a_offense_deck=deck), challenge_available=True)
+    match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                       desktop.run_screen._label_font, clock=lambda: 0)
+    buttons = match_screen.draw(_surface(), view, _recording_actions(), focus_index=0,
+                                hover_index=None, pressed_index=None, error=None)
+    challenges = [b for b in buttons if b.label == "CHALLENGE"]
+    assert [b.enabled for b in challenges] == [True, False]
+
+
+def test_hand_scrolls_once_to_reveal_a_playable_card(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = state.match
+    blocked = tuple(FootballCardCopy(f"c{i}", "challenge") for i in range(7))
+    play = FootballCardCopy("the-play", "deep_pass")
+    deck = FootballDeckState(blocked + (play,), hand=blocked + (play,))
+    view = replace(state, match=replace(match, team_a_offense_deck=deck), challenge_available=False)
+    match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                       desktop.run_screen._label_font, clock=lambda: 0)
+
+    def draw():
+        return match_screen.draw(_surface(), view, _recording_actions(), focus_index=0,
+                                 hover_index=None, pressed_index=None, error=None)
+
+    draw()
+    assert "the-play" in match_screen.interaction.card_rects
+    # A manual scroll away afterwards is respected for the rest of the decision.
+    match_screen.interaction.scroll_group("offense", -10)
+    draw()
+    assert "the-play" not in match_screen.interaction.card_rects
+
+
+def _draw_hand_capturing_art(match_screen, view, monkeypatch, *, hover_label: str | None = None):
+    from src.ui import football_match_hand as hand_module
+
+    art: list[tuple[str, pygame.Rect]] = []
+    original = hand_module.draw_card_art
+
+    def capture(surface, filename, rect):
+        art.append((filename, pygame.Rect(rect)))
+        return original(surface, filename, rect)
+
+    monkeypatch.setattr(hand_module, "draw_card_art", capture)
+    buttons = match_screen.draw(_surface(), view, _recording_actions(), focus_index=99,
+                                hover_index=None, pressed_index=None, error=None)
+    hover = None
+    if hover_label is not None:
+        hover = next(i for i, b in enumerate(buttons) if b.label == hover_label)
+        art.clear()
+    with text_audit() as records:
+        buttons = match_screen.draw(_surface(), view, _recording_actions(), focus_index=99,
+                                    hover_index=hover, pressed_index=None, error=None)
+    return buttons, art, records
+
+
+def test_offense_fallback_is_drawn_as_a_playable_run_card(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = state.match
+    # Eight bonus cards force the narrowest card width, plus the fixed fallback slot.
+    hand = tuple(FootballCardCopy(f"c{i}", "challenge") for i in range(8))
+    view = replace(state, match=replace(match, team_a_offense_deck=FootballDeckState(hand, hand=hand)),
+                   challenge_available=False)
+    for hovered in (None, "FALLBACK / INSIDE RUN"):
+        match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                           desktop.run_screen._label_font, clock=lambda: 0)
+        buttons, art, records = _draw_hand_capturing_art(match_screen, view, monkeypatch,
+                                                         hover_label=hovered)
+        fallback = next(b for b in buttons if b.variant == "hand-fallback")
+        assert fallback.rect.width >= 72 - 1
+        assert fallback.label == "FALLBACK / INSIDE RUN"
+        face = fallback.rect.move(0, -8) if hovered else fallback.rect
+        assert any(name == play_card_art(FootballCardFamily.RB_RUN) and face.contains(rect)
+                   for name, rect in art)
+        inside = [text for text, rect, _ in records if face.contains(rect)]
+        assert "INSIDE RUN" in " ".join(inside)  # may wrap at the narrowest width
+        assert any(text in ("BASIC FALLBACK", "FALLBACK") for text in inside)
+        assert any(text.startswith("~") for text in inside)  # live yards preview
+        assert any(text.endswith("s") and text[:-1].isdigit() for text in inside)  # live clock
+        assert "EMPTY HAND" not in inside and "NO PLAY CARDS" not in inside
+        assert fallback not in [b for b in buttons if b.variant == "hand-card"]
+        assert FALLBACK_DISPLAY_ID not in match_screen.interaction.card_rects
+        _assert_text_fits(records)
+    # Number keys reach it like a playable card.
+    assert match_screen.shortcut_targets()[0].label == "FALLBACK / INSIDE RUN"
+
+
+def test_empty_defense_hand_fallback_is_drawn_as_run_fit_card(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    match = replace(state.match, possession=FootballTeamSide.TEAM_B,
+                    awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+                    current_drive_defensive_scheme=None, team_a_defense_deck=FootballDeckState(()))
+    view = replace(state, match=match, human_decision=FootballHumanDecision.DEFENSIVE_SCHEME)
+    match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                       desktop.run_screen._label_font, clock=lambda: 0)
+    buttons, art, records = _draw_hand_capturing_art(match_screen, view, monkeypatch)
+    fallback = next(b for b in buttons if b.variant == "hand-fallback")
+    assert fallback.label == "FALLBACK / RUN FIT"
+    assert any(name == scheme_card_art(FootballCardFamily.RB_RUN) and fallback.rect.contains(rect)
+               for name, rect in art)
+    inside = [text for text, rect, _ in records if fallback.rect.contains(rect)]
+    assert "RUN FIT" in inside and "COUNTERS" in inside and "RB RUN" in inside
+    assert any(text in ("BASIC FALLBACK", "FALLBACK") for text in inside)
+    _assert_text_fits(records)
+
+
+def _scoring_then_kickoff(match, scoring_event):
+    kickoff = FootballMatchEvent(
+        sequence=scoring_event.sequence + 1, action=FootballAutomaticAction.KICKOFF,
+        team_a_score=scoring_event.team_a_score, team_b_score=scoring_event.team_b_score,
+        possession=FootballTeamSide.TEAM_B, offense_field_position=27.0, down=1, yards_to_go=10.0,
+        game_clock_seconds=780, period=1, status=FootballMatchStatus.IN_PROGRESS,
+        clock_seconds_used=10, gross_yards=65.0, return_yards=27.0,
+        description="Kickoff returned 27.0 yards",
+    )
+    scheme = FootballMatchEvent(
+        sequence=scoring_event.sequence + 2, action=DefensiveSchemeAction.RB_RUN,
+        team_a_score=scoring_event.team_a_score, team_b_score=scoring_event.team_b_score,
+        possession=FootballTeamSide.TEAM_B, offense_field_position=27.0, down=1, yards_to_go=10.0,
+        game_clock_seconds=780, period=1, status=FootballMatchStatus.IN_PROGRESS,
+    )
+    events = (scoring_event, kickoff, scheme)
+    return replace(match, match_events=events, team_a_score=scoring_event.team_a_score,
+                   team_b_score=scoring_event.team_b_score)
+
+
+def _placeholder(sequence, action, points, *, play_result=None, scoring=FootballTeamSide.TEAM_A, **fields):
+    return FootballMatchEvent(
+        sequence=sequence, action=action, team_a_score=points if scoring is FootballTeamSide.TEAM_A else 0,
+        team_b_score=points if scoring is FootballTeamSide.TEAM_B else 0,
+        possession=FootballTeamSide.TEAM_B, offense_field_position=25.0, down=1, yards_to_go=10.0,
+        game_clock_seconds=790, period=1, status=FootballMatchStatus.IN_PROGRESS,
+        points_scored=points, scoring_team=scoring, play_result=play_result,
+        clock_seconds_used=play_result.clock_seconds_used if play_result else fields.pop("clock_seconds_used", 0),
+        **fields,
+    )
+
+
+def test_scores_followed_by_a_kickoff_show_kickoff_pending_not_a_placeholder_drive(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    match = desktop.football_controller.state.match
+    theme = desktop.run_screen.theme
+    safety_result = FootballPlayResult(OffensivePlayAction.RB_RUN, -3.0, 20, points_scored=2,
+                                       possession_changed=True)
+    scoring_events = {
+        "extra point": _placeholder(1, FootballConversionAction.EXTRA_POINT, 1, description="Extra point good"),
+        "two point": _placeholder(1, FootballConversionAction.TWO_POINT, 2, card_id="rb_run",
+                                  gross_yards=3.0, description="Two-point rb run successful"),
+        "field goal": _placeholder(1, FootballFourthDownAction.FIELD_GOAL, 3, field_goal_distance=30.0,
+                                   description="Field goal good from 30 yards", clock_seconds_used=5),
+        # Team B is tackled in its own end zone; Team A scores and Team B kicks.
+        "safety": replace(_placeholder(1, OffensivePlayAction.RB_RUN, 2, play_result=safety_result),
+                          possession=FootballTeamSide.TEAM_A),
+    }
+    for name, scoring in scoring_events.items():
+        full = _scoring_then_kickoff(match, scoring)
+        kicking = kickoff_pending(full, 1)
+        assert kicking is FootballTeamSide.TEAM_A, name
+        snapshot = snapshot_state(full, 1)
+        assert snapshot.possession is FootballTeamSide.TEAM_A
+        assert (snapshot.team_a_score, snapshot.team_b_score) == (scoring.team_a_score, scoring.team_b_score)
+        with text_audit() as records:
+            draw_scoreboard(_surface(), SCOREBOARD_RECT_FOR_TESTS, snapshot, theme,
+                            game_number=1, wins=0, losses=0, kickoff_next=True)
+            draw_match_field(_surface(), FIELD_RECT, snapshot, theme.primary, FieldOverlay(),
+                             human_scheme_highlight=True, kickoff_pending=True)
+        texts = [text for text, _, _ in records]
+        situation = next(text for text in texts if "KICKOFF NEXT" in text)
+        assert situation.endswith(f"{match.team_a.team_name.upper()} KICKS"), name
+        assert not any("& 10" in text or "BALL ON" in text for text in texts), (name, texts)
+        _assert_text_fits(records)
+        # The kickoff's own snapshot shows the receiving team's real drive.
+        kickoff_view = snapshot_state(full, 2)
+        assert kickoff_pending(full, 2) is None
+        assert kickoff_view.possession is FootballTeamSide.TEAM_B
+        assert down_text(kickoff_view) == "1ST & 10"
+        assert ball_spot_text(kickoff_view) == "BALL ON OWN 27"
+    # The last recorded event (no kickoff follows) keeps the normal display.
+    assert kickoff_pending(_scoring_then_kickoff(match, scoring_events["field goal"]), 3) is None
+
+
+def test_match_screen_uses_kickoff_pending_during_replay_and_keeps_conversion_text(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    state = desktop.football_controller.state
+    full = _scoring_then_kickoff(state.match, _placeholder(
+        1, FootballConversionAction.EXTRA_POINT, 1, description="Extra point good"))
+    view = replace(state, match=full, human_decision=None)
+    match_screen = FootballMatchScreen(desktop.run_screen.theme, desktop.run_screen._small_font,
+                                       desktop.run_screen._label_font, clock=lambda: 10_000)
+    match_screen.draw(_surface(), view, _recording_actions(), focus_index=0, hover_index=None,
+                      pressed_index=None, error=None)
+    match_screen.playback.debug_show(0, 9_500)
+    with text_audit() as records:
+        match_screen.draw(_surface(), view, _recording_actions(), focus_index=0, hover_index=None,
+                          pressed_index=None, error=None)
+    texts = [text for text, _, _ in records]
+    assert any("KICKOFF NEXT" in text for text in texts)
+    assert not any("1ST & 10" in text for text in texts)
+    # A real conversion decision is unaffected.
+    conversion = replace(state.match, down=1, yards_to_go=2.0, offense_field_position=98.0,
+                         awaited_action=FootballAwaitedAction.CONVERSION,
+                         conversion_team=FootballTeamSide.TEAM_A,
+                         current_drive_defensive_scheme=DefensiveSchemeAction.GOAL_LINE_FRONT)
+    with text_audit() as records:
+        match_screen.draw(_surface(), replace(state, match=conversion,
+                                              human_decision=FootballHumanDecision.CONVERSION),
+                          _recording_actions(), focus_index=0, hover_index=None,
+                          pressed_index=None, error=None)
+    texts = [text for text, _, _ in records]
+    assert any("PAT / 2-PT TRY" in text for text in texts)
+    assert not any("KICKOFF NEXT" in text for text in texts)

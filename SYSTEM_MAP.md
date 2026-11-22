@@ -108,7 +108,7 @@ covers extracted interaction state.
   navigation and paid-removal flow.
   [football_card_art.py](src/ui/football_card_art.py) maps play/scheme families,
   bonus actions, and the removal service to packaged pixel-art tiles used by
-  the shop, Playbook, match hand, and Challenge action buttons. Assets come from
+  the shop, Playbook, match hand, piles, and Challenge action buttons. Assets come from
   [process_football_card_art.py](scripts/process_football_card_art.py). See
   [test_football_card_art.py](tests/test_football_card_art.py),
   [test_football_shop.py](tests/test_football_shop.py),
@@ -120,25 +120,46 @@ covers extracted interaction state.
   before its word; text without those words renders unchanged. Assets come from
   [process_stat_icons.py](scripts/process_stat_icons.py); see
   [test_stat_icons.py](tests/test_stat_icons.py).
-- **Match and results:** [football_match_field.py](src/ui/football_match_field.py),
-  [football_match_status.py](src/ui/football_match_status.py), and
-  [football_match_decision_view.py](src/ui/football_match_decision_view.py)
-  render the field, scoreboard/history, and one shared hand/decision area.
-  Human-only tactical bonus cards show effects without football-play yardage;
-  turnover and failed-fourth-down results can pause for Challenge acceptance
-  or decline; an available Challenge is also selectable at a touchdown
-  conversion before the conversion is resolved. Offensive hand previews use the simulator's adjusted normal-play
-  clock calculation and label incomplete-pass, conversion, and special-teams
-  exceptions.
-  [football_match_interaction.py](src/ui/football_match_interaction.py)
-  tracks hand scrolling, dragging, and field animation.
-  The hand distinguishes printed base card durations from the live normal-play
-  clock, with simulator clock exceptions visible. An available Challenge card
-  can also be played from the conversion decision to review a touchdown before
-  resolving the conversion.
+- **Match and results:** [football_match_screen.py](src/ui/football_match_screen.py)
+  composes the 1280x720 match layout (92px scoreboard, 286px field, 64px
+  outcome strip, hands in the middle 60% and deck/discard piles in each outer
+  20%), owns playback and popup state, and forwards choices to the run screen
+  through `MatchActions`; the run screen only submits them to the controller.
+  [football_match_events.py](src/ui/football_match_events.py) is pure: it
+  turns recorded events into absolute-yard play lines (run red, pass blue,
+  other grey; incomplete X, turnover/return, blocked, scoring end-zone flash),
+  outcome-strip wording, period banners, and display snapshots, including a
+  kickoff-pending view in place of the placeholder drive the simulator records
+  between a score and its automatic kickoff.
+  [football_match_playback.py](src/ui/football_match_playback.py) replays
+  multi-event updates one event per second, blocks input until done or skipped,
+  and always replays a match's final events before the result screen; its
+  label counts only snaps and kicks, and hands, piles, and opponent counts are
+  dimmed with a note because they already show the post-replay decks.
+  [football_match_scoreboard.py](src/ui/football_match_scoreboard.py) draws
+  badges, scores, clock, situation, and the opponent's face-down hand counts
+  (never identities); [football_match_field.py](src/ui/football_match_field.py)
+  draws turf, markers, the active scheme tag, and the latest play line;
+  [football_match_outcome.py](src/ui/football_match_outcome.py) draws the
+  result and the fourth-down, conversion, Challenge, and Skip buttons;
+  [football_match_hand.py](src/ui/football_match_hand.py) draws both hands
+  (only the group for the current decision is selectable; two-point tries use
+  offensive play cards), live yard/clock previews, bonus cards, the ACTIVE
+  scheme slot, the basic-run fallback slot whenever the offensive hand has no
+  play card, and per-group scrolling that reveals a playable card once per
+  decision;
+  [football_match_piles.py](src/ui/football_match_piles.py) draws draw and
+  discard piles; [football_match_popups.py](src/ui/football_match_popups.py)
+  draws the pause menu (Resume, Depth Chart, Play Log, End Run), the in-match
+  Depth Chart (temporary upgrades labeled active this match), the play log,
+  and read-only pile lists. [football_match_interaction.py](src/ui/football_match_interaction.py)
+  tracks drag, drop areas, and group scroll. Colors, fonts, and the
+  `text_audit` fit recorder are in [football_match_palette.py](src/ui/football_match_palette.py).
   [football_result.py](src/ui/football_result.py) renders results and
   progression actions. Tests include
-  [test_football_desktop.py](tests/test_football_desktop.py) and
+  [test_football_match_presentation.py](tests/test_football_match_presentation.py)
+  (lines, wording, playback), [test_football_desktop.py](tests/test_football_desktop.py)
+  (hands, piles, popups, strip decisions, text fit), and
   [test_football_ui_interactions.py](tests/test_football_ui_interactions.py).
 
 ## Change cards, simulation, or progression

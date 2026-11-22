@@ -3,8 +3,6 @@ from enum import Enum
 
 import pygame
 
-from src.engine.football import FootballMatchState
-
 
 class HandEventKind(Enum):
     IGNORED = "ignored"
@@ -21,33 +19,43 @@ class HandEvent:
 
 @dataclass
 class MatchInteraction:
-    """Own transient hand geometry, drag state, scrolling, and field animation."""
+    """Own transient hand geometry, per-group scrolling, and drag state."""
 
-    hand_scroll: int = 0
-    hand_max_scroll: int = 0
-    hand_area: pygame.Rect | None = None
+    group_scroll: dict[str, int] = field(default_factory=lambda: {"offense": 0, "defense": 0})
+    group_max_scroll: dict[str, int] = field(default_factory=lambda: {"offense": 0, "defense": 0})
+    group_areas: dict[str, pygame.Rect] = field(default_factory=dict)
     card_rects: dict[str, pygame.Rect] = field(default_factory=dict)
-    play_area: pygame.Rect | None = None
+    play_areas: tuple[pygame.Rect, ...] = ()
     dragging_card_id: str | None = None
-    visual_state: FootballMatchState | None = None
-    animation_started: int = 0
-    animation_origin: float = 0.0
-    animation_target: float = 0.0
-    animation_gain_origin: float = 0.0
-    animation_gain_target: float = 0.0
-    animation_active: bool = False
+    drag_origin: tuple[int, int] | None = None
+    pointer: tuple[int, int] | None = None
+    auto_scroll_key: tuple | None = None
+
+    @property
+    def dragging(self) -> bool:
+        """True once a pressed card has moved far enough to be a drag."""
+        if self.dragging_card_id is None or self.drag_origin is None or self.pointer is None:
+            return False
+        dx = self.pointer[0] - self.drag_origin[0]
+        dy = self.pointer[1] - self.drag_origin[1]
+        return dx * dx + dy * dy >= 64
+
+    def scroll_group(self, group: str, delta: int) -> None:
+        maximum = self.group_max_scroll.get(group, 0)
+        self.group_scroll[group] = max(0, min(maximum, self.group_scroll.get(group, 0) + delta))
 
     def handle_event(self, event: pygame.event.Event) -> HandEvent:
-        if (
-            event.type == pygame.MOUSEWHEEL
-            and self.hand_area is not None
-            and self.hand_max_scroll > 0
-        ):
-            self.hand_scroll = max(
-                0, min(self.hand_max_scroll, self.hand_scroll - event.y)
-            )
-            return HandEvent(HandEventKind.HANDLED)
+        if event.type == pygame.MOUSEMOTION:
+            self.pointer = event.pos
+            return HandEvent(HandEventKind.IGNORED)
+        if event.type == pygame.MOUSEWHEEL and self.pointer is not None:
+            for group, area in self.group_areas.items():
+                if area.collidepoint(self.pointer) and self.group_max_scroll.get(group, 0):
+                    self.scroll_group(group, -event.y)
+                    return HandEvent(HandEventKind.HANDLED)
+            return HandEvent(HandEventKind.IGNORED)
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.pointer = event.pos
             selected = next(
                 (copy_id for copy_id, rect in self.card_rects.items()
                  if rect.collidepoint(event.pos)),
@@ -55,6 +63,7 @@ class MatchInteraction:
             )
             if selected is not None:
                 self.dragging_card_id = selected
+                self.drag_origin = event.pos
                 return HandEvent(HandEventKind.HANDLED)
         if (
             event.type == pygame.MOUSEBUTTONUP
@@ -63,49 +72,16 @@ class MatchInteraction:
         ):
             selected = self.dragging_card_id
             self.dragging_card_id = None
+            self.drag_origin = None
+            self.pointer = event.pos
             origin = self.card_rects.get(selected)
-            if (
-                self.play_area is not None and self.play_area.collidepoint(event.pos)
-            ) or (origin is not None and origin.collidepoint(event.pos)):
+            if any(area.collidepoint(event.pos) for area in self.play_areas) or (
+                origin is not None and origin.collidepoint(event.pos)
+            ):
                 return HandEvent(HandEventKind.SELECTED, selected)
             return HandEvent(HandEventKind.INVALID_DROP)
         return HandEvent(HandEventKind.IGNORED)
 
-    def field_positions(
-        self, match: FootballMatchState, now: int
-    ) -> tuple[float, float]:
-        previous = self.visual_state
-        if previous is None:
-            self.visual_state = match
-            return (
-                match.offense_field_position,
-                min(100.0, match.offense_field_position + match.yards_to_go),
-            )
-
-        if len(previous.match_events) != len(match.match_events):
-            self.animation_origin = previous.offense_field_position
-            self.animation_target = match.offense_field_position
-            self.animation_gain_origin = min(
-                100.0, previous.offense_field_position + previous.yards_to_go
-            )
-            self.animation_gain_target = min(
-                100.0, match.offense_field_position + match.yards_to_go
-            )
-            self.animation_started = now
-            self.animation_active = True
-        self.visual_state = match
-
-        if not self.animation_active:
-            return (
-                match.offense_field_position,
-                min(100.0, match.offense_field_position + match.yards_to_go),
-            )
-        progress = min(1.0, max(0.0, (now - self.animation_started) / 360))
-        eased = progress * progress * (3 - 2 * progress)
-        if progress >= 1:
-            self.animation_active = False
-        return (
-            self.animation_origin + (self.animation_target - self.animation_origin) * eased,
-            self.animation_gain_origin
-            + (self.animation_gain_target - self.animation_gain_origin) * eased,
-        )
+    def cancel_drag(self) -> None:
+        self.dragging_card_id = None
+        self.drag_origin = None

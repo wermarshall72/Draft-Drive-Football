@@ -37,8 +37,8 @@ from src.engine.football_shop import (
 )
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
-from src.ui.football_match_decision_view import FootballMatchDecisionView
-from src.ui import football_match_decision_view as football_match_view_module
+from src.ui.football_match_hand import HandView
+from src.ui import football_match_hand as football_match_view_module
 from src.ui.football_card_art import bonus_card_art
 from src.ui.football_match_interaction import MatchInteraction
 
@@ -157,12 +157,12 @@ def test_bonus_catalog_rarities_costs_and_shop_only_removal() -> None:
     )
 
 
-def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand(
+def test_all_bonus_types_render_as_tactical_cards_in_the_offensive_hand(
     monkeypatch,
 ) -> None:
     pygame.font.init()
-    font = pygame.font.Font(None, 14)
-    surface = pygame.Surface((900, 420))
+    surface = pygame.Surface((1280, 720))
+    hand_rect = pygame.Rect(256, 472, 768, 240)
     defensive_cards = starting_defensive_deck("human")
     exhausted_drawable_defense = FootballDeckState(
         defensive_cards,
@@ -180,33 +180,36 @@ def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand(
         card = FootballCardCopy(f"ui:{action}", action)
         offense = FootballDeckState((card,), hand=(card,))
         match = _match_state(offense, defense=exhausted_drawable_defense)
-        view = FootballMatchDecisionView(
-            font,
-            font,
-            MatchInteraction(),
-            0,
-            None,
-            None,
-            lambda _copy_id: None,
-            lambda _action: None,
-            lambda _action, _copy_id: None,
-            lambda _offensive: None,
-            lambda _accept: None,
-        )
-        buttons = view.draw(
+        interaction = MatchInteraction()
+        rendered_art.clear()
+        buttons = HandView().draw(
             surface,
-            pygame.Rect(10, 10, 880, 390),
+            hand_rect,
             SimpleNamespace(
                 human_decision=FootballHumanDecision.OFFENSIVE_PLAY,
                 match=match,
                 challenge_available=True,
             ),
+            match,
+            interaction,
+            input_blocked=False,
+            focus_index=99,
+            hover_index=None,
+            pressed_index=None,
+            button_offset=0,
+            choose_card=lambda _copy_id: None,
+            choose_fallback=lambda _offensive: None,
         )
-        art_name, art_rect = rendered_art[-1]
-        assert art_name == bonus_card_art(definition.action)
+        # A bonus-only hand also offers the engine's basic-run fallback.
+        assert [button.label for button in buttons] == [
+            definition.name.upper(), "FALLBACK / INSIDE RUN",
+        ]
+        assert buttons[1].enabled and not buttons[0].rect.colliderect(buttons[1].rect)
+        art_rect = next(
+            rect for filename, rect in rendered_art
+            if filename == bonus_card_art(definition.action)
+        )
         assert buttons[0].rect.contains(art_rect)
-        assert len(buttons) == 1
-        assert buttons[0].label == definition.name.upper()
         assert buttons[0].enabled is not (
             action
             in (
@@ -215,9 +218,9 @@ def test_all_bonus_types_render_as_tactical_cards_in_the_shared_match_hand(
             )
         )
         if buttons[0].enabled:
-            assert view.match_interaction.card_rects[card.copy_id].right <= 890
+            assert hand_rect.contains(interaction.card_rects[card.copy_id])
         else:
-            assert card.copy_id not in view.match_interaction.card_rects
+            assert card.copy_id not in interaction.card_rects
 
 
 def test_bonus_shop_purchase_replaces_offer_and_adds_offensive_copy() -> None:
