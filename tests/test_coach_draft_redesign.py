@@ -3,7 +3,7 @@ from dataclasses import replace
 import pygame
 import pytest
 
-from src.engine.football_coaches import COACH_PAIR_OFFERS, DEFENSIVE_COACHES, OFFENSIVE_COACHES
+from src.engine.football_coaches import COACH_PAIR_OFFERS
 from src.engine.football_controller import FootballRunPhase
 from src.ui import coach_art, football_coach_view
 from src.ui.text import wrap_text_lines

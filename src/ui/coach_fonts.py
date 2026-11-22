@@ -1,4 +1,4 @@
-"""Bundled typefaces for the recruiting-room screen."""
+"""Bundled Barlow typeface for the draft, shop, and staff screens."""
 
 import logging
 from pathlib import Path
@@ -10,19 +10,6 @@ from src.ui.stat_icons import StatIconFont
 
 _LOG = logging.getLogger(__name__)
 _FONT_DIR = Path(__file__).parent / "assets" / "fonts"
-
-
-def coach_font(size: int, *, bold: bool = False, handwritten: bool = False) -> StatIconFont:
-    filename = (
-        "Kalam-Bold.ttf"
-        if handwritten
-        else "AtkinsonHyperlegible-Bold.ttf" if bold else "AtkinsonHyperlegible-Regular.ttf"
-    )
-    try:
-        return StatIconFont(pygame.font.Font(str(_FONT_DIR / filename), size))
-    except (OSError, pygame.error) as error:
-        _LOG.warning("Could not load coach font %s: %s", filename, error)
-        return _ui_font(size, bold=bold or handwritten)
 
 
 def staff_font(size: int, *, semibold: bool = False) -> StatIconFont:

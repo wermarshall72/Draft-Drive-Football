@@ -100,10 +100,6 @@ class StatIconFont:
         return result
 
 
-def with_stat_icons(font: pygame.font.Font) -> StatIconFont:
-    return font if isinstance(font, StatIconFont) else StatIconFont(font)
-
-
 def without_stat_icons(font: pygame.font.Font) -> pygame.font.Font:
     """Return the underlying font for names that mention a stat word."""
     return font._font if isinstance(font, StatIconFont) else font

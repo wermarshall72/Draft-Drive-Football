@@ -80,17 +80,6 @@ def _player_details(player: FootballPlayer) -> tuple[str, str | None, str]:
     return partner, explanation, player_perk_text(player_type)
 
 
-def _compact_player_details(player: FootballPlayer) -> str:
-    player_type = player_type_for_id(player.player_type_id) if player.player_type_id else None
-    partner, explanation = player_partnership_text(player_type)
-    perk = player_type.perk if player_type is not None else None
-    summary = (
-        f"PLANNED / INACTIVE\nPerk: {perk.name}\nTrigger: {perk.trigger}\nEffect: {perk.effect}"
-        if perk is not None else "Perk: None"
-    )
-    return "\n".join(filter(None, (partner, explanation, summary)))
-
-
 def _detail_sections(player: FootballPlayer) -> tuple[tuple[str, ...], tuple[str, ...]]:
     player_type = player_type_for_id(player.player_type_id) if player.player_type_id else None
     partner, explanation = player_partnership_text(player_type)

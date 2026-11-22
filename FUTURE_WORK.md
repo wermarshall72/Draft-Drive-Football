@@ -75,11 +75,20 @@ or the design changes.
   effect magnitudes through balance measurement and playtesting.
 - [ ] Expand the play/scheme catalog toward 100+ named ideas without changing
   the six-family invariants.
-- [ ] Design twelve family icons: one for each of the six offensive play
-  families and one for each corresponding defensive scheme family. Named
-  variants within a family should share its icon.
 - [ ] Design future player synergies and AP-saving actions. Unspent AP
   currently expires at the end of each shop visit.
 - [ ] Implement a playoff bracket; the current run ends at the playoffs marker.
 - [ ] Revisit asynchronous opponents, accounts, and career history after the
   offline-first game loop is established.
+
+## Known bugs
+
+- [ ] Opponent Discard (Rare) and Offensive Draw & Discard (Very Rare) resolve
+  identically: each draws one offensive replacement and randomly discards one
+  card from the opponent's hand, and their descriptions are nearly the same.
+  Decide how the Very Rare card should differ, then update its effect, text,
+  and tests.
+- [ ] After Remove One Card is used in a shop visit, a Next Day reroll can offer
+  it again even though it cannot be bought until the next visit. Either exclude
+  it from rerolled offers for the rest of the visit or change its purchase
+  limit, and show a consistent disabled state.

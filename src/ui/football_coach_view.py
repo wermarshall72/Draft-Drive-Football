@@ -67,11 +67,8 @@ def coach_perk_text(coach: FootballCoachProfile) -> str:
 
 class FootballCoachView:
     def __init__(
-        self, theme: Theme, team_name: str, inspection: CoachInspection,
-        focus_index: int, hover_index: int | None,
-        title_font: pygame.font.Font, name_font: pygame.font.Font,
-        label_font: pygame.font.Font, body_font: pygame.font.Font,
-        detail_font: pygame.font.Font, stat_font: pygame.font.Font,
+        self, theme: Theme, inspection: CoachInspection, focus_index: int,
+        body_font: pygame.font.Font, stat_font: pygame.font.Font,
         small_font: pygame.font.Font, main_font: pygame.font.Font,
         button_font: pygame.font.Font, choose_coach: Callable[[int], None],
     ) -> None:
@@ -81,7 +78,6 @@ class FootballCoachView:
         self.choose_coach = choose_coach
         self.title_font = staff_font(34, semibold=True)
         self.name_font = staff_font(16, semibold=True)
-        self.label_font = label_font
         self.body_font = body_font
         self.detail_font = staff_font(14)
         self.stat_font = stat_font

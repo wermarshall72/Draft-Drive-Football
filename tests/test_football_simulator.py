@@ -22,8 +22,8 @@ from src.engine.football import (
     FootballRoster,
     FootballSpecialTeams,
     FootballTeamSide,
-    FootballTurnoverType,
     OffensivePlayAction,
+    matchup_for_play,
     matchup_for_scheme,
 )
 from src.engine.football_simulator import (
@@ -35,7 +35,6 @@ from src.engine.football_simulator import (
     calculate_play_estimate,
     field_goal_distance_for_position,
     field_goal_success_probability,
-    matchup_for_play,
 )
 from src.engine.football_player_catalog import (
     PLAYER_BASE_POWER,
@@ -416,7 +415,7 @@ def test_shop_coach_partnership_and_fatigue_stack_once_before_scheme_modifier() 
         and item.stat is FootballUpgradeStat.POWER
         and item.duration is FootballUpgradeDuration.PERMANENT
     )
-    upgraded_roster = shop.buy(qb_upgrade).roster
+    upgraded_roster = shop.buy_upgrade(qb_upgrade).roster
 
     history = tuple(
         FootballMatchEvent(

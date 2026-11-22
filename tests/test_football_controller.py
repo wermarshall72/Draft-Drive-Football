@@ -28,7 +28,7 @@ from src.engine.football_controller import (
     FootballRunPhase,
 )
 from src.engine.football_simulator import REGULATION_PERIOD_SECONDS
-from src.engine.football_team_builder import PLAYER_DRAFT_ORDER, FootballPlayerCandidate
+from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
 from src.engine.football_appearance import FootballPlayerAppearance, POSITION_ART
 from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_shop import (
@@ -156,7 +156,7 @@ def _start_match(controller: FootballGameController) -> None:
     _draft_to_shop(controller)
     assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
     assert controller.state.shop is not None
-    assert controller.state.shop.remaining_budget == 12
+    assert controller.state.shop.remaining_ap == 12
     assert len(controller.state.shop.offer) == 3
     controller.finish_shop()
 
@@ -379,7 +379,7 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
         state.shop.roster.coach_assignment
         == selected_pair.assignment
     )
-    assert state.shop.remaining_budget == 12
+    assert state.shop.remaining_ap == 12
     assert len(state.shop.offer) == 3
 
     first_upgrade, second_upgrade = state.shop.offer[:2]
@@ -390,7 +390,7 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
         controller.state.shop.roster.coach_assignment
         == selected_pair.assignment
     )
-    assert controller.state.shop.remaining_budget == 12 - first_upgrade.cost - second_upgrade.cost
+    assert controller.state.shop.remaining_ap == 12 - first_upgrade.cost - second_upgrade.cost
     assert len(controller.state.shop.purchased_upgrades) == 2
 
     match_view = controller.finish_shop()
@@ -627,7 +627,7 @@ def test_invalid_and_out_of_turn_actions_preserve_state_and_all_random_streams()
     initial = controller.state
     builder_rng = controller._builder._rng.getstate()
     with pytest.raises(ValueError, match="phase"):
-        controller.start_next_game()
+        controller.enter_next_shop()
     with pytest.raises(ValueError, match="not included"):
         offered_pair = controller.state.team_builder.coach_offer[0]
         controller.choose_coach(
@@ -660,7 +660,7 @@ def test_invalid_and_out_of_turn_actions_preserve_state_and_all_random_streams()
     assert controller._shop._rng.getstate() == shop_rng
     assert controller.state == post_purchase
     assert controller.state.shop is not None
-    assert controller.state.shop.remaining_budget == 12 - shop.offer[0].cost
+    assert controller.state.shop.remaining_ap == 12 - shop.offer[0].cost
     assert controller.state.phase is shop_state.phase
 
     controller.finish_shop()
@@ -733,7 +733,7 @@ def test_three_losses_immediately_fire_run(monkeypatch) -> None:
             assert state.shop.game_number == 3 and state.shop.finished
 
     with pytest.raises(ValueError, match="phase"):
-        controller.start_next_game()
+        controller.enter_next_shop()
 
 
 def test_surviving_tenth_regular_season_game_marks_playoffs_without_bracket(
@@ -758,7 +758,7 @@ def test_surviving_tenth_regular_season_game_marks_playoffs_without_bracket(
             assert state.shop.game_number == 10 and state.shop.finished
 
     with pytest.raises(ValueError, match="phase"):
-        controller.start_next_game()
+        controller.enter_next_shop()
 
 
 def test_next_shop_resets_ap_and_preserves_upgrades_roster_and_slot_unlocks(

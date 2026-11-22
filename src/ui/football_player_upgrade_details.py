@@ -1,6 +1,6 @@
 """Formatting for player-upgrade projections and pending effects."""
 
-from src.engine.football_shop import FootballStatProjection, FootballUpgradeStat
+from src.engine.football_shop import FootballUpgradeStat
 from src.engine.football_simulator import MIN_PLAY_YARDAGE_SPREAD
 from src.ui.football_player_draft_view import _draft_percentage
 
@@ -26,10 +26,3 @@ def stat_change(stat: FootballUpgradeStat, change: float) -> str:
     if stat is FootballUpgradeStat.POWER:
         return f"{change:+g}"
     return f"{change * 100:+g}%"
-
-
-def projection_text(scope: str, stat: FootballUpgradeStat, projection: FootballStatProjection) -> str:
-    change = stat_change(stat, projection.change)
-    if change == "NO EFFECT":
-        return f"{scope} {stat_value(stat, projection.after)} NO EFFECT"
-    return f"{scope} {change} > {stat_value(stat, projection.after)}"

@@ -38,7 +38,6 @@ from src.engine.football_shop import (
     FootballShop,
     FootballShopRarity,
     FootballShopSection,
-    FootballUpgradeStat,
 )
 from src.engine.football_simulator import (
     FIELD_GOAL_BLOCK_CHANCE,

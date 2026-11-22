@@ -33,7 +33,7 @@ from src.ui.football_card_art import (
 )
 from src.ui.football_depth_chart import draw_depth_chart
 from src.ui.football_display import _POSITION_LABELS
-from src.ui.football_shop_review import PlaybookCategory, ShopReviewInteraction
+from src.ui.football_shop_review import ShopReviewInteraction
 from src.ui.text import draw_complete_wrapped_text, wrap_text_lines
 from src.ui.stat_icons import without_stat_icons
 from src.ui.theme import Theme, readable_ink, relative_luminance

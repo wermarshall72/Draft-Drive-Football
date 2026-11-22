@@ -13,7 +13,7 @@ from src.engine.football_controller import (
     FootballRunPhase,
 )
 from src.engine.football_shop import FootballShopSection
-from src.ui.coach_fonts import coach_font, staff_font
+from src.ui.coach_fonts import staff_font
 from src.ui.football_result import FootballResultView
 from src.ui.football_display import (
     _SCHEME_LABELS,
@@ -58,18 +58,7 @@ class FootballRunScreen(Screen):
         self.match_interaction = MatchInteraction()
         self.coach_inspection = CoachInspection()
         self.player_inspection = PlayerInspection()
-        self._coach_title_font = coach_font(40, handwritten=True)
-        self._coach_name_font = coach_font(23, bold=True)
-        self._coach_detail_font = coach_font(15)
-        self._coach_stat_font = coach_font(15, bold=True)
-        self._coach_small_font = coach_font(14, bold=True)
-        self._coach_main_font = coach_font(17, bold=True)
-        self._coach_body_font = coach_font(16)
-        self._coach_section_font = coach_font(23, bold=True)
-        self._staff_name_font = staff_font(25, semibold=True)
-        self._staff_label_font = staff_font(15)
         self._staff_body_font = staff_font(16)
-        self._staff_detail_font = staff_font(16)
         self._staff_stat_font = staff_font(16, semibold=True)
         self._staff_small_font = staff_font(14, semibold=True)
         self._staff_main_font = staff_font(18, semibold=True)
@@ -568,10 +557,8 @@ class FootballRunScreen(Screen):
 
     def _coach_view(self) -> FootballCoachView:
         return FootballCoachView(
-            self.theme, self.team_name, self.coach_inspection,
-            self.focus_index, self.hover_index,
-            self._coach_title_font, self._staff_name_font, self._staff_label_font,
-            self._staff_body_font, self._staff_detail_font, self._staff_stat_font,
+            self.theme, self.coach_inspection, self.focus_index,
+            self._staff_body_font, self._staff_stat_font,
             self._staff_small_font, self._staff_main_font, self._staff_button_font,
             lambda choice: self._submit(
                 lambda: self._require_controller().choose_coach(choice)

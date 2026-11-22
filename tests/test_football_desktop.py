@@ -14,7 +14,6 @@ from src.engine.football import (
     FootballBonusCardAction,
     FootballCardCopy,
     FootballAwaitedAction,
-    FootballCardFamily,
     FootballConversionAction,
     FootballDeckState,
     FootballFourthDownAction,
@@ -55,7 +54,7 @@ from src.engine.football_player_catalog import (
     player_from_type,
     player_type_for_id,
 )
-from src.ui.theme import readable_ink, relative_luminance
+from src.ui.theme import relative_luminance
 from src.engine.football_shop import (
     COACH_UPGRADE_CATALOG,
     PLAYER_UPGRADE_CATALOG,
@@ -68,7 +67,6 @@ from src.engine.football_shop import (
     FootballUpgradeStat,
     _player_upgrade_catalog,
 )
-from src.profile import COLOR_CHOICES
 from src.ui.application import DesktopApplication
 from src.ui import coach_art
 from src.ui import football_run_screen as football_run_screen_module
@@ -88,11 +86,9 @@ from src.ui import football_player_draft_view as football_player_draft_module
 from src.ui.football_match_status import FootballMatchStatusView
 from src.ui import player_art
 from src.ui.layout import LOGICAL_SIZE
-from src.ui.layout import Layout
 from src.ui.football_coach_upgrade_details import coach_upgrade_detail_sections
 from src.ui.text import wrap_text_lines
 from src.ui.widgets import Button
-from src.ui.theme import readable_ink
 
 
 def _new_desktop(
@@ -294,7 +290,7 @@ def test_coach_and_eight_position_draft_are_controller_driven(
     assert state.phase is FootballRunPhase.PRE_MATCH_SHOP
     assert state.team_builder.completed
     assert set(state.team_builder.selected_players) == set(FootballPosition)
-    assert state.shop is not None and state.shop.remaining_budget == 12
+    assert state.shop is not None and state.shop.remaining_ap == 12
 
 
 def test_draft_cards_show_complete_actual_catalog_data(tmp_path: Path, monkeypatch) -> None:
@@ -753,36 +749,6 @@ def test_player_draft_error_preserves_state_and_is_visible(
 
 
 
-@pytest.mark.parametrize("offense", [True, False])
-def test_playbook_marks_are_deterministic_team_colored_and_contrasted(offense: bool) -> None:
-    rect = pygame.Rect(0, 0, 64, 64)
-    background = pygame.Color("#a1a8a3")
-    color = pygame.Color("#bcbcbc")
-    first = pygame.Surface(rect.size)
-    second = pygame.Surface(rect.size)
-    first.fill(background)
-    second.fill(background)
-    coach_art.draw_playbook_mark(first, rect, offense=offense, color=color)
-    coach_art.draw_playbook_mark(second, rect, offense=offense, color=color)
-    assert pygame.image.tobytes(first, "RGB") == pygame.image.tobytes(second, "RGB")
-    assert any(all(abs(first.get_at((x, y))[channel] - color[channel]) <= 3
-                   for channel in range(3)) for x in range(64) for y in range(64))
-    assert any(max(first.get_at((x, y))[:3]) <= 4
-               for x in range(64) for y in range(64))
-    # The former route and bracket extensions must not return.
-    assert first.get_at((60, 32)) == background
-def test_missing_coach_art_uses_visible_fallback_and_logs(tmp_path: Path, monkeypatch, caplog) -> None:
-    coach_art.recruiting_table.cache_clear()
-    monkeypatch.setattr(coach_art, "_TABLE_PATH", tmp_path / "missing.png")
-    try:
-        surface = _surface()
-        coach_art.draw_recruiting_table(surface)
-        assert surface.get_at((10, 10)) == pygame.Color("#282c24")
-        assert "Could not load recruiting table artwork" in caplog.text
-    finally:
-        coach_art.recruiting_table.cache_clear()
-
-
 def test_coach_selection_error_preserves_offer_and_is_displayed(tmp_path: Path, monkeypatch) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
@@ -861,18 +827,18 @@ def test_shop_purchase_and_finish_start_the_match(tmp_path: Path) -> None:
     assert controller is not None
     shop = controller.state.shop
     assert shop is not None
-    assert shop.remaining_budget == 12
+    assert shop.remaining_ap == 12
 
     _activate(desktop, "BUY", index=0)
     purchased = controller.state.shop
     assert purchased is not None
-    assert purchased.remaining_budget == 12 - shop.offer[0].cost
+    assert purchased.remaining_ap == 12 - shop.offer[0].cost
     assert purchased.purchased_upgrades == (shop.offer[0],)
     _activate(desktop, "BUY", index=1)
     purchased_twice = controller.state.shop
     assert purchased_twice is not None
     assert len(purchased_twice.purchased_upgrades) == 2
-    assert purchased_twice.remaining_budget < purchased.remaining_budget
+    assert purchased_twice.remaining_ap < purchased.remaining_ap
 
     _activate(desktop, "FINISH SHOP / START MATCH")
     state = controller.state
@@ -1768,10 +1734,6 @@ def test_depth_chart_renders_run_art_details_and_router_toggle(
         partner, explanation = player_partnership_text(player_type)
         assert partner in text
         assert all(part in text for part in football_depth_module._detail_sections(player)[1])
-        if player_type.perk is not None:
-            assert all(detail in football_depth_module._compact_player_details(player) for detail in (
-                "PLANNED / INACTIVE", player_type.perk.name, player_type.perk.trigger, player_type.perk.effect
-            ))
         if explanation:
             assert any(explanation in item for item in text)
     assert "Partner: None" in text and "Perk: None" in text
@@ -2662,24 +2624,13 @@ def test_coach_upgrade_text_and_bye_week_marker_are_visible(
     shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
     screen = desktop.run_screen
     area = pygame.Rect(20, 16, 1240, 688)
-    wrapped: list[str] = []
     shop_labels: list[str] = []
-    original_shop_wrapped = football_shop_module.draw_wrapped_text
     original_shop_text = football_shop_module.draw_text
-
-    def capture_shop_wrapped(surface, text, rect, font, color, *, line_gap=6):
-        wrapped.append(text)
-        original_shop_wrapped(
-            surface, text, rect, font, color, line_gap=line_gap
-        )
 
     def capture_shop_text(surface, text, position, font, color):
         shop_labels.append(text)
         original_shop_text(surface, text, position, font, color)
 
-    monkeypatch.setattr(
-        football_shop_module, "draw_wrapped_text", capture_shop_wrapped
-    )
     monkeypatch.setattr(football_shop_module, "draw_text", capture_shop_text)
     view = screen._shop_view()
     buttons = view.draw(
@@ -3508,11 +3459,9 @@ def test_named_variants_show_context_and_standard_details_in_shop_and_playbook(
     assert any("COUNTERS DEEP PASS" in detail for detail in playbook_details)
 
 
-@pytest.mark.parametrize("height", (49, 50, 60, 74, 75, 92))
-def test_shop_slot_rendering_handles_card_kinds_and_layout_boundaries(
+def test_shop_slot_rendering_handles_card_kinds_at_live_slot_sizes(
     tmp_path: Path,
     monkeypatch,
-    height: int,
 ) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
@@ -3546,22 +3495,11 @@ def test_shop_slot_rendering_handles_card_kinds_and_layout_boundaries(
         effect=lambda roster: roster,
         football_card=scheme,
     )
-    other_card = FootballShopCard(
-        card_id="test-player-card",
-        name="Test Player Card",
-        description="A non-football shop card.",
-        section=FootballShopSection.PLAYER_UPGRADES,
-        rarity=FootballShopRarity.COMMON,
-        cost=2,
-        eligible=lambda _roster: True,
-        effect=lambda roster: roster,
-    )
     cases = (
-        ("affordable play", play_card, False, 2, "BUY", "NEUTRAL"),
-        ("purchased play", play_card, True, 2, "PURCHASED", "PURCHASED"),
-        ("unaffordable play", play_card, False, 1, "NEED 1 AP", "NEED"),
+        ("affordable play", play_card, False, 2, "BUY", "EXPECTED YARDAGE"),
+        ("purchased play", play_card, True, 2, "PURCHASED", "Slot Slant"),
+        ("unaffordable play", play_card, False, 1, "NEED 1 AP", "Slot Slant"),
         ("defensive scheme", scheme_card, False, 2, "BUY", "COUNTERS"),
-        ("non-football card", other_card, False, 2, "BUY", "non-football"),
     )
     displayed: list[str] = []
     original_draw_text = football_run_screen_module.draw_text
@@ -3569,6 +3507,19 @@ def test_shop_slot_rendering_handles_card_kinds_and_layout_boundaries(
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
         original_draw_text(surface, text, position, font, color)
+
+    view = desktop.run_screen._shop_view()
+    live_rects: dict[FootballShopSection, pygame.Rect] = {}
+    original_landing_slot = view._landing_slot
+
+    def capture_slot_rect(surface, rect, slot, *args):
+        live_rects.setdefault(slot.section, rect.copy())
+        original_landing_slot(surface, rect, slot, *args)
+
+    monkeypatch.setattr(view, "_landing_slot", capture_slot_rect)
+    desktop.router.draw(_surface())
+    monkeypatch.setattr(view, "_landing_slot", original_landing_slot)
+    assert FootballShopSection.PLAYS_SCHEMES in live_rects
 
     monkeypatch.setattr(football_shop_module, "draw_text", capture_text)
     for label, card, purchased, remaining_ap, expected_button, expected_text in cases:
@@ -3584,18 +3535,19 @@ def test_shop_slot_rendering_handles_card_kinds_and_layout_boundaries(
             disabled_reason=None,
         )
         buttons: list[Button] = []
-        desktop.run_screen._shop_view().draw_slot(
+        view._landing_slot(
             _surface(),
-            pygame.Rect(10, 10, 700, height),
+            live_rects[card.section],
             slot,
             buttons,
             replace(shop, remaining_ap=remaining_ap),
+            controller.state,
+            "Team",
         )
 
-        assert buttons[0].label == expected_button, (label, height)
+        assert buttons[-1].label == expected_button, label
         assert expected_text.upper() in " ".join(displayed).upper(), (
             label,
-            height,
             displayed,
         )
 

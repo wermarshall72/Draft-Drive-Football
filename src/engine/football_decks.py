@@ -19,9 +19,6 @@ from src.engine.football import (
     matchup_for_play,
 )
 
-FootballPlayFamily = FootballCardFamily
-
-
 @dataclass(frozen=True)
 class FootballBonusCardDefinition:
     action: FootballBonusCardAction

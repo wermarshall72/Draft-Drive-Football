@@ -7,7 +7,6 @@ Easy, Standard, and Hard local AI opponents.
 from __future__ import annotations
 
 import argparse
-import random
 from dataclasses import dataclass
 from math import sqrt
 

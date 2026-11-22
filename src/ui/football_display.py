@@ -1,5 +1,4 @@
 from src.engine.football import FootballPosition
-from src.engine.football_coaches import FootballCoachProfile
 from src.engine.football_player_catalog import FootballPlayerType
 from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG
 
@@ -22,15 +21,6 @@ _POSITION_LABELS = {
     FootballPosition.CORNERBACKS: "CORNERBACKS",
     FootballPosition.SAFETIES: "SAFETIES",
 }
-
-
-def _coach_perk_summary(coach: FootballCoachProfile) -> str:
-    perk = coach.perk
-    if perk is None:
-        return "No perk."
-    return (
-        f"{perk.effect} {perk.trigger} {perk.duration} {perk.reset}"
-    )
 
 
 def player_partnership_text(player_type: FootballPlayerType | None) -> tuple[str, str | None]:

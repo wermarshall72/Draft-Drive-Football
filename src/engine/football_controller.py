@@ -58,7 +58,6 @@ class FootballHumanDecision(str, Enum):
     DRAFT_PLAYER = "draft_player"
     SHOP = "shop"
     OPEN_NEXT_SHOP = "open_next_shop"
-    START_NEXT_GAME = "open_next_shop"
     OFFENSIVE_PLAY = "offensive_play"
     DEFENSIVE_SCHEME = "defensive_scheme"
     FOURTH_DOWN = "fourth_down"
@@ -299,10 +298,6 @@ class FootballGameController:
         self._game_number += 1
         self._phase = FootballRunPhase.PRE_MATCH_SHOP
         return self.state
-
-    def start_next_game(self) -> FootballGameControllerState:
-        """Compatibility alias; the next game now requires a fresh shop first."""
-        return self.enter_next_shop()
 
     def choose_offensive_play(
         self, action: OffensivePlayAction | str | None

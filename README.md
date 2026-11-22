@@ -21,32 +21,20 @@ expire when the visit ends. Call offensive plays and defensive schemes during
 matches. Three losses end the run; surviving all ten regular-season games
 reaches a playoffs marker, without a playoff bracket.
 
-On the coach screen, hover over a coach or tab to their name to inspect that
-side's position modifiers and perk in a scouting popup. Move between the X and
-O marks to switch coaches, or move off the card to dismiss it. Choose a staff to
-lock both coaches. The recruiting-room table is original generated artwork and the
-X/O playbook marks are programmatically drawn in the saved team colors. Staff
-buttons and scouting outlines also use the team's primary and secondary colors.
-If the table artwork is unavailable, the screen logs a warning and draws a fallback.
-During the player draft, hover a prospect or use Tab / arrow keys to inspect
-their partnership and planned, inactive perk in a compact scouting card; move
-to another prospect or outside the choice area to dismiss it. The card remains
-open while the pointer moves onto it, and clicking it does not draft. Enter or
-Space activates the focused draft button. The draft uses three open prospect
-presentations over the playbook backdrop, with actual roster progress and
-compact stat strips. Prospect choices share one enlarged full-body standing-
-player illustration, generated as original artwork and stored as a transparent
-base sprite with separate primary and secondary color masks so the uniform uses
-the saved team colors. The purple draft controls remain a consistent UI
-accent. The generic illustration is not a portrait of a real player.
-Coach-screen typography uses Kalam by Indian Type Foundry and Atkinson
-Hyperlegible by the Braille Institute, and Barlow by Jeremy Tribby (from
+Each coach pair shows both coaches' team-colored portraits, position
+modifiers, and active perks inline; hover a pair or use Tab / arrow keys to
+highlight it, and choose a staff to lock both coaches. During the player draft,
+each prospect card shows its stats, partnership, and planned, inactive perk
+without a popup. Prospects use original position-specific pixel-art sprites
+with separate primary, secondary, and skin-tone masks so uniforms use the saved
+team colors; the highlighted prospect switches to a shared Heisman pose. Enter
+or Space activates the focused button. The illustrations are not portraits of
+real players.
+Most desktop screens use Barlow by Jeremy Tribby (from
 [Google Fonts](https://github.com/google/fonts/tree/main/ofl/barlow)), bundled
-under the SIL Open Font License 1.1. The coach title uses Kalam and supporting
-coach-screen and player-draft text uses Barlow; Atkinson remains in use for
-other desktop UI.
-Their full licenses are in `src/ui/assets/fonts/`; missing fonts fall back to
-the desktop's existing UI font and produce a warning.
+under the SIL Open Font License 1.1; remaining UI text uses a system font.
+Its full license is in `src/ui/assets/fonts/`; if the font is missing, the
+desktop falls back to its system UI font and logs a warning.
 
 Desktop run state is in memory only. The desktop gameplay flow uses
 `FootballGameController` and does not initialize or write to the legacy game

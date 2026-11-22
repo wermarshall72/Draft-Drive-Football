@@ -29,11 +29,8 @@ from src.engine.football_shop import (
     COACH_UPGRADE_CATALOG,
     MIN_PLAYBOOK_DECK_SIZE,
     PLAYER_UPGRADE_CATALOG,
-    POWER_UPGRADE_AMOUNT,
     PLAY_SCHEME_RARITY_WEIGHTS,
     RARITY_WEIGHTS,
-    STAMINA_UPGRADE_AMOUNT,
-    TRAINING_POINT_BUDGET,
     FootballShop,
     FootballShopCard,
     FootballShopRarity,
@@ -405,14 +402,12 @@ def _shop_with_both_upgrade_stats(
 
 
 def test_shop_offer_is_three_distinct_affordable_upgrades_and_seeded() -> None:
-    assert POWER_UPGRADE_AMOUNT == 1.0
-    assert STAMINA_UPGRADE_AMOUNT == 0.1
     first = FootballShop(_roster(), 12)
     replay = FootballShop(_roster(), 12)
 
     assert len(first.offer) == 3
     assert len({upgrade.upgrade_id for upgrade in first.offer}) == 3
-    assert all(0 < upgrade.cost <= TRAINING_POINT_BUDGET for upgrade in first.offer)
+    assert all(0 < upgrade.cost <= ACTION_POINT_BUDGET for upgrade in first.offer)
     assert first.remaining_ap == ACTION_POINT_BUDGET
     assert all(upgrade.rarity in FootballShopRarity for upgrade in first.offer)
     assert first.offer == replay.offer
@@ -433,17 +428,17 @@ def test_power_and_stamina_purchases_change_only_the_targeted_stat() -> None:
     old_target = original.players[power_upgrade.position]
 
     initial_ap = shop.remaining_ap
-    shop.buy(power_upgrade)
+    shop.buy_upgrade(power_upgrade)
     powered = shop.roster
     updated_target = powered.players[power_upgrade.position]
     assert updated_target.power == old_target.power + power_upgrade.amount
     assert updated_target.volatility == old_target.volatility
     assert updated_target.stamina == old_target.stamina
-    assert shop.remaining_budget == initial_ap - power_upgrade.cost
+    assert shop.remaining_ap == initial_ap - power_upgrade.cost
 
     old_stamina_target = powered.players[stamina_upgrade.position]
     ap_before_stamina = shop.remaining_ap
-    shop.buy(stamina_upgrade)
+    shop.buy_upgrade(stamina_upgrade)
     upgraded = shop.roster.players[stamina_upgrade.position]
     assert upgraded.stamina == pytest.approx(old_stamina_target.stamina + stamina_upgrade.amount)
     assert upgraded.power == old_stamina_target.power
@@ -453,7 +448,7 @@ def test_power_and_stamina_purchases_change_only_the_targeted_stat() -> None:
     assert shop.roster.coach is original.coach
     assert shop.roster.special_teams is original.special_teams
     assert shop.roster.team_name == original.team_name
-    assert shop.remaining_budget == ap_before_stamina - stamina_upgrade.cost
+    assert shop.remaining_ap == ap_before_stamina - stamina_upgrade.cost
     assert len(shop.purchased_upgrades) == 2
 
 
@@ -488,23 +483,23 @@ def test_unoffered_duplicate_invalid_and_finished_actions_fail_atomically() -> N
     fabricated = replace(offered, upgrade_id="not-offered")
 
     with pytest.raises(ValueError, match="not offered"):
-        shop.buy(fabricated)
+        shop.buy_upgrade(fabricated)
     with pytest.raises(ValueError, match="valid index"):
-        shop.buy(True)
+        shop.buy_upgrade(True)
     with pytest.raises(ValueError, match="out of range"):
-        shop.buy(3)
+        shop.buy_upgrade(3)
     assert shop.state == state
 
-    shop.buy(offered)
+    shop.buy_upgrade(offered)
     after_purchase = shop.state
     with pytest.raises(ValueError, match="already been purchased"):
-        shop.buy(offered)
+        shop.buy_upgrade(offered)
     assert shop.state == after_purchase
 
     shop.finish()
     finished_state = shop.state
     with pytest.raises(ValueError, match="shop is finished"):
-        shop.buy(shop.offer[1])
+        shop.buy_upgrade(shop.offer[1])
     with pytest.raises(ValueError, match="shop is finished"):
         shop.finish()
     assert shop.state == finished_state
@@ -514,7 +509,7 @@ def test_capped_stamina_upgrades_remain_available_and_stay_capped() -> None:
     roster = _roster(stamina=1.0)
     shop = _shop_with_both_upgrade_stats(roster, 61)
     capped_upgrade = next(upgrade for upgrade in shop.offer if upgrade.stat is FootballUpgradeStat.STAMINA)
-    shop.buy(capped_upgrade)
+    shop.buy_upgrade(capped_upgrade)
     assert shop.roster.players[capped_upgrade.position].stamina == 1.0
 
 
@@ -525,8 +520,8 @@ def test_roster_updates_are_immutable_valid_and_seeded_outcomes_match() -> None:
     choices = (0, 1)
 
     for choice in choices:
-        first.buy(choice)
-        replay.buy(choice)
+        first.buy_upgrade(choice)
+        replay.buy_upgrade(choice)
 
     assert first.state == replay.state
     assert first.roster == replay.roster
@@ -558,7 +553,7 @@ def test_shop_upgrade_preserves_specialist_identity_and_inactive_perk_text() -> 
     assert original_player.player_type_id is not None
     original_type = player_type_for_id(original_player.player_type_id)
 
-    updated_roster = shop.buy(upgrade).roster
+    updated_roster = shop.buy_upgrade(upgrade).roster
     updated_player = updated_roster.players[upgrade.position]
 
     assert updated_player is not original_player
@@ -578,7 +573,7 @@ def test_shop_upgrade_preserves_specialist_identity_and_inactive_perk_text() -> 
 def test_builder_shop_roster_initializes_match_with_local_ai_opponent() -> None:
     built_roster = _drafted_roster()
     shop = FootballShop(built_roster, 9)
-    shop.buy(0)
+    shop.buy_upgrade(0)
     final_roster = shop.roster
     ai = FootballAI(FootballTeamSide.TEAM_B, FootballAIDifficulty.STANDARD, 44)
     opponent = ai.generate_opponent_roster()
@@ -635,7 +630,7 @@ def test_builder_and_shop_do_not_consume_ai_match_or_global_random_streams() -> 
     for position in PLAYER_DRAFT_ORDER:
         builder.choose_player(position, 0)
     shop = FootballShop(builder.build_roster(), 23)
-    shop.buy(0)
+    shop.buy_upgrade(0)
 
     assert ai._rng.getstate() == ai_rng
     assert simulator.rng.getstate() == match_rng

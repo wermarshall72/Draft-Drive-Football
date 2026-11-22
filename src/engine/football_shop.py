@@ -31,14 +31,8 @@ from src.engine.football_decks import (
 from src.engine.football_simulator import coached_player_baseline_stats
 
 ACTION_POINT_BUDGET = 12
-TRAINING_POINT_BUDGET = ACTION_POINT_BUDGET
-POWER_UPGRADE_AMOUNT = 1.0
-POWER_UPGRADE_COST = 3
-STAMINA_UPGRADE_AMOUNT = 0.1
-STAMINA_UPGRADE_COST = 2
 PLAY_SCHEME_SLOT_COUNT = 4
 PLAYER_UPGRADE_SLOT_COUNT = 3
-SHOP_OFFER_SIZE = PLAYER_UPGRADE_SLOT_COUNT
 MAX_PLAYER_UPGRADE_SLOTS = 4
 MAX_PLAY_SCHEME_SLOTS = 6
 MAX_COACH_UPGRADE_SLOTS = 2
@@ -284,11 +278,6 @@ class FootballShopState:
         )
 
     @property
-    def remaining_budget(self) -> int:
-        """Compatibility alias for callers from the original Training Point shop."""
-        return self.remaining_ap
-
-    @property
     def offer(self) -> tuple[FootballUpgrade, ...]:
         section = self.section(FootballShopSection.PLAYER_UPGRADES)
         return tuple(
@@ -300,15 +289,6 @@ class FootballShopState:
     @property
     def purchased_upgrades(self) -> tuple[FootballUpgrade, ...]:
         return self.run_purchased_upgrades
-
-    @property
-    def removable_cards(self) -> tuple[FootballCardCopy, ...]:
-        removable = []
-        if len(self.offensive_deck) > MIN_PLAYBOOK_DECK_SIZE:
-            removable.extend(self.offensive_deck)
-        if len(self.defensive_deck) > MIN_PLAYBOOK_DECK_SIZE:
-            removable.extend(self.defensive_deck)
-        return tuple(removable)
 
     def section(self, section: FootballShopSection) -> FootballShopSectionState:
         for state in self.sections:
@@ -395,10 +375,6 @@ class FootballShop:
 
     @property
     def remaining_ap(self) -> int:
-        return self._remaining_ap
-
-    @property
-    def remaining_budget(self) -> int:
         return self._remaining_ap
 
     @property
@@ -495,10 +471,6 @@ class FootballShop:
         else:
             raise ValueError("Selection must be an offered upgrade or a valid index.")
         return self.buy_card(FootballShopSection.PLAYER_UPGRADES, card.card_id)
-
-    def buy(self, upgrade: FootballUpgrade | int) -> FootballShopState:
-        """Compatibility alias for the original player-upgrade purchase API."""
-        return self.buy_upgrade(upgrade)
 
     def buy_card(
         self,

@@ -28,7 +28,6 @@ from src.engine.football_controller import (
 from src.engine.football_decks import (
     BONUS_CARD_CATALOG,
     DEFENSIVE_SCHEME_CATALOG,
-    OFFENSIVE_PLAY_CATALOG,
     starting_defensive_deck,
 )
 from src.engine.football_shop import (

@@ -41,7 +41,6 @@ from src.engine.football import (
     OFFENSIVE_PLAY_FAMILIES,
     OffensivePlayAction,
     matchup_for_scheme,
-    matchup_for_play,
 )
 from src.engine.football_coaches import (
     FootballCoachPerkKind,
@@ -1668,11 +1667,6 @@ class FootballMatchSimulator:
             card=selected_card,
         )
         return self.state
-
-    def _current_drive_events(
-        self, possession: FootballTeamSide
-    ) -> tuple[FootballMatchEvent, ...]:
-        return _drive_events_for_state(self.state, possession)
 
     def resolve_offensive_play(
         self, play: OffensivePlayAction | str | None

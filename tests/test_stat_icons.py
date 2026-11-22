@@ -10,7 +10,7 @@ import pygame
 import pytest
 
 from src.ui import stat_icons
-from src.ui.coach_fonts import coach_font, staff_font
+from src.ui.coach_fonts import staff_font
 from src.ui.screens import _ui_font
 from src.ui.stat_icons import (
     STAT_ICON_FILES,
@@ -80,8 +80,7 @@ def test_icons_are_included_by_package_data_patterns() -> None:
 
 
 def test_every_ui_font_factory_returns_icon_font_and_nothing_else_builds_fonts() -> None:
-    for font in (staff_font(14), staff_font(14, semibold=True), coach_font(15),
-                 coach_font(15, handwritten=True), _ui_font(16, bold=True)):
+    for font in (staff_font(14), staff_font(14, semibold=True), _ui_font(16, bold=True)):
         assert isinstance(font, StatIconFont)
     ui = Path(__file__).resolve().parents[1] / "src"
     builders = {path.name for path in ui.rglob("*.py") if "pygame.font.Font(" in path.read_text()
