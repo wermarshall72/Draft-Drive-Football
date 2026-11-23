@@ -180,8 +180,20 @@ covers extracted interaction state.
   tracks drag, drop areas, and group scroll. Colors, fonts, and the
   `text_audit` fit recorder are re-exported by [football_match_palette.py](src/ui/football_match_palette.py)
   from the shared [football_ui_kit.py](src/ui/football_ui_kit.py).
-  [football_result.py](src/ui/football_result.py) renders results and
-  progression actions. Tests include
+  [football_result.py](src/ui/football_result.py) owns the full-screen
+  result (no shared app header): a compact GAME/FINAL header, scoreboard hero
+  with WIN/LOSS banner and OT label, a verdict ribbon (next shop, FIRED,
+  PLAYOFFS, or BYE WEEK), team stats, the 10-game season tracker with the
+  3-strike loss meter, and the primary action plus END RUN (regular-season
+  results only). An injectable clock drives a score count-up that never
+  blocks the button; the Bye Week game-10 marker never shows the retained
+  previous match. [football_result_stats.py](src/ui/football_result_stats.py)
+  is the pure team-stat helper (offensive snaps only, Challenge-overturned
+  plays and two-point tries excluded). The run screen routes result phases
+  to `_draw_result_screen`. Tests include
+  [test_football_result_screen.py](tests/test_football_result_screen.py)
+  (variants, Bye Week, text fit, count-up),
+  [test_football_result_stats.py](tests/test_football_result_stats.py),
   [test_football_match_presentation.py](tests/test_football_match_presentation.py)
   (lines, wording, playback), [test_football_desktop.py](tests/test_football_desktop.py)
   (hands, piles, popups, strip decisions, text fit), and
@@ -221,7 +233,8 @@ covers extracted interaction state.
 - **Run progression:** [football_controller.py](src/engine/football_controller.py)
   connects draft, shop, simulator, AI, results, and subsequent shops.
   It tracks actual games played separately from scheduled games skipped by
-  Bye Week. Pending player upgrades are applied to the human match roster and
+  Bye Week, and keeps a read-only per-game `season_history`
+  (`FootballSeasonGame`: W/L with score and overtime flag, or BYE). Pending player upgrades are applied to the human match roster and
   cleared only when a match result is recorded, not on a Bye Week;
   [football_result.py](src/ui/football_result.py) renders the
   game-10 skip as a marker without a fabricated score. Coach upgrades are

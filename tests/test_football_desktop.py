@@ -1068,6 +1068,34 @@ def test_ready_for_next_game_button_opens_shop_before_the_next_match(
     assert controller.state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY
 
 
+def test_result_screen_is_full_screen_with_focused_primary_and_end_run(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _force_result(monkeypatch, FootballTeamSide.TEAM_A)
+    _play_first_match_card(desktop)
+    screen = desktop.run_screen
+    screen._result_view.clock = None
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    texts = [text for text, _, _ in records]
+    assert "GAME 01" in texts and "WIN" in texts and "TEAM STATS" in texts
+    assert [button.label for button in screen.buttons] == ["OPEN NEXT GAME SHOP", "END RUN"]
+    assert screen.buttons[0].focused
+
+    next(button for button in screen.buttons if button.label == "END RUN").action()
+    desktop.router.draw(_surface())
+    assert screen.confirm_exit
+    assert {button.label for button in screen.buttons} == {"DISCARD RUN", "KEEP PLAYING"}
+    _activate(desktop, "KEEP PLAYING")
+    assert not screen.confirm_exit
+
+    desktop.router.draw(_surface())
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+    assert desktop.football_controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+
+
 def test_result_return_then_new_run_uses_updated_profile(
     tmp_path: Path, monkeypatch,
 ) -> None:

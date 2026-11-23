@@ -26,6 +26,8 @@ from src.engine.football_controller import (
     FootballGameController,
     FootballHumanDecision,
     FootballRunPhase,
+    FootballSeasonGame,
+    FootballSeasonOutcome,
 )
 from src.engine.football_simulator import REGULATION_PERIOD_SECONDS
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
@@ -880,3 +882,97 @@ def test_public_state_is_immutable_and_contains_ui_rendering_data() -> None:
         ]
     with pytest.raises(AttributeError):
         state.match.match_events.append(state.match.match_events[0])
+
+
+def _bye_controller() -> tuple[FootballGameController, FootballShopCard]:
+    bye = next(card for card in COACH_UPGRADE_CATALOG if card.card_id == "bye_week")
+    controller = FootballGameController(
+        "Human Team", difficulty=FootballAIDifficulty.EASY,
+        builder_seed=17, shop_seed=29, ai_seed=41, match_seed=53,
+        shop_catalogs={FootballShopSection.COACH_UPGRADES: (bye,)},
+    )
+    return controller, bye
+
+
+def _buy_bye(controller: FootballGameController, bye: FootballShopCard):
+    controller.unlock_shop_slot(FootballShopSection.COACH_UPGRADES, 1)
+    return controller.buy_shop_card(FootballShopSection.COACH_UPGRADES, bye.card_id)
+
+
+def test_season_history_records_each_played_result_and_ends_at_three_losses(monkeypatch) -> None:
+    controller = _controller()
+    assert controller.state.season_history == ()
+    _start_match(controller)
+    winners = (FootballTeamSide.TEAM_B, FootballTeamSide.TEAM_A,
+               FootballTeamSide.TEAM_B, FootballTeamSide.TEAM_B)
+    for index, winner in enumerate(winners):
+        _force_match_result(monkeypatch, controller, winner)
+        _complete_forced_match(controller)
+        if index < len(winners) - 1:
+            _enter_next_match(controller)
+    state = controller.state
+    assert state.phase is FootballRunPhase.FIRED
+    assert state.season_history == (
+        FootballSeasonGame(1, FootballSeasonOutcome.LOSS, 0, 7),
+        FootballSeasonGame(2, FootballSeasonOutcome.WIN, 7, 0),
+        FootballSeasonGame(3, FootballSeasonOutcome.LOSS, 0, 7),
+        FootballSeasonGame(4, FootballSeasonOutcome.LOSS, 0, 7),
+    )
+    assert (state.wins, state.losses, state.games_played) == (1, 3, 4)
+    with pytest.raises(FrozenInstanceError):
+        state.season_history[0].team_score = 3  # type: ignore[misc]
+
+
+def test_season_history_marks_bye_week_skip_without_a_score(monkeypatch) -> None:
+    controller, bye = _bye_controller()
+    _draft_to_shop(controller)
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    for _game in range(1, 4):
+        controller.finish_shop()
+        _complete_forced_match(controller)
+        controller.enter_next_shop()
+    skipped = _buy_bye(controller, bye)
+    assert skipped.skipped_games == (4,)
+    assert skipped.season_history[-1] == FootballSeasonGame(4, FootballSeasonOutcome.BYE)
+    assert skipped.season_history[-1].team_score is None
+    assert (skipped.wins, skipped.losses) == (3, 0)
+    controller.finish_shop()
+    _complete_forced_match(controller)
+    assert [game.game_number for game in controller.state.season_history] == [1, 2, 3, 4, 5]
+    assert controller.state.season_history[-1].outcome is FootballSeasonOutcome.WIN
+
+
+def test_season_history_marks_game_ten_bye_and_reaches_playoffs(monkeypatch) -> None:
+    controller, bye = _bye_controller()
+    _draft_to_shop(controller)
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+    for _game in range(1, 10):
+        controller.finish_shop()
+        _complete_forced_match(controller)
+        controller.enter_next_shop()
+    state = _buy_bye(controller, bye)
+    assert state.phase is FootballRunPhase.PLAYOFFS
+    assert len(state.season_history) == 10
+    assert state.season_history[-1] == FootballSeasonGame(10, FootballSeasonOutcome.BYE)
+    assert (state.wins, state.losses, state.games_played) == (9, 0, 9)
+
+
+def test_season_history_flags_overtime_results(monkeypatch) -> None:
+    from src.engine.football_simulator import FootballMatchSimulator
+
+    def finish(simulator, _play):
+        simulator.state = replace(
+            simulator.state, team_a_score=23, team_b_score=20, period=3, game_clock_seconds=120,
+            status=FootballMatchStatus.COMPLETED, awaited_action=None,
+            current_drive_defensive_scheme=None,
+            final_result=FootballMatchResult(23, 20, FootballTeamSide.TEAM_A, True),
+        )
+        return simulator.state
+
+    controller = _controller()
+    _start_match(controller)
+    monkeypatch.setattr(FootballMatchSimulator, "resolve_offensive_play", finish)
+    _complete_forced_match(controller)
+    assert controller.state.season_history == (
+        FootballSeasonGame(1, FootballSeasonOutcome.WIN, 23, 20, overtime=True),
+    )

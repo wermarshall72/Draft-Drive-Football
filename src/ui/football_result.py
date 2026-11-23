@@ -1,213 +1,552 @@
+"""Full-screen post-game result: scoreboard hero, verdict ribbon, team stats, season tracker.
+
+Layout on the 1280x720 logical surface (see ``HEADER`` .. ``FOOTER``). One layout
+serves every ending: a regular-season win or loss, Run Over (third loss),
+Playoffs after game 10, and the Bye Week game-10 marker, which never shows the
+previous match's score or stats.
+"""
+
+from __future__ import annotations
+
 from collections.abc import Callable
+from enum import Enum
 
 import pygame
 
-from src.engine.football import FootballTeamSide
-from src.engine.football_controller import FootballGameControllerState, FootballRunPhase
-from src.ui.theme import Theme
-from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
+from src.engine.football import FootballMatchState, FootballTeamSide
+from src.engine.football_controller import (
+    FootballGameControllerState,
+    FootballRunPhase,
+    FootballSeasonGame,
+    FootballSeasonOutcome,
+)
+from src.ui.football_match_events import period_label
+from src.ui.football_match_scoreboard import _helmet_sprite
+from src.ui.football_result_stats import TeamGameStats, match_team_stats
+from src.ui.football_ui_kit import (
+    MATCH_DANGER, MATCH_DIM, MATCH_GOLD, MATCH_INK, MATCH_MUTED, MATCH_OPPONENT,
+    MATCH_PANEL, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT, MATCH_TEXT,
+    PLAY_LINE_PASS, PLAY_LINE_RUN, blit_text, blit_wrapped, draw_message_banner,
+    kit_button, match_font, mix, plain_font, stadium_backdrop, team_accent,
+)
 from src.ui.text import fit_text
+from src.ui.theme import Theme, readable_ink
+from src.ui.widgets import Button
+
+HEADER = pygame.Rect(20, 16, 1240, 52)
+HERO = pygame.Rect(20, 72, 1240, 190)
+RIBBON = pygame.Rect(20, 274, 1240, 44)
+STATS = pygame.Rect(20, 330, 760, 310)
+SEASON = pygame.Rect(796, 330, 464, 310)
+FOOTER = pygame.Rect(20, 654, 1240, 48)
+PRIMARY_RECT = pygame.Rect(0, 0, 380, 48)
+PRIMARY_RECT.midtop = (FOOTER.centerx, FOOTER.top)
+END_RUN_RECT = pygame.Rect(HEADER.right - 120, HEADER.top, 120, 36)
+
+LOSS_TONE = pygame.Color("#8fa6bf")
+FIRED_RED = pygame.Color("#d9645b")
+COUNT_UP_MS = 700
+
+OPEN_NEXT_SHOP = "OPEN NEXT GAME SHOP"
+RETURN_TO_MENU = "RETURN TO MAIN MENU"
+
+
+class ResultVariant(Enum):
+    REGULAR = "regular"
+    FIRED = "fired"
+    PLAYOFFS = "playoffs"
+    BYE_WEEK = "bye_week"
+
+
+def result_variant(state: FootballGameControllerState) -> ResultVariant:
+    if state.phase is FootballRunPhase.PLAYOFFS and state.game_number in state.skipped_games:
+        return ResultVariant.BYE_WEEK
+    if state.phase is FootballRunPhase.FIRED:
+        return ResultVariant.FIRED
+    if state.phase is FootballRunPhase.PLAYOFFS:
+        return ResultVariant.PLAYOFFS
+    if state.phase is FootballRunPhase.READY_FOR_NEXT_GAME:
+        return ResultVariant.REGULAR
+    raise RuntimeError(f"No result screen for phase {state.phase!r}.")
+
+
+def stat_rows(
+    team: TeamGameStats, opponent: TeamGameStats
+) -> tuple[tuple[str, int | tuple[int, int], int | tuple[int, int], str], ...]:
+    """(label, ours, theirs, kind) rows; totals carry (rushing, passing)."""
+    return (
+        ("TOTAL YARDS", (team.rushing_yards, team.passing_yards),
+         (opponent.rushing_yards, opponent.passing_yards), "total"),
+        ("RUSHING", team.rushing_yards, opponent.rushing_yards, "run"),
+        ("PASSING", team.passing_yards, opponent.passing_yards, "pass"),
+        ("PLAYS", team.plays, opponent.plays, "count"),
+        ("TURNOVERS", team.turnovers, opponent.turnovers, "turnover"),
+        ("LONGEST PLAY", team.longest_play, opponent.longest_play, "long"),
+    )
+
+
+def _row_value(value: int | tuple[int, int]) -> int:
+    return sum(value) if isinstance(value, tuple) else value
 
 
 class FootballResultView:
-    """Render a completed game's result and expose the appropriate next action."""
+    """Render a finished game's result and expose the matching next action.
+
+    ``clock`` (milliseconds) drives an optional score count-up; pass ``None``
+    to draw final values immediately. The primary button is live on the first
+    frame either way.
+    """
 
     def __init__(
         self,
-        display_font: pygame.font.Font,
-        title_font: pygame.font.Font,
-        label_font: pygame.font.Font,
-        small_font: pygame.font.Font,
         open_next_shop: Callable[[], None],
         return_to_menu: Callable[[], None],
+        request_exit: Callable[[], None],
+        *,
+        clock: Callable[[], int] | None = pygame.time.get_ticks,
     ) -> None:
-        self.display_font = display_font
-        self.title_font = title_font
-        self.label_font = label_font
-        self.small_font = small_font
         self.open_next_shop = open_next_shop
         self.return_to_menu = return_to_menu
+        self.request_exit = request_exit
+        self.clock = clock
+        self._animation_key: tuple | None = None
+        self._animation_start = 0
+
+    # -- entry ---------------------------------------------------------------------
 
     def draw(
         self,
         surface: pygame.Surface,
-        content: pygame.Rect,
         state: FootballGameControllerState,
         theme: Theme,
+        *,
+        error: str | None = None,
     ) -> list[Button]:
-        if (
-            state.phase is FootballRunPhase.PLAYOFFS
-            and state.game_number in state.skipped_games
-        ):
-            return self._draw_bye_week_marker(surface, content, state, theme)
-
-        match = state.match
-        if match is None or match.final_result is None:
-            raise RuntimeError("A season result requires the completed match result.")
-        result = match.final_result
-        won = result.winner is FootballTeamSide.TEAM_A
-        result_panel = pygame.Rect(
-            content.left + 42,
-            content.top + 8,
-            content.width - 84,
-            content.height - 16,
-        )
-        draw_panel(surface, result_panel, theme, fill=theme.panel)
-        outcome = self.display_font.render(
-            "FINAL  /  WIN" if won else "FINAL  /  LOSS",
-            True,
-            theme.primary_accent if won else theme.danger,
-        )
-        surface.blit(
-            outcome,
-            outcome.get_rect(midtop=(result_panel.centerx, result_panel.top + 22)),
-        )
-        scoreline = (
-            f"{match.team_a.team_name}  {result.team_a_score}"
-            f"     -     {result.team_b_score}  {match.team_b.team_name}"
-        )
-        scoreline_surface = self.title_font.render(
-            fit_text(scoreline, self.title_font, result_panel.width - 56),
-            True,
-            theme.text,
-        )
-        surface.blit(
-            scoreline_surface,
-            scoreline_surface.get_rect(
-                midtop=(result_panel.centerx, result_panel.top + 87)
-            ),
-        )
-        pygame.draw.line(
-            surface,
-            theme.border_soft,
-            (result_panel.left + 28, result_panel.top + 132),
-            (result_panel.right - 28, result_panel.top + 132),
-            1,
-        )
-        draw_text(
-            surface,
-            f"GAME {state.game_number}  |  RECORD {state.wins}-{state.losses}",
-            (
-                result_panel.centerx
-                - self.label_font.size(
-                    f"GAME {state.game_number}  |  RECORD {state.wins}-{state.losses}"
-                )[0]
-                // 2,
-                result_panel.top + 154,
-            ),
-            self.label_font,
-            theme.secondary_accent,
-        )
-
-        if state.phase is FootballRunPhase.READY_FOR_NEXT_GAME:
-            stage = "REGULAR SEASON"
-            explanation = "Next up: a fresh coaching shop before the game."
-            primary_label = "OPEN NEXT GAME SHOP"
-            primary_action = self.open_next_shop
-        elif state.phase is FootballRunPhase.FIRED:
-            stage = "RUN OVER  /  THREE LOSSES"
-            explanation = "Your season is over."
-            primary_label = "RETURN TO MAIN MENU"
-            primary_action = self.return_to_menu
+        variant = result_variant(state)
+        match: FootballMatchState | None = None
+        if variant is not ResultVariant.BYE_WEEK:
+            match = state.match
+            if match is None or match.final_result is None:
+                raise RuntimeError("A season result requires the completed match result.")
+        accent = team_accent(theme.primary_accent)
+        surface.blit(stadium_backdrop(surface.get_size()), (0, 0))
+        self._draw_header(surface, state, variant, match)
+        if match is None:
+            self._draw_bye_hero(surface, state, theme)
         else:
-            stage = "GAME 10 COMPLETE"
-            explanation = "Playoffs reached. No playoff games are available yet."
-            primary_label = "RETURN TO MAIN MENU"
-            primary_action = self.return_to_menu
-        draw_text(
-            surface,
-            stage,
-            (
-                result_panel.centerx - self.label_font.size(stage)[0] // 2,
-                result_panel.top + 198,
-            ),
-            self.label_font,
-            theme.text,
-        )
-        explanation_surface = self.small_font.render(
-            fit_text(explanation, self.small_font, result_panel.width - 60),
-            True,
-            theme.muted,
-        )
-        surface.blit(
-            explanation_surface,
-            explanation_surface.get_rect(
-                midtop=(result_panel.centerx, result_panel.top + 228)
-            ),
-        )
-        primary_rect = pygame.Rect(
-            result_panel.centerx - min(370, result_panel.width - 60) // 2,
-            result_panel.bottom - 55,
-            min(370, result_panel.width - 60),
-            42,
-        )
-        return [Button(primary_label, primary_action, primary_rect, variant="primary")]
+            self._draw_hero(surface, state, match, theme)
+        self._draw_ribbon(surface, state, variant)
+        if match is None:
+            self._draw_bye_panel(surface, state, accent)
+        else:
+            stats = match_team_stats(match.match_events)
+            self._draw_stats(surface, match, stats.team_a, stats.team_b, accent)
+        self._draw_season(surface, state, variant, accent)
+        if error:
+            draw_message_banner(surface, pygame.Rect(FOOTER.left, FOOTER.top, PRIMARY_RECT.left
+                                                     - FOOTER.left - 20, FOOTER.height),
+                                error, danger=True)
+        else:
+            self._draw_key_hint(surface)
 
-    def _draw_bye_week_marker(
-        self,
-        surface: pygame.Surface,
-        content: pygame.Rect,
-        state: FootballGameControllerState,
-        theme: Theme,
-    ) -> list[Button]:
-        panel = pygame.Rect(
-            content.left + 42,
-            content.top + 8,
-            content.width - 84,
-            content.height - 16,
+        if variant is ResultVariant.REGULAR:
+            buttons: list[Button] = [
+                kit_button(OPEN_NEXT_SHOP, self.open_next_shop, PRIMARY_RECT, variant="kit-primary"),
+                kit_button("END RUN", self.request_exit, END_RUN_RECT, variant="kit-danger"),
+            ]
+        else:
+            buttons = [kit_button(RETURN_TO_MENU, self.return_to_menu, PRIMARY_RECT,
+                                  variant="kit-primary")]
+        return buttons
+
+    # -- animation -----------------------------------------------------------------
+
+    def _progress(self, state: FootballGameControllerState) -> float:
+        if self.clock is None:
+            return 1.0
+        now = self.clock()
+        key = (state.game_number, state.phase, state.games_played, state.losses)
+        if key != self._animation_key:
+            self._animation_key = key
+            self._animation_start = now
+        elapsed = max(0, now - self._animation_start)
+        t = min(1.0, elapsed / COUNT_UP_MS)
+        return 1 - (1 - t) ** 3
+
+    # -- header --------------------------------------------------------------------
+
+    def _draw_header(self, surface, state, variant, match) -> None:
+        font = plain_font(30)
+        game = blit_text(surface, font, f"GAME {state.game_number:02d}", MATCH_TEXT, HEADER,
+                         topleft=(HEADER.left, HEADER.top))
+        if match is None:
+            tail = "BYE WEEK"
+        elif match.period > 2:
+            tail = f"FINAL · {period_label(match.period)}"
+        else:
+            tail = "FINAL"
+        blit_text(surface, font, f" · {tail}", MATCH_MUTED, HEADER, topleft=(game.right, HEADER.top))
+        stage = {
+            ResultVariant.REGULAR: "REGULAR SEASON",
+            ResultVariant.FIRED: "SEASON OVER",
+            ResultVariant.PLAYOFFS: "REGULAR SEASON COMPLETE",
+            ResultVariant.BYE_WEEK: "REGULAR SEASON COMPLETE",
+        }[variant]
+        blit_text(surface, plain_font(13), stage, MATCH_DIM, HEADER,
+                  topleft=(HEADER.left + 2, HEADER.top + 34))
+
+    # -- hero ----------------------------------------------------------------------
+
+    def _hero_frame(self, surface, edge: pygame.Color) -> None:
+        pygame.draw.rect(surface, MATCH_INK, HERO.move(0, 5), border_radius=16)
+        pygame.draw.rect(surface, MATCH_PANEL_DEEP, HERO, border_radius=16)
+        pygame.draw.rect(surface, MATCH_PANEL, HERO.inflate(-6, -6), border_radius=14)
+        pygame.draw.rect(surface, edge, HERO, 2, border_radius=16)
+
+    def _draw_badge(self, surface, rect: pygame.Rect, name: str, theme: Theme) -> None:
+        pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=16)
+        pygame.draw.rect(surface, theme.primary, rect, border_radius=16)
+        pygame.draw.rect(surface, team_accent(theme.primary_accent), rect, 3, border_radius=16)
+        pygame.draw.rect(surface, mix(theme.primary, MATCH_INK, 0.35), rect.inflate(-14, -14), 1,
+                         border_radius=11)
+        initial = (name.strip()[:1] or "?").upper()
+        letter = plain_font(78).render(initial, True, readable_ink(theme.primary))
+        surface.blit(letter, letter.get_rect(center=(rect.centerx, rect.centery + 2)))
+
+    def _team_block(self) -> tuple[pygame.Rect, pygame.Rect]:
+        badge = pygame.Rect(HERO.left + 26, HERO.top + 34, 120, 120)
+        block = pygame.Rect(badge.right + 18, HERO.top + 18, HERO.centerx - 170 - badge.right - 18, 160)
+        return badge, block
+
+    def _draw_hero(self, surface, state, match: FootballMatchState, theme: Theme) -> None:
+        result = match.final_result
+        assert result is not None
+        won = result.winner is FootballTeamSide.TEAM_A
+        tone = MATCH_GOLD if won else LOSS_TONE
+        self._hero_frame(surface, mix(tone, MATCH_PANEL_EDGE, 0.5))
+        accent = team_accent(theme.primary_accent)
+        rail_width = HERO.width // 2 - 190
+        pygame.draw.rect(surface, accent if won else mix(accent, MATCH_PANEL, 0.45),
+                         (HERO.left + 18, HERO.bottom - 9, rail_width, 4), border_radius=2)
+        pygame.draw.rect(surface, mix(MATCH_OPPONENT, MATCH_PANEL, 0.55 if won else 0.15),
+                         (HERO.right - 18 - rail_width, HERO.bottom - 9, rail_width, 4), border_radius=2)
+
+        progress = self._progress(state)
+        name_font = plain_font(22)
+        score_font = plain_font(104)
+        badge, block = self._team_block()
+        self._draw_badge(surface, badge, match.team_a.team_name, theme)
+        blit_text(surface, name_font, fit_text(match.team_a.team_name.upper(), name_font, block.width),
+                  MATCH_TEXT, block, topleft=(block.left, block.top + 6))
+        blit_text(surface, score_font, str(round(result.team_a_score * progress)),
+                  MATCH_TEXT if won else mix(MATCH_TEXT, MATCH_PANEL, 0.3), HERO,
+                  topleft=(block.left - 4, block.top + 30))
+
+        helmet = pygame.Rect(HERO.right - 26 - 140, HERO.top + 34, 140, 120)
+        sprite = _helmet_sprite(tuple(MATCH_OPPONENT[:3]), 110)
+        if sprite is not None:
+            sprite = pygame.transform.flip(sprite, True, False)
+            surface.blit(sprite, sprite.get_rect(center=helmet.center))
+        else:
+            pygame.draw.ellipse(surface, MATCH_OPPONENT, helmet.inflate(-16, -14))
+        opp_block = pygame.Rect(HERO.centerx + 170, HERO.top + 18,
+                                helmet.left - 18 - HERO.centerx - 170, 160)
+        blit_text(surface, name_font, fit_text(match.team_b.team_name.upper(), name_font, opp_block.width),
+                  MATCH_TEXT, opp_block, topright=(opp_block.right, opp_block.top + 6))
+        blit_text(surface, score_font, str(round(result.team_b_score * progress)),
+                  MATCH_TEXT if not won else mix(MATCH_TEXT, MATCH_PANEL, 0.3), HERO,
+                  topright=(opp_block.right + 4, opp_block.top + 30))
+
+        center = pygame.Rect(0, 0, 300, 160)
+        center.center = HERO.center
+        final = "FINAL" if match.period <= 2 else f"FINAL · {period_label(match.period)}"
+        blit_text(surface, match_font(14), final, MATCH_MUTED, center,
+                  midtop=(center.centerx, center.top + 6))
+        banner = pygame.Rect(0, 0, 260, 84)
+        banner.midtop = (center.centerx, center.top + 32)
+        if won:
+            pygame.draw.rect(surface, mix(MATCH_GOLD, MATCH_INK, 0.65), banner.move(0, 4), border_radius=12)
+            pygame.draw.rect(surface, MATCH_GOLD, banner, border_radius=12)
+            ink = MATCH_INK
+        else:
+            pygame.draw.rect(surface, MATCH_PANEL_DEEP, banner, border_radius=12)
+            pygame.draw.rect(surface, LOSS_TONE, banner, 3, border_radius=12)
+            ink = LOSS_TONE
+        blit_text(surface, plain_font(66), "WIN" if won else "LOSS", ink, banner,
+                  center=(banner.centerx, banner.centery + 1))
+        difficulty = f"{state.opponent_difficulty.value.upper()} OPPONENT"
+        blit_text(surface, match_font(13), difficulty, MATCH_DIM, center,
+                  midtop=(center.centerx, banner.bottom + 10))
+
+    def _draw_bye_hero(self, surface, state, theme: Theme) -> None:
+        self._hero_frame(surface, MATCH_PANEL_EDGE)
+        accent = team_accent(theme.primary_accent)
+        rail_width = HERO.width // 2 - 190
+        pygame.draw.rect(surface, accent, (HERO.left + 18, HERO.bottom - 9, rail_width, 4),
+                         border_radius=2)
+        badge, block = self._team_block()
+        self._draw_badge(surface, badge, self._team_name(state), theme)
+        name_font = plain_font(22)
+        blit_text(surface, name_font, fit_text(self._team_name(state).upper(), name_font, block.width),
+                  MATCH_TEXT, block, topleft=(block.left, block.top + 6))
+        blit_text(surface, plain_font(56), f"{state.wins}-{state.losses}", MATCH_TEXT, HERO,
+                  topleft=(block.left - 2, block.top + 40))
+        played = "GAME" if state.games_played == 1 else "GAMES"
+        blit_text(surface, match_font(14), f"{state.games_played} {played} PLAYED", MATCH_MUTED, block,
+                  topleft=(block.left, block.top + 112))
+
+        center = pygame.Rect(0, 0, 320, 160)
+        center.center = HERO.center
+        blit_text(surface, match_font(14), "NO GAME PLAYED", MATCH_MUTED, center,
+                  midtop=(center.centerx, center.top + 6))
+        banner = pygame.Rect(0, 0, 300, 84)
+        banner.midtop = (center.centerx, center.top + 32)
+        pygame.draw.rect(surface, MATCH_PANEL_DEEP, banner, border_radius=12)
+        pygame.draw.rect(surface, MATCH_MUTED, banner, 3, border_radius=12)
+        blit_text(surface, plain_font(50), "BYE WEEK", MATCH_MUTED, banner,
+                  center=(banner.centerx, banner.centery + 1))
+
+        slot = pygame.Rect(HERO.right - 26 - 330, HERO.top + 34, 330, 120)
+        _dashed_rect(surface, slot, MATCH_PANEL_EDGE_SOFT)
+        blit_text(surface, plain_font(22), f"GAME {state.game_number}", MATCH_DIM, slot,
+                  center=(slot.centerx, slot.centery - 14))
+        blit_text(surface, match_font(14), "SKIPPED · NO SCORE", MATCH_DIM, slot,
+                  center=(slot.centerx, slot.centery + 16))
+
+    @staticmethod
+    def _team_name(state: FootballGameControllerState) -> str:
+        if state.shop is not None:
+            return state.shop.roster.team_name
+        return state.match.team_a.team_name if state.match is not None else "Team"
+
+    # -- ribbon --------------------------------------------------------------------
+
+    def _draw_ribbon(self, surface, state, variant: ResultVariant) -> None:
+        record = f"{state.wins}-{state.losses}"
+        if variant is ResultVariant.REGULAR:
+            stamp, line, tone = None, f"NEXT UP · SHOP BEFORE GAME {state.game_number + 1}", MATCH_PANEL_EDGE
+        elif variant is ResultVariant.FIRED:
+            stamp, line, tone = "FIRED", f"RUN OVER · 3 LOSSES  ·  FINAL RECORD {record}", FIRED_RED
+        elif variant is ResultVariant.PLAYOFFS:
+            stamp, tone = "PLAYOFFS", MATCH_GOLD
+            line = f"REGULAR SEASON COMPLETE  ·  {record}  ·  PLAYOFF GAMES AREN'T AVAILABLE YET"
+        else:
+            stamp, tone = "BYE WEEK", MATCH_MUTED
+            line = f"GAME {state.game_number} SKIPPED  ·  {record}  ·  PLAYOFFS MARKER REACHED"
+        fill = MATCH_PANEL_DEEP if variant is not ResultVariant.FIRED else mix(FIRED_RED, MATCH_PANEL_DEEP, 0.88)
+        if variant is ResultVariant.PLAYOFFS:
+            fill = mix(MATCH_GOLD, MATCH_PANEL_DEEP, 0.9)
+        pygame.draw.rect(surface, fill, RIBBON, border_radius=10)
+        pygame.draw.rect(surface, mix(tone, MATCH_PANEL_DEEP, 0.35), RIBBON, 2, border_radius=10)
+        x = RIBBON.left + 14
+        if stamp is not None:
+            font = plain_font(22)
+            box = pygame.Rect(0, 0, font.size(stamp)[0] + 28, 32)
+            box.midleft = (x, RIBBON.centery)
+            if variant is ResultVariant.PLAYOFFS:
+                pygame.draw.rect(surface, MATCH_GOLD, box, border_radius=6)
+                blit_text(surface, font, stamp, MATCH_INK, box, center=box.center)
+            else:
+                pygame.draw.rect(surface, tone, box, 3, border_radius=6)
+                pygame.draw.rect(surface, tone, box.inflate(-8, -8), 1, border_radius=4)
+                blit_text(surface, font, stamp, tone, box, center=box.center)
+            x = box.right + 16
+        font = plain_font(16)
+        box = pygame.Rect(x, RIBBON.top, RIBBON.right - 14 - x, RIBBON.height)
+        color = MATCH_MUTED if variant is ResultVariant.REGULAR else MATCH_TEXT
+        blit_text(surface, font, fit_text(line, font, box.width), color, box, midleft=(x, RIBBON.centery))
+
+    # -- panels --------------------------------------------------------------------
+
+    @staticmethod
+    def _panel(surface, rect: pygame.Rect) -> None:
+        pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=12)
+        pygame.draw.rect(surface, MATCH_PANEL, rect, border_radius=12)
+        pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, rect, 2, border_radius=12)
+
+    def _draw_stats(self, surface, match: FootballMatchState, team: TeamGameStats,
+                    opponent: TeamGameStats, accent: pygame.Color) -> None:
+        self._panel(surface, STATS)
+        label_width = 150
+        bar_max = (STATS.width - 40 - label_width) // 2 - 90
+        left_edge = STATS.centerx - label_width // 2
+        right_edge = STATS.centerx + label_width // 2
+        left_center = left_edge - bar_max // 2 - 40
+        right_center = right_edge + bar_max // 2 + 40
+        head = plain_font(15)
+        name_width = bar_max + 60
+        pygame.draw.rect(surface, accent, (STATS.left + 16, STATS.top + 14, 4, 16), border_radius=2)
+        blit_text(surface, head, fit_text(match.team_a.team_name.upper(), head, name_width), MATCH_TEXT,
+                  STATS, midtop=(left_center, STATS.top + 12))
+        blit_text(surface, plain_font(17), "TEAM STATS", MATCH_TEXT, STATS,
+                  midtop=(STATS.centerx, STATS.top + 10))
+        blit_text(surface, head, fit_text(match.team_b.team_name.upper(), head, name_width), MATCH_TEXT,
+                  STATS, midtop=(right_center, STATS.top + 12))
+        pygame.draw.rect(surface, MATCH_OPPONENT, (STATS.right - 20, STATS.top + 14, 4, 16), border_radius=2)
+
+        row_height = 40
+        top = STATS.top + 42
+        value_font = plain_font(22)
+        label_font = match_font(13)
+        for index, (label, ours, theirs, kind) in enumerate(stat_rows(team, opponent)):
+            y = top + index * row_height
+            cy = y + row_height // 2
+            if index:
+                pygame.draw.line(surface, MATCH_PANEL_EDGE_SOFT, (STATS.left + 16, y), (STATS.right - 16, y))
+            blit_text(surface, label_font, label, MATCH_MUTED, STATS, center=(STATS.centerx, cy))
+            our_value, their_value = _row_value(ours), _row_value(theirs)
+            scale = max(our_value, their_value, 1)
+            for side, value, parts in ((0, our_value, ours), (1, their_value, theirs)):
+                track = pygame.Rect(left_edge - bar_max if side == 0 else right_edge, cy - 8, bar_max, 16)
+                pygame.draw.rect(surface, MATCH_PANEL_DEEP, track, border_radius=4)
+                width = round(bar_max * value / scale) if value > 0 else 0
+                bar = pygame.Rect(track.right - width if side == 0 else track.left, track.top, width, 16)
+                if width and kind == "total":
+                    rushing = parts[0]
+                    run_width = round(width * rushing / value)
+                    # Rushing sits next to the label column on both sides.
+                    run = pygame.Rect(bar.right - run_width if side == 0 else bar.left, bar.top, run_width, 16)
+                    pygame.draw.rect(surface, PLAY_LINE_PASS, bar, border_radius=4)
+                    if run_width:
+                        pygame.draw.rect(surface, PLAY_LINE_RUN, run, border_radius=4)
+                elif width:
+                    color = {
+                        "run": PLAY_LINE_RUN, "pass": PLAY_LINE_PASS, "turnover": MATCH_DANGER,
+                    }.get(kind, accent if side == 0 else MATCH_OPPONENT)
+                    pygame.draw.rect(surface, color, bar, border_radius=4)
+                other = their_value if side == 0 else our_value
+                leads = value < other if kind == "turnover" else value > other
+                text = f"{value} yd" if kind in ("total", "run", "pass", "long") else str(value)
+                color = MATCH_TEXT if leads else MATCH_MUTED
+                if side == 0:
+                    blit_text(surface, value_font, text, color, STATS, midright=(track.left - 10, cy))
+                else:
+                    blit_text(surface, value_font, text, color, STATS, midleft=(track.right + 10, cy))
+        legend_y = STATS.bottom - 16
+        legend_font = match_font(12)
+        x = STATS.centerx - 66
+        for color, name in ((PLAY_LINE_RUN, "RUN"), (PLAY_LINE_PASS, "PASS")):
+            pygame.draw.rect(surface, color, (x, legend_y - 5, 10, 10), border_radius=2)
+            label = blit_text(surface, legend_font, name, MATCH_MUTED, STATS, midleft=(x + 15, legend_y))
+            x = label.right + 26
+
+    def _draw_bye_panel(self, surface, state, accent: pygame.Color) -> None:
+        self._panel(surface, STATS)
+        pygame.draw.rect(surface, accent, (STATS.left + 12, STATS.top + 11, 4, 16), border_radius=2)
+        blit_text(surface, plain_font(17), f"GAME {state.game_number}", MATCH_TEXT, STATS,
+                  topleft=(STATS.left + 22, STATS.top + 8))
+        blit_text(surface, plain_font(44), "NO GAME PLAYED", MATCH_MUTED, STATS,
+                  center=(STATS.centerx, STATS.top + 104))
+        message = state.transition_message or (
+            "Bye Week skipped scheduled game 10 without a score or win/loss. You reached "
+            "the playoffs marker; playoff games are not available yet."
         )
-        draw_panel(surface, panel, theme, fill=theme.panel)
-        title = self.display_font.render("BYE WEEK  /  NO GAME RESULT", True, theme.secondary_accent)
-        surface.blit(title, title.get_rect(midtop=(panel.centerx, panel.top + 30)))
-        draw_text(
-            surface,
-            f"SCHEDULED GAME 10 SKIPPED  |  RECORD {state.wins}-{state.losses}",
-            (
-                panel.centerx
-                - self.label_font.size(
-                    f"SCHEDULED GAME 10 SKIPPED  |  RECORD {state.wins}-{state.losses}"
-                )[0]
-                // 2,
-                panel.top + 102,
-            ),
-            self.label_font,
-            theme.text,
-        )
-        draw_text(
-            surface,
-            f"{state.games_played} actual regular-season games played.",
-            (
-                panel.centerx
-                - self.small_font.size(
-                    f"{state.games_played} actual regular-season games played."
-                )[0]
-                // 2,
-                panel.top + 139,
-            ),
-            self.small_font,
-            theme.muted,
-        )
-        draw_wrapped_text(
-            surface,
-            state.transition_message
-            or "Game 10 was skipped without a score or win/loss. You reached the "
-            "playoffs marker; playoff games are not available yet.",
-            pygame.Rect(panel.left + 45, panel.top + 181, panel.width - 90, 72),
-            self.small_font,
-            theme.muted,
-            line_gap=4,
-        )
-        primary_rect = pygame.Rect(
-            panel.centerx - min(370, panel.width - 60) // 2,
-            panel.bottom - 55,
-            min(370, panel.width - 60),
-            42,
-        )
-        return [
-            Button(
-                "RETURN TO MAIN MENU",
-                self.return_to_menu,
-                primary_rect,
-                variant="primary",
-            )
-        ]
+        blit_wrapped(surface, message, pygame.Rect(STATS.left + 60, STATS.top + 156, STATS.width - 120, 110),
+                     (17, 16, 15, 14), MATCH_MUTED, max_lines=4)
+
+    def _draw_season(self, surface, state, variant: ResultVariant, accent: pygame.Color) -> None:
+        self._panel(surface, SEASON)
+        pygame.draw.rect(surface, accent, (SEASON.left + 12, SEASON.top + 11, 4, 16), border_radius=2)
+        blit_text(surface, plain_font(17), "SEASON", MATCH_TEXT, SEASON,
+                  topleft=(SEASON.left + 22, SEASON.top + 8))
+        blit_text(surface, plain_font(30), f"{state.wins}-{state.losses}", MATCH_TEXT, SEASON,
+                  topright=(SEASON.right - 18, SEASON.top + 4))
+        history: dict[int, FootballSeasonGame] = {game.game_number: game for game in state.season_history}
+        width, height, gap = 80, 64, 8
+        grid_left = SEASON.left + (SEASON.width - (5 * width + 4 * gap)) // 2
+        grid_top = SEASON.top + 48
+        for number in range(1, 11):
+            tile = pygame.Rect(grid_left + (number - 1) % 5 * (width + gap),
+                               grid_top + (number - 1) // 5 * (height + gap), width, height)
+            self._draw_tile(surface, tile, number, history.get(number), number == state.game_number)
+
+        strikes_y = grid_top + 2 * height + gap + 34
+        blit_text(surface, plain_font(15), "LOSSES", MATCH_MUTED, SEASON,
+                  midleft=(SEASON.left + 22, strikes_y))
+        strikes_left = SEASON.left + 104
+        for index in range(3):
+            strike = pygame.Rect(strikes_left + index * 52, strikes_y - 15, 42, 30)
+            filled = index < state.losses
+            if filled:
+                pygame.draw.rect(surface, mix(FIRED_RED, MATCH_PANEL_DEEP, 0.15), strike, border_radius=6)
+                ink = MATCH_INK
+            else:
+                pygame.draw.rect(surface, MATCH_PANEL_DEEP, strike, border_radius=6)
+                pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, strike, 2, border_radius=6)
+                ink = MATCH_PANEL_EDGE_SOFT
+            cx, cy = strike.center
+            pygame.draw.line(surface, ink, (cx - 7, cy - 7), (cx + 7, cy + 7), 4)
+            pygame.draw.line(surface, ink, (cx - 7, cy + 7), (cx + 7, cy - 7), 4)
+        if variant in (ResultVariant.REGULAR, ResultVariant.FIRED):
+            note = {0: "3 LOSSES ENDS THE RUN", 1: "2 MORE ENDS THE RUN",
+                    2: "1 MORE ENDS THE RUN"}.get(state.losses, "RUN OVER")
+            note_box = pygame.Rect(strikes_left + 3 * 52 + 4, strikes_y - 10,
+                                   SEASON.right - 16 - strikes_left - 3 * 52 - 4, 20)
+            note_font = match_font(12)
+            blit_text(surface, note_font, fit_text(note, note_font, note_box.width),
+                      FIRED_RED if state.losses >= 2 else MATCH_DIM, note_box,
+                      midleft=(note_box.left, strikes_y))
+
+        scored = sum(game.team_score or 0 for game in state.season_history)
+        allowed = sum(game.opponent_score or 0 for game in state.season_history)
+        totals = f"POINTS FOR {scored}  ·  AGAINST {allowed}"
+        totals_box = pygame.Rect(SEASON.left + 16, SEASON.bottom - 40, SEASON.width - 32, 28)
+        pygame.draw.line(surface, MATCH_PANEL_EDGE_SOFT, (totals_box.left, totals_box.top - 6),
+                         (totals_box.right, totals_box.top - 6))
+        font = match_font(13)
+        blit_text(surface, font, fit_text(totals, font, totals_box.width), MATCH_MUTED, totals_box,
+                  center=totals_box.center)
+
+    @staticmethod
+    def _draw_tile(surface, tile: pygame.Rect, number: int, game: FootballSeasonGame | None,
+                   current: bool) -> None:
+        outcome = game.outcome if game is not None else None
+        if outcome is FootballSeasonOutcome.WIN:
+            fill, edge, ink = (mix(MATCH_GOLD, MATCH_PANEL_DEEP, 0.8),
+                               mix(MATCH_GOLD, MATCH_PANEL_DEEP, 0.3), MATCH_GOLD)
+        elif outcome is FootballSeasonOutcome.LOSS:
+            fill, edge, ink = (mix(FIRED_RED, MATCH_PANEL_DEEP, 0.82),
+                               mix(FIRED_RED, MATCH_PANEL_DEEP, 0.4), FIRED_RED)
+        elif outcome is FootballSeasonOutcome.BYE:
+            fill, edge, ink = MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_MUTED
+        else:
+            fill, edge, ink = mix(MATCH_PANEL_DEEP, MATCH_PANEL, 0.5), MATCH_PANEL_EDGE_SOFT, MATCH_DIM
+        pygame.draw.rect(surface, fill, tile, border_radius=8)
+        pygame.draw.rect(surface, edge, tile, 1 if outcome is None else 2, border_radius=8)
+        if current:
+            pygame.draw.rect(surface, MATCH_TEXT, tile.inflate(6, 6), 2, border_radius=10)
+        blit_text(surface, match_font(11), f"G{number}", MATCH_MUTED if game else MATCH_DIM, tile,
+                  topleft=(tile.left + 7, tile.top + 4))
+        if outcome is None:
+            pygame.draw.circle(surface, MATCH_PANEL_EDGE_SOFT, (tile.centerx, tile.centery + 2), 3)
+            return
+        word = outcome.value
+        blit_text(surface, plain_font(26 if outcome is not FootballSeasonOutcome.BYE else 20), word, ink,
+                  tile, center=(tile.centerx, tile.centery + 1))
+        if game is not None and game.team_score is not None:
+            score = f"{game.team_score}-{game.opponent_score}" + (" OT" if game.overtime else "")
+            font = match_font(11)
+            blit_text(surface, font, fit_text(score, font, tile.width - 6), MATCH_MUTED, tile,
+                      midbottom=(tile.centerx, tile.bottom - 3))
+
+    # -- footer --------------------------------------------------------------------
+
+    @staticmethod
+    def _draw_key_hint(surface) -> None:
+        font = match_font(12)
+        cap = pygame.Rect(0, 0, font.size("ENTER")[0] + 14, 22)
+        cap.midleft = (PRIMARY_RECT.right + 16, PRIMARY_RECT.centery)
+        pygame.draw.rect(surface, MATCH_PANEL_DEEP, cap, border_radius=5)
+        pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, cap, 1, border_radius=5)
+        blit_text(surface, font, "ENTER", MATCH_DIM, cap, center=cap.center)
+
+
+def _dashed_rect(surface, rect: pygame.Rect, color: pygame.Color, dash: int = 8) -> None:
+    for x in range(rect.left + 10, rect.right - 10, dash * 2):
+        end = min(x + dash, rect.right - 10)
+        pygame.draw.line(surface, color, (x, rect.top), (end, rect.top), 2)
+        pygame.draw.line(surface, color, (x, rect.bottom - 1), (end, rect.bottom - 1), 2)
+    for y in range(rect.top + 10, rect.bottom - 10, dash * 2):
+        end = min(y + dash, rect.bottom - 10)
+        pygame.draw.line(surface, color, (rect.left, y), (rect.left, end), 2)
+        pygame.draw.line(surface, color, (rect.right - 1, y), (rect.right - 1, end), 2)

@@ -76,6 +76,13 @@ or the design changes.
 - [x] Keep purchased plays, schemes, and bonus cards visible as purchased until
   Next Day; replace the Depth Chart details page with flippable player and
   coach cards and a Team upgrades popup.
+- [x] Redesign the post-game result screen in the match-screen style: full
+  screen scoreboard hero, run/pass team-stat comparison from the play log, a
+  10-game season tracker with a 3-strike loss meter (backed by a read-only
+  per-game controller history), and distinct Run Over, Playoffs, and Bye Week
+  endings.
+- [ ] Give local AI opponents their own names and team colors; the result
+  screen and match scoreboard currently show a neutral grey helmet.
 - [ ] Shop polish ideas: number-key shortcuts for shop cards, and a live-app
   pass on hover timing and keyboard flow (verified headless so far).
 - [ ] Match screen polish ideas: on-card number-key hints, a play-log filter

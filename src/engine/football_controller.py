@@ -65,6 +65,23 @@ class FootballHumanDecision(str, Enum):
     CHALLENGE = "challenge"
 
 
+class FootballSeasonOutcome(str, Enum):
+    WIN = "W"
+    LOSS = "L"
+    BYE = "BYE"
+
+
+@dataclass(frozen=True)
+class FootballSeasonGame:
+    """Read-only record of one scheduled game: a played result or a Bye Week skip."""
+
+    game_number: int
+    outcome: FootballSeasonOutcome
+    team_score: int | None = None
+    opponent_score: int | None = None
+    overtime: bool = False
+
+
 @dataclass(frozen=True)
 class FootballGameControllerState:
     """Immutable view of run progress and the data needed by a future UI."""
@@ -90,6 +107,7 @@ class FootballGameControllerState:
         default_factory=lambda: MappingProxyType({})
     )
     challenge_available: bool = False
+    season_history: tuple[FootballSeasonGame, ...] = ()
 
 
 class FootballGameController:
@@ -161,6 +179,7 @@ class FootballGameController:
         self._losses = 0
         self._games_played = 0
         self._skipped_games: list[int] = []
+        self._season_history: list[FootballSeasonGame] = []
         self._transition_message: str | None = None
         self._challenge_prompt = False
         self._player_appearances: dict[FootballPosition, FootballPlayerAppearance] = {}
@@ -191,6 +210,7 @@ class FootballGameController:
                 if self._simulator is not None
                 else False
             ),
+            season_history=tuple(self._season_history),
         )
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
@@ -480,6 +500,17 @@ class FootballGameController:
         else:
             self._losses += 1
         self._games_played += 1
+        self._season_history.append(
+            FootballSeasonGame(
+                self._game_number,
+                FootballSeasonOutcome.WIN
+                if result.winner is FootballTeamSide.TEAM_A
+                else FootballSeasonOutcome.LOSS,
+                result.team_a_score,
+                result.team_b_score,
+                overtime=match.period > 2,
+            )
+        )
 
         if self._losses >= self.LOSSES_TO_BE_FIRED:
             self._phase = FootballRunPhase.FIRED
@@ -496,6 +527,9 @@ class FootballGameController:
         if scheduled_game in self._skipped_games:
             raise RuntimeError("A scheduled game cannot be skipped twice.")
         self._skipped_games.append(scheduled_game)
+        self._season_history.append(
+            FootballSeasonGame(scheduled_game, FootballSeasonOutcome.BYE)
+        )
         if scheduled_game == self.REGULAR_SEASON_GAMES:
             self._phase = FootballRunPhase.PLAYOFFS
             self._transition_message = (

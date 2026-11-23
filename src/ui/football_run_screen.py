@@ -30,6 +30,13 @@ from src.ui.screens import Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
+RESULT_PHASES = frozenset({
+    FootballRunPhase.READY_FOR_NEXT_GAME,
+    FootballRunPhase.FIRED,
+    FootballRunPhase.PLAYOFFS,
+})
+
+
 class FootballRunScreen(Screen):
     """Render the current immutable controller state and submit human choices."""
 
@@ -65,8 +72,7 @@ class FootballRunScreen(Screen):
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance: FootballShopView | None = None
         self._result_view = FootballResultView(
-            self._display_font, self._title_font, self._label_font, self._small_font,
-            self._open_next_shop, self._return_to_menu,
+            self._open_next_shop, self._return_to_menu, self._request_exit,
         )
 
     def begin(self, controller: FootballGameController) -> None:
@@ -190,6 +196,9 @@ class FootballRunScreen(Screen):
             if self.confirm_exit:
                 self._draw_exit_confirmation(surface)
             return
+        if state.phase in RESULT_PHASES:
+            self._draw_result_screen(surface, state)
+            return
 
         titles = {
             FootballRunPhase.COACH_DRAFT: ("Choose your staff", "RUN SETUP / COACHES"),
@@ -206,12 +215,6 @@ class FootballRunScreen(Screen):
                     else f"GAME {state.game_number:02d} / PRE-GAME SHOP"
                 ),
             ),
-            FootballRunPhase.READY_FOR_NEXT_GAME: (
-                "Final whistle",
-                "REGULAR SEASON / NEXT GAME READY",
-            ),
-            FootballRunPhase.FIRED: ("Run ended", "THREE LOSSES / FIRED"),
-            FootballRunPhase.PLAYOFFS: ("Season milestone", "GAME 10 / PLAYOFFS"),
         }
         title, eyebrow = titles[state.phase]
         if state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode == "depth":
@@ -287,9 +290,6 @@ class FootballRunScreen(Screen):
                     error=self.last_error is not None,
                 )
                 self._set_buttons(shop_buttons)
-        else:
-            self._set_buttons(self._result_view.draw(surface, content, state, self.theme))
-            self._draw_buttons(surface)
 
         exit_rect = (
             pygame.Rect(1097, 37, 145, 32)
@@ -340,6 +340,22 @@ class FootballRunScreen(Screen):
                 self.theme.danger,
             )
         if self.confirm_exit:
+            self._draw_exit_confirmation(surface)
+
+    def _draw_result_screen(
+        self,
+        surface: pygame.Surface,
+        state: FootballGameControllerState,
+    ) -> None:
+        """Full-screen result: the view owns the backdrop, header, and every button."""
+        buttons = self._result_view.draw(surface, state, self.theme, error=self.last_error)
+        if not self.confirm_exit:
+            self._set_buttons(buttons)
+            self._draw_buttons(surface)
+        else:
+            for button in buttons:
+                button.focused = False
+                button.draw(surface, self._main_font, self.theme)
             self._draw_exit_confirmation(surface)
 
     def _draw_match_screen(
