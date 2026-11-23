@@ -69,6 +69,15 @@ or the design changes.
   also holds fourth-down/conversion/Challenge calls, sequential AI playback
   with Skip, both hands visible, an ACTIVE scheme slot, deck/discard piles,
   opponent hand counts, and a pause menu with Depth Chart and Play Log.
+- [x] Redesign the pre-match shop, Depth Chart, and Playbook in the match-screen
+  style: cost-only price buttons, one rarity palette (Rare blue), icon-only
+  player upgrade cards, coach short lines, shared play/scheme card faces, and
+  hover/focus/I-key inspect panels with the full rules.
+- [x] Keep purchased plays, schemes, and bonus cards visible as purchased until
+  Next Day; replace the Depth Chart details page with flippable player and
+  coach cards and a Team upgrades popup.
+- [ ] Shop polish ideas: number-key shortcuts for shop cards, and a live-app
+  pass on hover timing and keyboard flow (verified headless so far).
 - [ ] Match screen polish ideas: on-card number-key hints, a play-log filter
   by drive or team, and an optional playback-speed setting.
 - [x] Add the first named coach-upgrade catalog, run-unique purchase history,

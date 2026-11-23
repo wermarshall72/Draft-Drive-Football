@@ -17,7 +17,6 @@ from src.engine.football_shop import FootballShopSection
 from src.ui.coach_fonts import staff_font
 from src.ui.football_result import FootballResultView
 from src.ui.football_review_view import FootballReviewView
-from src.ui.football_depth_chart import DepthChartButton
 from src.ui.football_shop_view import FootballShopView
 from src.ui.football_player_draft_view import FootballPlayerDraftView
 from src.ui.football_coach_view import FootballCoachView
@@ -25,6 +24,7 @@ from src.ui.football_match_interaction import HandEventKind, MatchInteraction
 from src.ui.football_match_screen import FootballMatchScreen, MatchActions
 from src.ui.football_draft_interaction import CoachInspection, PlayerInspection
 from src.ui.football_shop_review import ShopReviewInteraction
+from src.ui.football_ui_kit import kit_button, stadium_backdrop
 from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
@@ -64,7 +64,6 @@ class FootballRunScreen(Screen):
         self._draft_button_font = staff_font(17, semibold=True)
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance: FootballShopView | None = None
-        self._focus_shop_navigation_after_details = False
         self._result_view = FootballResultView(
             self._display_font, self._title_font, self._label_font, self._small_font,
             self._open_next_shop, self._return_to_menu,
@@ -84,7 +83,6 @@ class FootballRunScreen(Screen):
         self.pressed_index = None
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance = None
-        self._focus_shop_navigation_after_details = False
 
     @property
     def match_interaction(self) -> MatchInteraction:
@@ -105,33 +103,24 @@ class FootballRunScreen(Screen):
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is None
         ):
-            if self._focus_shop_navigation_after_details:
+            if not self.confirm_exit and self._shop_view().handle_event(event, **self._inspect_keys()):
+                self.hover_index = None if event.type != pygame.MOUSEMOTION else self.hover_index
                 return
-            shop_view = self._shop_view()
-            if shop_view.coach_details_open:
-                details_rect = shop_view.coach_details_rect
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    self._close_coach_details()
-                    return
-                if details_rect is None:
-                    return
-                if (
-                    event.type == pygame.MOUSEMOTION
-                    and not details_rect.collidepoint(event.pos)
-                ):
-                    self._close_coach_details()
-                    return
-                if (
-                    event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP)
-                    and not details_rect.collidepoint(event.pos)
-                ):
-                    self._close_coach_details()
-                    return
         if (
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is not None
         ):
+            if (
+                self.shop_review.mode == "playbook"
+                and not self.confirm_exit
+                and self.shop_review.inspect.handle_event(event, **self._inspect_keys())
+            ):
+                return
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                if self.shop_review.team_popup:
+                    self.shop_review.close_team_upgrades()
+                    self.buttons = []
+                    return
                 self._leave_shop_review()
                 return
             if self.shop_review.handle_scroll(event):
@@ -237,7 +226,7 @@ class FootballRunScreen(Screen):
         )
         if depth_review or playbook_review:
             layout = Layout.from_surface(surface)
-            surface.fill("#061629")
+            surface.blit(stadium_backdrop(surface.get_size()), (0, 0))
             content = pygame.Rect(20, 15, surface.get_width() - 40, surface.get_height() - 30)
         elif state.phase in (FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT):
             layout = Layout.from_surface(surface)
@@ -271,26 +260,21 @@ class FootballRunScreen(Screen):
                     lambda copy_id: self._submit(
                         lambda: self._require_controller().remove_owned_card(copy_id)
                     ),
+                    error=self.last_error,
                 )
-                buttons = (
-                    review.draw_depth_chart(surface, content, state)
-                    if self.shop_review.mode == "depth"
-                    else review.draw_playbook(surface, content, state.shop)
-                )
+                if self.shop_review.mode == "depth":
+                    buttons = review.draw_depth_chart(surface, content, state)
+                else:
+                    buttons = review.draw_playbook(
+                        surface, content, state.shop,
+                        hover_key=getattr(self._button_at(self.hover_index), "inspect_key", None),
+                        focus_key=getattr(self._button_at(self.focus_index), "inspect_key", None),
+                    )
                 self._set_buttons(buttons)
-                self._draw_buttons(surface)
             else:
                 shop_view = self._shop_view()
-                restore_navigation_focus = (
-                    self._focus_shop_navigation_after_details
-                )
-                if (
-                    shop_view.coach_details_open
-                    and shop_view.coach_details_rect is None
-                ):
-                    self.focus_index = 0
-                    self.hover_index = None
-                    self.pressed_index = None
+                hovered = self._button_at(self.hover_index)
+                focused = self._button_at(self.focus_index)
                 shop_buttons = shop_view.draw(
                     surface,
                     content,
@@ -298,20 +282,11 @@ class FootballRunScreen(Screen):
                     f"CHECK: {self.last_error}" if self.last_error else state.transition_message,
                     state,
                     self.team_name,
+                    hover_key=getattr(hovered, "inspect_key", None),
+                    focus_key=getattr(focused, "inspect_key", None),
+                    error=self.last_error is not None,
                 )
-                if restore_navigation_focus:
-                    self.focus_index = next(
-                        (
-                            index
-                            for index, button in enumerate(shop_buttons)
-                            if button.label == "DEPTH CHART"
-                        ),
-                        0,
-                    )
-                    self.hover_index = None
-                    self._focus_shop_navigation_after_details = False
                 self._set_buttons(shop_buttons)
-                self._draw_buttons(surface)
         else:
             self._set_buttons(self._result_view.draw(surface, content, state, self.theme))
             self._draw_buttons(surface)
@@ -321,24 +296,30 @@ class FootballRunScreen(Screen):
             if state.phase is FootballRunPhase.COACH_DRAFT
             else pygame.Rect(38, 647, 254, 32)
             if state.phase is FootballRunPhase.PLAYER_DRAFT
-            else pygame.Rect(content.right - 112, content.top, 112, 30)
+            else pygame.Rect(content.right - 120, content.top, 120, 36)
             if depth_review
-            else pygame.Rect(content.right - 120, content.bottom - 44, 120, 36)
+            else pygame.Rect(content.right - 120, 656, 120, 42)
             if state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
         )
-        if not playbook_review:
-            self.buttons.append(
-                (DepthChartButton if depth_review else Button)(
-                    "END RUN", self._request_exit, exit_rect, variant="quiet"
-                )
-            )
+        shop_landing = (
+            state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None
+        )
+        if not playbook_review and not (depth_review and self.shop_review.team_popup):
+            if shop_landing:
+                end_run = kit_button("END RUN", self._request_exit, exit_rect, variant="kit-danger")
+            elif depth_review:
+                end_run = kit_button("END RUN", self._request_exit, exit_rect, variant="kit-danger")
+            else:
+                end_run = Button("END RUN", self._request_exit, exit_rect, variant="quiet")
+            self.buttons.append(end_run)
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
-        if self.last_error is not None and not (
-            state.phase is FootballRunPhase.PRE_MATCH_SHOP
-            and self.shop_review.mode is None
-        ):
+        if shop_landing and not self.confirm_exit:
+            self._shop_view().draw_overlay(surface, hovered_button=self._button_at(self.hover_index))
+        if playbook_review and not self.confirm_exit:
+            self.shop_review.inspect.paint(surface, hovered_button=self._button_at(self.hover_index))
+        if self.last_error is not None and state.phase is not FootballRunPhase.PRE_MATCH_SHOP:
             error_rect = pygame.Rect(
                 layout.margin,
                 layout.height - 23
@@ -539,7 +520,6 @@ class FootballRunScreen(Screen):
                     )
                 ),
                 self._purchase_shop_card,
-                self._close_coach_details,
             )
         return self._shop_view_instance
 
@@ -550,11 +530,16 @@ class FootballRunScreen(Screen):
         self.hover_index = None
         self.pressed_index = None
 
-    def _close_coach_details(self) -> None:
-        self._shop_view().close_coach_details()
-        self.hover_index = None
-        self.pressed_index = None
-        self._focus_shop_navigation_after_details = True
+    def _inspect_keys(self) -> dict:
+        return {
+            "hover_key": getattr(self._button_at(self.hover_index), "inspect_key", None),
+            "focus_key": getattr(self._button_at(self.focus_index), "inspect_key", None),
+        }
+
+    def _button_at(self, index: int | None) -> Button | None:
+        if index is None or not 0 <= index < len(self.buttons):
+            return None
+        return self.buttons[index]
 
     def _purchase_shop_card(
         self, section: FootballShopSection, card_id: str, is_removal: bool,
@@ -613,12 +598,17 @@ class FootballRunScreen(Screen):
             self.last_error = str(error)
         finally:
             self.state = self._require_controller().state
-            if self.state.phase is not old_state.phase or (
+            if self.state.phase is not old_state.phase:
+                self.buttons = []
+                self.focus_index = 0
+                self.hover_index = None
+                self.pressed_index = None
+            elif (
                 old_state.phase is FootballRunPhase.PRE_MATCH_SHOP
                 and self.state.shop != old_state.shop
             ):
+                # Drop stale controls but keep keyboard focus on the same slot.
                 self.buttons = []
-                self.focus_index = 0
                 self.hover_index = None
                 self.pressed_index = None
 
@@ -629,11 +619,8 @@ class FootballRunScreen(Screen):
         self._submit(self._require_controller().move_to_next_day)
 
     def _request_exit(self) -> None:
-        if (
-            self._current_state().phase is FootballRunPhase.PRE_MATCH_SHOP
-            and self._shop_view().coach_details_open
-        ):
-            self._close_coach_details()
+        if self._current_state().phase is FootballRunPhase.PRE_MATCH_SHOP:
+            self._shop_view().inspect.reset()
         self.confirm_exit = True
         self.buttons = []
         self.focus_index = 0

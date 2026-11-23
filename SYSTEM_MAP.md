@@ -65,22 +65,53 @@ covers extracted interaction state.
   [test_football_player_catalog.py](tests/test_football_player_catalog.py), and
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
-  renders the player and coach upgrade panels and the six-slot play/scheme
-  grid using the run's saved appearances and coach assignment.
+  renders the shop landing (AP badge, PLAYER UPGRADES 4 slots, COACH UPGRADES
+  2 slots, PLAYS & SCHEMES 3x2 grid, kit-style footer) using the run's saved
+  appearances and coach assignment. Each offer or locked slot is one focusable
+  `ShopCardButton` whose `click_rect` is its price button, so only the price
+  buys; prices show cost, PURCHASED, or a dimmed cost, and unlocks show a lock
+  plus cost or a short reason. Coach cards show a portrait and the short line
+  from `COACH_UPGRADE_SHORT_LINES` in
+  [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py),
+  which also supplies the full detail sections. Play, scheme, bonus, and Remove
+  One Card faces come from [football_card_faces.py](src/ui/football_card_faces.py)
+  (shared with the Playbook). [football_inspect.py](src/ui/football_inspect.py)
+  owns hover/focus/I-key inspect panels (`InspectState`) and their content for
+  every card type; panels sit beside the card and pinned panels swallow clicks
+  beneath them. [football_ui_kit.py](src/ui/football_ui_kit.py) holds the shared
+  navy palette, fonts, `text_audit`, stadium backdrop, popup panel and buttons,
+  kit/painted buttons, card shell, and the single rarity palette (Rare blue);
+  `football_match_palette.py` re-exports it for the match modules.
   [football_review_view.py](src/ui/football_review_view.py) renders the
-  unified, filterable two-column Playbook with category borders, shop-sourced
-  rarity badges, full card details, and the explicit removal-mode selection;
-  it delegates the Depth Chart to [football_depth_chart.py](src/ui/football_depth_chart.py).
-  Review filters/scrolling and stat-toggle state live in
-  [football_shop_review.py](src/ui/football_shop_review.py). A removal purchase
+  filterable 6-column Playbook grid with rarity-colored borders and labels,
+  copy badges, inspect panels, and the removal mode's exact-copy REMOVE
+  buttons; it delegates the Depth Chart to
+  [football_depth_chart.py](src/ui/football_depth_chart.py), which draws staff
+  cards, a 4x2 roster with stat icons and pending badges, and a
+  STARTING/MODIFIED toggle (also used read-only by the in-match popup). Each
+  player and coach card has a flip-arrow button that rotates it to a back face:
+  players list their permanent and pending upgrades, partnership, and planned
+  perk; coaches list their perk and that side's coach upgrades. Backs never
+  drop content: overflow scrolls inside the card (wheel while hovered, Page
+  Up/Down/Home/End while its flip arrow is focused) with a scroll bar and MORE
+  hint, and front pending chips end in a "+N" chip when they do not all fit. The header's
+  Team upgrades button opens a popup with special-teams and program (AP, Bye
+  Week) coach upgrades; `coach_upgrade_area` in the coach-upgrade details module
+  decides the split. The flip arrow and info icons in `src/ui/assets` come
+  from [process_ui_icons.py](scripts/process_ui_icons.py). Review
+  filters/scrolling, stat-toggle and flip state, the Team upgrades popup flag,
+  and the Playbook's `InspectState` live in
+  [football_shop_review.py](src/ui/football_shop_review.py).
+  A removal purchase
   opens the same Playbook layout for exact-copy selection or cancellation; the
   coordinator submits the action through the controller to
   [football_shop.py](src/engine/football_shop.py), which owns offers, AP,
   player upgrades, the run-unique coach-upgrade catalog and effects, decks,
-  repeatable bonus-card purchases, play/scheme-section offer replacement after
-  purchase, independent 58/24/12/6 playbook rarity rolls, and removal
-  validation. Purchased plays/schemes cannot be bought again on the same shop
-  day; other shop sections keep their existing rarity weights. Remove One Card
+  repeatable bonus-card purchases, independent 58/24/12/6 playbook rarity
+  rolls, and removal validation. A bought play, scheme, or bonus card stays in
+  its slot (and in any slot offering the same card) as purchased until Next Day
+  or the next visit, like player upgrades; other shop sections keep their
+  existing rarity weights. Remove One Card
   is a Rare shop-only service, not a deck
   card. Its 192 individual-player cards apply permanent upgrades to the roster
   and retain temporary upgrades as pending run-local state. The shop state
@@ -90,30 +121,23 @@ covers extracted interaction state.
   [football_simulator.py](src/engine/football_simulator.py) shares the coach
   bonus, cap, and baseline player-stat calculations with these projections.
   Power projections exclude play-specific fatigue, partnership, and scheme.
-  Player-upgrade cards show nominal effects with packaged duration icons;
+  Player-upgrade cards show the stat icon and nominal value plus the duration
+  icon, with no stat or duration words;
   [football_player_upgrade_details.py](src/ui/football_player_upgrade_details.py)
   formats pending changes and roster values in Depth Chart details.
-  Coach-upgrade purchase history and descriptions are
-  shown in the Depth Chart's scrollable upgrades/perk-details view. The
-  controller retains draft-time players and appearances in run-local state;
-  the compact chart compares them with persistent coach-adjusted contributions
-  and effective stats without play-specific effects.
-  [football_coach_upgrade_details.py](src/ui/football_coach_upgrade_details.py)
-  supplies complete duration, uniqueness, rarity, and cost details to shop
-  inspection and owned-upgrade rows; [text.py](src/ui/text.py) wraps complete
-  descriptions and fails if they cannot fit their assigned region. See
+  [text.py](src/ui/text.py) wraps text. See
+  [test_football_shop_screens.py](tests/test_football_shop_screens.py) for the
+  shop landing, price states, inspect panels, rarity colors, text fit, Depth
+  Chart, and removal flow;
   [test_football_playbook_view.py](tests/test_football_playbook_view.py) for
-  Playbook filtering, card content, color contrast, rarity, and bounds;
-  [test_football_desktop.py](tests/test_football_desktop.py) covers the shop
-  navigation and paid-removal flow.
+  Playbook filtering, rarity colors, removal mode, inspect panels, and bounds.
   [football_card_art.py](src/ui/football_card_art.py) maps play/scheme families,
   bonus actions, and the removal service to packaged pixel-art tiles used by
   the shop, Playbook, match hand, piles, and Challenge action buttons. Assets come from
   [process_football_card_art.py](scripts/process_football_card_art.py). See
   [test_football_card_art.py](tests/test_football_card_art.py),
-  [test_football_shop.py](tests/test_football_shop.py),
-  [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
-  the shop/review cases in [test_football_desktop.py](tests/test_football_desktop.py).
+  [test_football_shop.py](tests/test_football_shop.py), and
+  [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py).
 - **Stat icons:** [stat_icons.py](src/ui/stat_icons.py) wraps every UI font (built only in
   [screens.py](src/ui/screens.py) and [coach_fonts.py](src/ui/coach_fonts.py)) so any rendered or
   measured text places the Power, Stamina, or Volatility icon from `assets/stat_icons/` inline
@@ -154,7 +178,8 @@ covers extracted interaction state.
   Depth Chart (temporary upgrades labeled active this match), the play log,
   and read-only pile lists. [football_match_interaction.py](src/ui/football_match_interaction.py)
   tracks drag, drop areas, and group scroll. Colors, fonts, and the
-  `text_audit` fit recorder are in [football_match_palette.py](src/ui/football_match_palette.py).
+  `text_audit` fit recorder are re-exported by [football_match_palette.py](src/ui/football_match_palette.py)
+  from the shared [football_ui_kit.py](src/ui/football_ui_kit.py).
   [football_result.py](src/ui/football_result.py) renders results and
   progression actions. Tests include
   [test_football_match_presentation.py](tests/test_football_match_presentation.py)

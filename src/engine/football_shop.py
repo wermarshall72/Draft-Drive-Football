@@ -358,6 +358,8 @@ class FootballShop:
             tuple[FootballShopSection, str], FootballShopCard
         ] = {}
         self._purchased_play_schemes_today: set[str] = set()
+        # Play/scheme slots bought today stay visible as purchased until Next Day.
+        self._play_slots_purchased: set[int] = set()
         self._run_purchased_upgrades: list[FootballUpgrade] = []
         self._pending_player_upgrades: list[FootballUpgrade] = []
         self._player_offer_purchased: set[str] = set()
@@ -367,6 +369,7 @@ class FootballShop:
         self._defensive_deck = starting_defensive_deck("human")
         self._copy_sequence = 1
         self._pending_removal: FootballShopCard | None = None
+        self._pending_removal_slot: int | None = None
         self._finished = False
         self._unlocked_slots = self._validated_unlocked_slots(unlocked_slots)
         self._catalogs = self._validated_catalogs(catalogs)
@@ -485,10 +488,18 @@ class FootballShop:
         if isinstance(card_id, bool):
             raise ValueError("Card selection must be a card id or valid slot index.")
         slots = self._offers[section]
+        slot_index: int | None = None
         if isinstance(card_id, int):
             if not 0 <= card_id < len(slots):
                 raise ValueError("Shop card slot index is out of range.")
             selected = slots[card_id]
+            slot_index = card_id
+        elif isinstance(card_id, str) and section is FootballShopSection.PLAYS_SCHEMES:
+            matching = [index for index, card in enumerate(slots)
+                        if card is not None and card.card_id == card_id]
+            available = [index for index in matching if index not in self._play_slots_purchased]
+            slot_index = (available or matching or [None])[0]
+            selected = slots[slot_index] if slot_index is not None else None
         elif isinstance(card_id, str):
             selected = next(
                 (
@@ -506,6 +517,9 @@ class FootballShop:
         if (
             section is FootballShopSection.PLAYER_UPGRADES
             and selected.card_id in self._player_offer_purchased
+        ) or (
+            section is FootballShopSection.PLAYS_SCHEMES
+            and slot_index in self._play_slots_purchased
         ) or (
             selected.is_removal
             and purchase_key in self._purchased
@@ -527,6 +541,7 @@ class FootballShop:
             if self._pending_removal is not None:
                 raise ValueError("A card removal is already pending.")
             self._pending_removal = selected
+            self._pending_removal_slot = slot_index
             return self.state
 
         temporary = (
@@ -556,7 +571,7 @@ class FootballShop:
         if section is FootballShopSection.PLAYER_UPGRADES:
             self._player_offer_purchased.add(selected.card_id)
         if section is FootballShopSection.PLAYS_SCHEMES:
-            self._refresh_play_scheme_offers(selected)
+            self._mark_play_slot_purchased(selected, slot_index)
         if effect is not None:
             self._owned_coach_upgrades.append(selected)
             if effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP:
@@ -628,7 +643,8 @@ class FootballShop:
         self._remaining_ap -= pending.cost
         self._purchased[(pending.section, pending.card_id)] = pending
         self._pending_removal = None
-        self._refresh_play_scheme_offers(pending)
+        self._mark_play_slot_purchased(pending, self._pending_removal_slot)
+        self._pending_removal_slot = None
         return self.state
 
     def cancel_card_removal(self) -> FootballShopState:
@@ -636,6 +652,7 @@ class FootballShop:
         if self._pending_removal is None:
             raise ValueError("There is no card removal to cancel.")
         self._pending_removal = None
+        self._pending_removal_slot = None
         return self.state
 
     def _removable_cards(self) -> tuple[FootballCardCopy, ...]:
@@ -681,6 +698,7 @@ class FootballShop:
             raise ValueError("Moving to the next day requires 1 AP.")
         self._player_offer_purchased.clear()
         self._purchased_play_schemes_today.clear()
+        self._play_slots_purchased.clear()
         self._reset_offers()
         self._remaining_ap -= 1
         self._day += 1
@@ -708,6 +726,7 @@ class FootballShop:
         self._purchased.clear()
         self._player_offer_purchased.clear()
         self._purchased_play_schemes_today.clear()
+        self._play_slots_purchased.clear()
         self._finished = False
         self._reset_offers()
         return self.state
@@ -736,7 +755,7 @@ class FootballShop:
                                     (section, card.card_id) in self._purchased
                                     if card.is_removal
                                     or section is FootballShopSection.COACH_UPGRADES
-                                    else False
+                                    else slot_number - 1 in self._play_slots_purchased
                                 )
                             )
                         ),
@@ -820,25 +839,17 @@ class FootballShop:
                     section, self._offers[section]
                 )
 
-    def _refresh_play_scheme_offers(self, purchased: FootballShopCard) -> None:
+    def _mark_play_slot_purchased(self, purchased: FootballShopCard, slot_index: int | None) -> None:
+        """Keep the bought play/scheme/bonus card in its slot until the next reroll."""
         if purchased.football_card is not None:
             self._purchased_play_schemes_today.add(purchased.card_id)
-
-        section = FootballShopSection.PLAYS_SCHEMES
-        offers = self._offers[section]
-        replaced_slots = [
-            index
-            for index, offered in enumerate(offers)
+        # Every slot showing the same card is spent: one purchase per card per day.
+        self._play_slots_purchased.update(
+            index for index, offered in enumerate(self._offers[FootballShopSection.PLAYS_SCHEMES])
             if offered is not None and offered.card_id == purchased.card_id
-        ]
-        for index in replaced_slots:
-            offers[index] = None
-        for index in replaced_slots:
-            offers[index] = self._draw_card(
-                section,
-                offers,
-                excluded_card_id=purchased.card_id,
-            )
+        )
+        if slot_index is not None:
+            self._play_slots_purchased.add(slot_index)
 
     def _draw_card(
         self,

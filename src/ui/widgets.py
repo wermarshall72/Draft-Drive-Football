@@ -15,6 +15,12 @@ class Button:
     focused: bool = False
     variant: str = "quiet"
     pressed: bool = False
+    # Optional smaller area that receives clicks (hover and focus still use ``rect``).
+    click_rect: pygame.Rect | None = None
+
+    @property
+    def hit_rect(self) -> pygame.Rect:
+        return self.click_rect if self.click_rect is not None else self.rect
 
     def draw(
         self,

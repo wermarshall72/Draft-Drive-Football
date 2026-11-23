@@ -834,13 +834,12 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
     assert copy_to_remove not in removed.offensive_deck
     assert len(removed.offensive_deck) == 5
     assert removed.pending_removal is None
-    assert (
-        removed.section(FootballShopSection.PLAYS_SCHEMES).slots[0].card
-        is replacement
-    )
+    slot = removed.section(FootballShopSection.PLAYS_SCHEMES).slots[0]
+    assert slot.card is removal and slot.purchased
+    assert replacement not in (s.card for s in removed.section(FootballShopSection.PLAYS_SCHEMES).slots)
 
 
-def test_bonus_purchase_replacement_uses_play_scheme_rarity_roll() -> None:
+def test_bonus_purchase_stays_in_its_slot_until_next_day() -> None:
     shop = FootballShop(_roster(), rng=_FixedShopRng(0.99))
     section = FootballShopSection.PLAYS_SCHEMES
     catalog = shop._catalogs[section]
@@ -848,12 +847,13 @@ def test_bonus_purchase_replacement_uses_play_scheme_rarity_roll() -> None:
     shop._offers[section] = [bonus, None, None, None]
 
     state = shop.buy_card(section, bonus.card_id)
-    replacement = state.section(section).slots[0].card
-
-    assert replacement is not None
-    assert replacement.card_id != bonus.card_id
-    assert replacement in catalog
-    assert replacement.rarity is FootballShopRarity.VERY_RARE
+    slot = state.section(section).slots[0]
+    assert slot.card is bonus and slot.purchased
+    with pytest.raises(ValueError, match="already been purchased"):
+        shop.buy_card(section, bonus.card_id)
+    rerolled = shop.move_to_next_day().section(section).slots[0]
+    assert not rerolled.purchased
+    assert rerolled.card.rarity is FootballShopRarity.VERY_RARE
 
 
 def test_removal_respects_four_card_minimum_and_excludes_empty_service_offer() -> None:
@@ -1156,7 +1156,7 @@ def test_play_scheme_offer_repeats_eligible_cards_after_rarity_pool_exhaustion()
     assert sum(card is rare for card in offers) == 2
 
 
-def test_purchased_play_replaces_all_matching_slots_and_can_return_next_day() -> None:
+def test_purchased_play_marks_matching_slots_purchased_until_next_day() -> None:
     source_shop = FootballShop(_roster(), 28)
     play_catalog = tuple(
         card
@@ -1186,13 +1186,9 @@ def test_purchased_play_replaces_all_matching_slots_and_can_return_next_day() ->
         purchased_card.card_id,
     )
     refreshed = purchased.section(FootballShopSection.PLAYS_SCHEMES).slots
-    assert refreshed[0].card is not None
-    assert all(
-        slot.card is not None and slot.card.card_id != purchased_card.card_id
-        for slot in refreshed[:4]
-    )
+    assert all(slot.card is purchased_card and slot.purchased for slot in refreshed[:4])
     assert len(purchased.purchased_cards) == 1
-    with pytest.raises(ValueError, match="not in the current offer"):
+    with pytest.raises(ValueError, match="already been purchased"):
         shop.buy_card(
             FootballShopSection.PLAYS_SCHEMES,
             purchased_card.card_id,

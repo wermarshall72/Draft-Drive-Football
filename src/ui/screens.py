@@ -85,7 +85,7 @@ class Screen:
                 (
                     index
                     for index, button in enumerate(self.buttons)
-                    if button.enabled and button.rect.collidepoint(event.pos)
+                    if button.enabled and button.hit_rect.collidepoint(event.pos)
                 ),
                 None,
             )
@@ -97,7 +97,7 @@ class Screen:
             if (
                 pressed_index is not None
                 and self.buttons[pressed_index].enabled
-                and self.buttons[pressed_index].rect.collidepoint(event.pos)
+                and self.buttons[pressed_index].hit_rect.collidepoint(event.pos)
             ):
                 self.buttons[pressed_index].action()
         elif event.type == pygame.KEYDOWN:

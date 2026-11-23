@@ -38,6 +38,7 @@ from src.ui.football_match_palette import (
     MATCH_PANEL, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT,
     MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, match_font, mix, plain_font,
 )
+from src.ui.football_ui_kit import draw_card_shell, draw_two_cells, fit_wrapped  # noqa: F401
 from src.ui.text import fit_text, wrap_text_lines
 from src.ui.widgets import Button
 
@@ -70,27 +71,6 @@ class GroupLayout:
     active_slot: pygame.Rect | None
     max_scroll: int
     fallback_slot: pygame.Rect | None = None
-
-
-def fit_wrapped(
-    text: str, width: int, sizes: tuple[int, ...], max_lines: int
-) -> tuple[pygame.font.Font, tuple[str, ...]]:
-    """The largest size whose words each fit ``width`` within ``max_lines`` lines.
-
-    Words are never split mid-word unless even the smallest size cannot fit one;
-    then the final line is shortened with an ellipsis.
-    """
-    for size in sizes:
-        font = plain_font(size)
-        if all(font.size(word)[0] <= width for word in text.split()):
-            lines = wrap_text_lines(text, font, width)
-            if len(lines) <= max_lines:
-                return font, lines
-    font = plain_font(sizes[-1])
-    lines = wrap_text_lines(text, font, width)
-    if len(lines) > max_lines:
-        lines = (*lines[: max_lines - 1], fit_text(" ".join(lines[max_lines - 1:]), font, width))
-    return font, lines
 
 
 def active_group(
@@ -491,18 +471,13 @@ class HandView:
         fill = MATCH_PANEL_HIGH if bonus is None else mix(MATCH_PANEL_HIGH, MATCH_GOLD, 0.12)
         edge = MATCH_FOCUS if highlighted or active_slot else (
             MATCH_GOLD if bonus is not None else MATCH_PANEL_EDGE)
-        pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=9)
-        pygame.draw.rect(surface, fill, rect, border_radius=9)
-        pygame.draw.rect(surface, edge, rect, 3 if highlighted or active_slot else 2, border_radius=9)
         border = 3 if highlighted or active_slot else 2
-        pygame.draw.rect(surface, band, (rect.left + border + 4, rect.top + border + 1,
-                                         rect.width - 2 * border - 8, 4), border_radius=2)
-
-        inner = rect.inflate(-12, 0)
-        tile_height = min(round(inner.width * 0.78), 90)
-        tile = pygame.Rect(inner.left, rect.top + 12, inner.width, tile_height)
-        draw_card_art(surface, art, tile)
-        stats = pygame.Rect(inner.left - 2, rect.bottom - 48, inner.width + 4, 42)
+        inner, tile, stats = draw_card_shell(
+            surface, rect, art=art, band=band, fill=fill, edge=edge, border=border,
+            tile_height=min(round((rect.width - 12) * 0.78), 90), stats_height=42,
+            stats_bottom_gap=6,
+            art_drawer=lambda target, name, tile_rect: draw_card_art(target, name, tile_rect),
+        )
         text_box = pygame.Rect(inner.left, tile.bottom, inner.width, stats.top - tile.bottom)
         y = tile.bottom + 5
         name = self._card_name(card, group).upper()
@@ -550,17 +525,7 @@ class HandView:
                 (preview.clock, "CLOCK" if preview.live else "BASE CLOCK"),
             )
             if stats.width >= 84:
-                half = stats.width // 2
-                for index, (value, caption) in enumerate(rows):
-                    cell = pygame.Rect(stats.left + index * half, stats.top, half, stats.height)
-                    value_font = plain_font(17)
-                    blit_text(surface, value_font, fit_text(value, value_font, cell.width - 4), MATCH_TEXT,
-                              cell, midtop=(cell.centerx, cell.top + 3))
-                    caption_font = plain_font(9)
-                    blit_text(surface, caption_font, fit_text(caption, caption_font, cell.width - 2),
-                              MATCH_MUTED, cell, midbottom=(cell.centerx, cell.bottom - 3))
-                pygame.draw.line(surface, MATCH_PANEL_EDGE_SOFT, (stats.centerx, stats.top + 6),
-                                 (stats.centerx, stats.bottom - 6))
+                draw_two_cells(surface, stats, rows)
             else:
                 # Narrow cards stack the two values as rows.
                 for index, (value, caption) in enumerate(rows):

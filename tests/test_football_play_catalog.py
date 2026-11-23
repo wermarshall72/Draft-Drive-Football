@@ -232,7 +232,7 @@ def test_all_play_and_scheme_catalog_offers_are_common_without_changing_player_r
     )
 
 
-def test_named_play_is_replaced_after_purchase_and_can_return_next_day() -> None:
+def test_named_play_stays_purchased_and_can_return_next_day() -> None:
     definition = OFFENSIVE_PLAY_CATALOG["go_route"]
     card = _shop_card(definition, kind="play")
     replacement = _shop_card(OFFENSIVE_PLAY_CATALOG["rb_run"], kind="play")
@@ -250,8 +250,8 @@ def test_named_play_is_replaced_after_purchase_and_can_return_next_day() -> None
 
     shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
     slots = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots
-    assert all(slot.card is replacement for slot in slots[:4])
-    with pytest.raises(ValueError, match="not in the current offer"):
+    assert all(slot.card is card and slot.purchased for slot in slots[:4])
+    with pytest.raises(ValueError, match="already been purchased"):
         shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
 
     shop.move_to_next_day()

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import lru_cache
 
 import pygame
 
@@ -40,7 +39,7 @@ from src.ui.football_match_outcome import (
     status_prompt,
 )
 from src.ui.football_match_palette import (
-    MATCH_CANVAS, MATCH_CANVAS_GLOW, MATCH_DANGER, MATCH_FOCUS, MATCH_INK, MATCH_PANEL,
+    MATCH_CANVAS, MATCH_DANGER, MATCH_FOCUS, MATCH_INK, MATCH_PANEL,
     MATCH_PANEL_EDGE, MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, match_font,
 )
 from src.ui.football_match_piles import draw_pile_panel
@@ -50,6 +49,7 @@ from src.ui.football_match_popups import (
     draw_pause_menu, draw_pile_popup, draw_popup_button,
 )
 from src.ui.football_match_scoreboard import SCOREBOARD_HEIGHT, draw_scoreboard
+from src.ui.football_ui_kit import stadium_backdrop
 from src.ui.text import fit_text
 from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button
@@ -80,27 +80,7 @@ class MatchActions:
     end_run: Callable[[], None]
 
 
-@lru_cache(maxsize=2)
-def _backdrop(size: tuple[int, int]) -> pygame.Surface:
-    """Navy stadium night: a soft glow under the lights and light-tower flares."""
-    surface = pygame.Surface(size)
-    surface.fill(MATCH_CANVAS)
-    width, height = size
-    glow = pygame.Surface(size, pygame.SRCALPHA)
-    for radius, alpha in ((560, 22), (420, 26), (300, 30)):
-        pygame.draw.ellipse(glow, (*MATCH_CANVAS_GLOW[:3], alpha),
-                            pygame.Rect(width // 2 - radius, -radius // 2, radius * 2, radius))
-    surface.blit(glow, (0, 0))
-    for x in (40, width - 40):
-        flare = pygame.Surface((180, 140), pygame.SRCALPHA)
-        for radius, alpha in ((80, 18), (52, 26), (28, 40)):
-            pygame.draw.circle(flare, (190, 220, 255, alpha), (90, 50), radius)
-        surface.blit(flare, (x - 90, -20))
-    # A faint crowd band behind the hands.
-    for y in range(height - 260, height, 6):
-        shade = 12 + (y % 18)
-        pygame.draw.line(surface, (shade // 2, 20 + shade // 3, 40 + shade // 2), (0, y), (width, y), 1)
-    return surface
+_backdrop = stadium_backdrop
 
 
 class FootballMatchScreen:
@@ -192,6 +172,9 @@ class FootballMatchScreen:
         self._thaw()
 
     def back_from_popup(self) -> None:
+        if self.popup.kind == DEPTH and self.popup.review.team_popup:
+            self.popup.review.close_team_upgrades()
+            return
         if self._popup_from_pause and self.popup.kind in (DEPTH, LOG):
             self.popup.show(PAUSE)
             self._popup_from_pause = False

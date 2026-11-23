@@ -223,7 +223,7 @@ def test_all_bonus_types_render_as_tactical_cards_in_the_offensive_hand(
             assert card.copy_id not in interaction.card_rects
 
 
-def test_bonus_shop_purchase_replaces_offer_and_adds_offensive_copy() -> None:
+def test_bonus_shop_purchase_stays_purchased_and_adds_offensive_copy() -> None:
     shop = FootballShop(_roster("Shop"), seed=105)
     card = next(
         card
@@ -233,21 +233,18 @@ def test_bonus_shop_purchase_replaces_offer_and_adds_offensive_copy() -> None:
     shop._offers[FootballShopSection.PLAYS_SCHEMES] = [card, None, None, None]
 
     shop.buy_card(FootballShopSection.PLAYS_SCHEMES, card.card_id)
-    replacement = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0].card
+    slot = shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0]
     copies = tuple(
         owned
         for owned in shop.offensive_deck
         if owned.card_id == FootballBonusCardAction.OFFENSIVE_DRAW.value
     )
 
-    assert replacement is not None
-    assert replacement.card_id != card.card_id
-    assert replacement in shop._catalogs[FootballShopSection.PLAYS_SCHEMES]
+    assert slot.card is card and slot.purchased
     assert len(copies) == 1
     assert len({copy.copy_id for copy in copies}) == 1
     assert len(shop.defensive_deck) == 6
     assert shop.remaining_ap == 10
-    assert not shop.state.section(FootballShopSection.PLAYS_SCHEMES).slots[0].purchased
 
 
 @pytest.mark.parametrize(

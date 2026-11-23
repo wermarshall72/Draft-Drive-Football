@@ -23,29 +23,21 @@ from src.engine.football_shop import (
     FootballShopRarity,
     FootballShopState,
 )
-from src.engine.football_simulator import calculate_standardized_play_estimate
-from src.ui.coach_fonts import staff_font
-from src.ui.football_card_art import (
-    bonus_card_art,
-    draw_card_art,
-    play_card_art,
-    scheme_card_art,
+from src.ui.football_card_art import draw_card_art
+from src.ui.football_card_faces import card_art_name, draw_play_card_face
+from src.ui.football_inspect import bonus_inspect, play_inspect, scheme_inspect
+from src.ui.football_ui_kit import (
+    MATCH_DANGER, MATCH_DIM, MATCH_INK, MATCH_MUTED, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE,
+    MATCH_PANEL_EDGE_SOFT, MATCH_TEXT, PaintedButton, blit_text, draw_focus_ring,
+    draw_message_banner, kit_button, mix, plain_font, rarity_color, team_accent,
 )
 from src.ui.football_depth_chart import draw_depth_chart
 from src.ui.football_display import _POSITION_LABELS
 from src.ui.football_shop_review import ShopReviewInteraction
-from src.ui.text import draw_complete_wrapped_text, wrap_text_lines
-from src.ui.stat_icons import without_stat_icons
-from src.ui.theme import Theme, readable_ink, relative_luminance
-from src.ui.widgets import Button, draw_panel, draw_text
+from src.ui.text import fit_text
+from src.ui.theme import Theme
+from src.ui.widgets import Button
 
-_PLAYBOOK_FILL = pygame.Color("#13283d")
-_RARITY_COLORS = {
-    FootballShopRarity.COMMON: pygame.Color("#a8b2a1"),
-    FootballShopRarity.UNCOMMON: pygame.Color("#68c58a"),
-    FootballShopRarity.RARE: pygame.Color("#df786d"),
-    FootballShopRarity.VERY_RARE: pygame.Color("#c18be8"),
-}
 _RARITY_LABELS = {
     None: "ALL RARITIES",
     FootballShopRarity.COMMON: "COMMON",
@@ -112,70 +104,12 @@ def _playbook_entries(shop: FootballShopState) -> list[_PlaybookEntry]:
     return entries
 
 
-def _category_border_color(color: pygame.Color, background: pygame.Color) -> pygame.Color:
-    """Keep the selected team hue while lifting low-contrast borders."""
-    background_luminance = relative_luminance(background)
-    target = readable_ink(background)
-    current = pygame.Color(color)
-    for step in range(1, 9):
-        luminance = relative_luminance(current)
-        ratio = (max(luminance, background_luminance) + 0.05) / (
-            min(luminance, background_luminance) + 0.05
-        )
-        if ratio >= 2.5:
-            return current
-        amount = step / 8
-        current = pygame.Color(
-            round(color.r + (target.r - color.r) * amount),
-            round(color.g + (target.g - color.g) * amount),
-            round(color.b + (target.b - color.b) * amount),
-        )
-    return current
-
-
-def _draw_dashed_border(
-    surface: pygame.Surface,
-    rect: pygame.Rect,
-    colors: tuple[pygame.Color, pygame.Color],
-) -> None:
-    inner = rect.inflate(-4, -4)
-    dash_length = 9
-    step = 15
-    dash_index = 0
-    for start, end in (
-        ((inner.left, inner.top), (inner.right, inner.top)),
-        ((inner.right, inner.top), (inner.right, inner.bottom)),
-        ((inner.right, inner.bottom), (inner.left, inner.bottom)),
-        ((inner.left, inner.bottom), (inner.left, inner.top)),
-    ):
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-        length = max(abs(dx), abs(dy))
-        for offset in range(0, length, step):
-            finish = min(length, offset + dash_length)
-            first = (
-                round(start[0] + dx * offset / length),
-                round(start[1] + dy * offset / length),
-            )
-            last = (
-                round(start[0] + dx * finish / length),
-                round(start[1] + dy * finish / length),
-            )
-            pygame.draw.line(
-                surface,
-                colors[dash_index % len(colors)],
-                first,
-                last,
-                3,
-            )
-            dash_index += 1
-
-
 class FootballReviewView:
     def __init__(
         self, theme: Theme, small_font: pygame.font.Font, label_font: pygame.font.Font,
         interaction: ShopReviewInteraction, leave: Callable[[], None],
         remove: Callable[[str], None],
+        error: str | None = None,
     ) -> None:
         self.theme = theme
         self._small_font = small_font
@@ -183,12 +117,7 @@ class FootballReviewView:
         self.interaction = interaction
         self.leave = leave
         self.remove = remove
-        self._title_font = staff_font(26, semibold=True)
-        self._card_title_font = staff_font(20, semibold=True)
-        self._meta_font = staff_font(14, semibold=True)
-        self._detail_font = staff_font(13)
-        self._description_font = staff_font(14)
-        self._badge_font = staff_font(12, semibold=True)
+        self.error = error
 
     def draw_depth_chart(
         self, surface: pygame.Surface, content: pygame.Rect,
@@ -196,7 +125,7 @@ class FootballReviewView:
     ) -> list[Button]:
         return draw_depth_chart(
             surface, content, state, self.theme, self._small_font,
-            self._label_font, self.interaction, self.leave,
+            self._label_font, self.interaction, self.leave, error=self.error,
         )
 
     def draw_playbook(
@@ -204,6 +133,9 @@ class FootballReviewView:
         surface: pygame.Surface,
         content: pygame.Rect,
         shop: FootballShopState | None,
+        *,
+        hover_key: object | None = None,
+        focus_key: object | None = None,
     ) -> list[Button]:
         if shop is None:
             raise RuntimeError("The controller did not provide the active shop state.")
@@ -226,357 +158,186 @@ class FootballReviewView:
                 or entry.rarity is self.interaction.playbook_rarity
             )
         ]
-        title_y = content.top + 2
-        draw_text(
-            surface,
-            "PLAYBOOK",
-            (content.left + 2, title_y),
-            self._title_font,
-            self.theme.text,
-        )
-        draw_text(
-            surface,
-            "View your deck of plays",
-            (content.left + 3, title_y + 34),
-            self._label_font,
-            self.theme.muted,
-        )
-        if removal is not None:
-            message = pygame.Rect(content.right - 386, content.top + 2, 384, 58)
-            draw_panel(surface, message, self.theme, fill=self.theme.panel)
-            draw_text(
-                surface,
-                "REMOVAL MODE",
-                (message.left + 12, message.top + 7),
-                self._meta_font,
-                self.theme.secondary_accent,
-            )
-            draw_text(
-                surface,
-                f"Select a copy to remove · {removal.cost} AP on confirmation",
-                (message.left + 12, message.top + 29),
-                self._detail_font,
-                self.theme.text,
-            )
-
-        filter_top = content.top + 74
-        toolbar = pygame.Rect(content.left, filter_top, content.width, 48)
-        draw_panel(surface, toolbar, self.theme, fill=self.theme.panel)
-        filter_gap = 12
-        filter_width = (toolbar.width - 2 * filter_gap - 20) // 3
-        filter_left = toolbar.left + 10
-        category_label = (
-            f"CATEGORY: {_CATEGORY_LABELS[self.interaction.playbook_category]}"
-        )
-        position_label = (
-            "POSITION: ALL POSITIONS"
-            if self.interaction.playbook_position is None
-            else f"POSITION: {_POSITION_LABELS[self.interaction.playbook_position].upper()}"
-        )
-        rarity_label = f"RARITY: {_RARITY_LABELS[self.interaction.playbook_rarity]}"
-        filter_actions = (
-            (
-                category_label,
-                self.interaction.cycle_playbook_category,
-                self.interaction.playbook_category != "all",
-            ),
-            (
-                position_label,
-                self.interaction.cycle_playbook_position,
-                self.interaction.playbook_position is not None,
-            ),
-            (
-                rarity_label,
-                self.interaction.cycle_playbook_rarity,
-                self.interaction.playbook_rarity is not None,
-            ),
-        )
-        buttons: list[Button] = []
-        for index, (label, action, active) in enumerate(filter_actions):
-            buttons.append(
-                Button(
-                    label,
-                    action,
-                    pygame.Rect(
-                        filter_left + index * (filter_width + filter_gap),
-                        toolbar.top + 6,
-                        filter_width,
-                        toolbar.height - 12,
-                    ),
-                    variant="primary" if active else "quiet",
-                )
-            )
-
-        list_top = toolbar.bottom + 16
-        footer_top = content.bottom - 42
-        list_bottom = footer_top - 12
-        list_height = max(1, list_bottom - list_top)
-        card_gap_x = 12
-        card_gap_y = 10
-        card_width = (content.width - card_gap_x) // 2
-        card_height = min(148, max(104, (list_height - 2 * card_gap_y) // 3))
-        visible_rows = max(
-            1,
-            (list_height + card_gap_y) // (card_height + card_gap_y),
-        )
-        primary_border = _category_border_color(self.theme.primary, _PLAYBOOK_FILL)
-        secondary_border = _category_border_color(
-            self.theme.secondary, _PLAYBOOK_FILL
-        )
-        total_rows = (len(filtered) + 1) // 2
-        self.interaction.playbook_page_size = visible_rows
-        self.interaction.playbook_max_scroll = max(0, total_rows - visible_rows)
-        self.interaction.playbook_scroll = min(
-            self.interaction.playbook_scroll,
-            self.interaction.playbook_max_scroll,
-        )
-        visible_start = self.interaction.playbook_scroll * 2
-        visible_entries = filtered[visible_start : visible_start + visible_rows * 2]
+        accent = team_accent(self.theme.primary)
+        title = blit_text(surface, plain_font(30), "PLAYBOOK", MATCH_TEXT, content,
+                          topleft=(content.left, content.top))
+        pygame.draw.rect(surface, accent, (title.right + 10, title.centery - 2, 34, 4), border_radius=2)
         deck_sizes = {
             "offense": len(shop.offensive_deck),
             "special": len(shop.offensive_deck),
             "defense": len(shop.defensive_deck),
         }
-        counts = Counter(
-            (entry.category, entry.copy.card_id) for entry in entries
+        chip_x = content.left
+        for text in (f"OFFENSE {len(shop.offensive_deck)}", f"DEFENSE {len(shop.defensive_deck)}",
+                     f"MIN {MIN_PLAYBOOK_DECK_SIZE} EACH"):
+            font = plain_font(12)
+            chip = pygame.Rect(chip_x, content.top + 38, font.size(text)[0] + 16, 20)
+            pygame.draw.rect(surface, MATCH_PANEL_DEEP, chip, border_radius=10)
+            pygame.draw.rect(surface, MATCH_PANEL_EDGE, chip, 1, border_radius=10)
+            blit_text(surface, font, text, MATCH_MUTED if text.startswith("MIN") else MATCH_TEXT,
+                      chip.inflate(2, 2), center=chip.center)
+            chip_x = chip.right + 6
+        if removal is not None:
+            banner = pygame.Rect(content.left + 420, content.top + 2, content.width - 420, 50)
+            draw_message_banner(
+                surface, banner,
+                f"REMOVAL MODE · PICK THE COPY TO REMOVE · {removal.cost} AP WHEN CONFIRMED",
+            )
+
+        toolbar_top = content.top + 68
+        filter_actions = (
+            (f"CATEGORY · {_CATEGORY_LABELS[self.interaction.playbook_category]}",
+             self.interaction.cycle_playbook_category, self.interaction.playbook_category != "all"),
+            ("POSITION · ALL POSITIONS" if self.interaction.playbook_position is None
+             else f"POSITION · {_POSITION_LABELS[self.interaction.playbook_position]}",
+             self.interaction.cycle_playbook_position, self.interaction.playbook_position is not None),
+            (f"RARITY · {_RARITY_LABELS[self.interaction.playbook_rarity]}",
+             self.interaction.cycle_playbook_rarity, self.interaction.playbook_rarity is not None),
         )
+        filter_buttons: list[Button] = []
+        for index, (label, action, active) in enumerate(filter_actions):
+            filter_buttons.append(kit_button(
+                label, action, pygame.Rect(content.left + index * 262, toolbar_top, 252, 38),
+                variant="kit-toggle-on" if active else "kit",
+            ))
+
+        # Cards come first in focus order; filters and Back follow.
+        buttons: list[Button] = []
+        list_top = toolbar_top + 52
+        footer_top = content.bottom - 42
+        list_bottom = footer_top - 12
+        list_height = max(1, list_bottom - list_top)
+        columns = 6
+        card_gap_x = 10
+        card_gap_y = 12
+        card_width = (content.width - card_gap_x * (columns - 1)) // columns
+        card_height = min(262, max(220, (list_height - card_gap_y) // 2))
+        visible_rows = max(1, (list_height + card_gap_y) // (card_height + card_gap_y))
+        total_rows = (len(filtered) + columns - 1) // columns
+        self.interaction.playbook_page_size = visible_rows
+        self.interaction.playbook_max_scroll = max(0, total_rows - visible_rows)
+        self.interaction.playbook_scroll = min(
+            self.interaction.playbook_scroll, self.interaction.playbook_max_scroll,
+        )
+        visible_start = self.interaction.playbook_scroll * columns
+        visible_entries = filtered[visible_start: visible_start + visible_rows * columns]
+        counts = Counter((entry.category, entry.copy.card_id) for entry in entries)
         copy_numbers: dict[str, int] = {}
         seen: Counter[tuple[str, str]] = Counter()
         for entry in entries:
             copy_key = (entry.category, entry.copy.card_id)
             seen[copy_key] += 1
             copy_numbers[entry.copy.copy_id] = seen[copy_key]
+        blit_text(
+            surface, plain_font(12),
+            f"{len(filtered)} OWNED COPIES" + (
+                f"  ·  ROWS {self.interaction.playbook_scroll + 1}-"
+                f"{min(total_rows, self.interaction.playbook_scroll + visible_rows)} OF {total_rows}"
+                if self.interaction.playbook_max_scroll else ""
+            ),
+            MATCH_MUTED, content, midright=(content.right, toolbar_top + 19),
+        )
 
+        contents: dict[object, tuple] = {}
         for index, entry in enumerate(visible_entries):
-            row_index, column = divmod(index, 2)
-            row = pygame.Rect(
+            row_index, column = divmod(index, columns)
+            rect = pygame.Rect(
                 content.left + column * (card_width + card_gap_x),
                 list_top + row_index * (card_height + card_gap_y),
-                card_width,
-                card_height,
+                card_width, card_height,
             )
-            pygame.draw.rect(
-                surface,
-                self.theme.shadow,
-                row.move(0, 3),
-                border_radius=10,
-            )
-            pygame.draw.rect(surface, _PLAYBOOK_FILL, row, border_radius=10)
-            pygame.draw.rect(
-                surface,
-                self.theme.border_soft,
-                row,
-                width=1,
-                border_radius=10,
-            )
-            if entry.category == "special":
-                _draw_dashed_border(
-                    surface, row, (primary_border, secondary_border)
-                )
-                category_label_text = "SPECIAL CARD"
-            elif entry.category == "offense":
-                pygame.draw.rect(
-                    surface,
-                    primary_border,
-                    row.inflate(-2, -2),
-                    width=3,
-                    border_radius=9,
-                )
-                category_label_text = "OFFENSIVE PLAY"
+            can_remove = pending and deck_sizes[entry.category] > MIN_PLAYBOOK_DECK_SIZE
+            key = ("playbook", entry.copy.copy_id)
+            art = card_art_name(entry.definition)
+            painter = lambda target, r, name=art: draw_card_art(target, name, r)  # noqa: E731
+            copy_text = f"Copy {copy_numbers[entry.copy.copy_id]} of {counts[(entry.category, entry.copy.card_id)]}"
+            extra = (("Copy", copy_text),)
+            if isinstance(entry.definition, FootballPlayDefinition):
+                contents[key] = (play_inspect(entry.definition, entry.rarity, None, painter, extra), rect)
+            elif isinstance(entry.definition, FootballSchemeDefinition):
+                contents[key] = (scheme_inspect(entry.definition, entry.rarity, None, painter, extra), rect)
             else:
-                pygame.draw.rect(
-                    surface,
-                    secondary_border,
-                    row.inflate(-2, -2),
-                    width=4,
-                    border_radius=9,
-                )
-                category_label_text = "DEFENSIVE SCHEME"
-
-            if entry.category == "special":
-                art_name = bonus_card_art(entry.definition.action)
-                detail = ""
-                copy_type = "PLAYABLE BONUS"
-                description = entry.definition.description
-            elif entry.category == "offense":
-                assert isinstance(entry.definition, FootballPlayDefinition)
-                art_name = play_card_art(entry.definition.family)
-                contributors = ", ".join(
-                    _POSITION_LABELS[position]
-                    for position in entry.definition.contributors
-                )
-                expected_yards = calculate_standardized_play_estimate(
-                    entry.definition.action
-                ).expected_yards
-                detail = (
-                    f"{contributors}  ·  NEUTRAL ~{expected_yards:.1f} YDS  ·  "
-                    f"BASE {entry.definition.clock_seconds}s"
-                )
-                copy_type = entry.definition.family.label.upper()
-                description = entry.definition.description
-            else:
-                assert isinstance(entry.definition, FootballSchemeDefinition)
-                art_name = scheme_card_art(entry.definition.family)
-                contributors = ", ".join(
-                    _POSITION_LABELS[position]
-                    for position in entry.definition.contributors
-                )
-                detail = (
-                    f"{contributors}  ·  {entry.definition.family.label.upper()}  /  "
-                    f"COUNTERS {entry.definition.family.label.upper()}"
-                )
-                copy_type = entry.definition.family.label.upper()
-                description = entry.definition.description
-
-            art_rect = pygame.Rect(row.left + 12, row.centery - 39, 78, 78)
-            draw_card_art(surface, art_name, art_rect)
-            text_left = row.left + 102
-            side_width = 116
-            text_width = row.right - side_width - 14 - text_left
-            draw_text(
-                surface,
-                entry.definition.name,
-                (text_left, row.top + 10),
-                without_stat_icons(self._card_title_font),
-                self.theme.text,
-            )
-            copy_label = (
-                f"{category_label_text}  ·  {copy_type}  ·  COPY "
-                f"{copy_numbers[entry.copy.copy_id]} OF "
-                f"{counts[(entry.category, entry.copy.card_id)]}"
-            )
-            draw_text(
-                surface,
-                copy_label,
-                (text_left, row.top + 36),
-                self._meta_font,
-                (
-                    self.theme.secondary_accent
-                    if entry.category == "special"
-                    else primary_border
-                    if entry.category == "offense"
-                    else secondary_border
-                ),
-            )
-
-            details_y = row.top + 56
-            if detail:
-                detail_lines = wrap_text_lines(
-                    detail, self._detail_font, text_width
-                )
-                detail_height = len(detail_lines) * (
-                    self._detail_font.get_height() + 1
-                )
-                draw_complete_wrapped_text(
-                    surface,
-                    detail,
-                    pygame.Rect(text_left, details_y, text_width, detail_height),
-                    self._detail_font,
-                    self.theme.muted,
-                    line_gap=1,
-                )
-                description_y = details_y + detail_height + 3
-            else:
-                description_y = details_y
-            description_rect = pygame.Rect(
-                text_left,
-                description_y,
-                text_width,
-                row.bottom - 9 - description_y,
-            )
-            draw_complete_wrapped_text(
-                surface,
-                description,
-                description_rect,
-                self._description_font,
-                self.theme.text,
-                line_gap=1,
-            )
-
-            rarity_color = _RARITY_COLORS[entry.rarity]
-            rarity_label = entry.rarity.value.replace("_", " ").upper()
-            badge = pygame.Rect(row.right - 108, row.top + 19, 96, 27)
-            pygame.draw.rect(
-                surface,
-                rarity_color,
-                badge,
-                border_radius=7,
-            )
-            pygame.draw.rect(
-                surface,
-                self.theme.canvas_lift,
-                badge,
-                width=1,
-                border_radius=7,
-            )
-            rarity_text_width = self._badge_font.size(rarity_label)[0]
-            draw_text(
-                surface,
-                rarity_label,
-                (
-                    badge.centerx - rarity_text_width // 2,
-                    badge.centery - self._badge_font.get_height() // 2,
-                ),
-                self._badge_font,
-                readable_ink(rarity_color),
-            )
-            if pending:
-                can_remove = deck_sizes[entry.category] > MIN_PLAYBOOK_DECK_SIZE
-                buttons.append(
-                    Button(
-                        "REMOVE",
-                        lambda copy_id=entry.copy.copy_id: self.remove(copy_id),
-                        pygame.Rect(row.right - 108, row.bottom - 40, 96, 28),
-                        enabled=can_remove,
-                        variant="quiet",
-                    )
-                )
+                contents[key] = (bonus_inspect(entry.definition, entry.rarity, None, painter, extra), rect)
+            remove_rect = pygame.Rect(rect.left + 8, rect.bottom - 38, rect.width - 16, 30)
+            buttons.append(PaintedButton(
+                "REMOVE" if pending else entry.definition.name.upper(),
+                (lambda copy_id=entry.copy.copy_id, allowed=can_remove:
+                 self.remove(copy_id) if allowed else None),
+                rect,
+                variant="playbook-card",
+                click_rect=remove_rect if pending else pygame.Rect(rect.left, rect.top, 0, 0),
+                painter=(lambda target, button, hovered, pressed, e=entry, removable=can_remove,
+                         number=copy_numbers[entry.copy.copy_id],
+                         total=counts[(entry.category, entry.copy.card_id)]:
+                         self._paint_card(target, button, e, hovered, pressed, pending=pending,
+                                          removable=removable, number=number, total=total)),
+            ))
+            buttons[-1].inspect_key = key
+            buttons[-1].removable = can_remove
+            buttons[-1].copy_id = entry.copy.copy_id
+            buttons[-1].card_id = entry.copy.card_id
 
         if not filtered:
-            empty_rect = pygame.Rect(
-                content.left + 12,
-                list_top + 8,
-                content.width - 24,
-                list_height - 16,
-            )
-            draw_panel(surface, empty_rect, self.theme, fill=self.theme.panel)
-            empty_title = "No cards match these filters."
-            empty_title_width = self._card_title_font.size(empty_title)[0]
-            draw_text(
-                surface,
-                empty_title,
-                (empty_rect.centerx - empty_title_width // 2, empty_rect.centery - 25),
-                self._card_title_font,
-                self.theme.text,
-            )
-            empty_hint = "Try another category, position, or rarity."
-            empty_hint_width = self._label_font.size(empty_hint)[0]
-            draw_text(
-                surface,
-                empty_hint,
-                (empty_rect.centerx - empty_hint_width // 2, empty_rect.centery + 8),
-                self._label_font,
-                self.theme.muted,
-            )
+            empty_rect = pygame.Rect(content.left, list_top, content.width, list_height)
+            pygame.draw.rect(surface, MATCH_PANEL_DEEP, empty_rect, border_radius=12)
+            pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, empty_rect, 2, border_radius=12)
+            blit_text(surface, plain_font(20), "NO CARDS MATCH THESE FILTERS", MATCH_TEXT, empty_rect,
+                      center=(empty_rect.centerx, empty_rect.centery - 12))
+            blit_text(surface, plain_font(13, False), "Try another category, position, or rarity.",
+                      MATCH_MUTED, empty_rect, center=(empty_rect.centerx, empty_rect.centery + 16))
 
-        buttons.append(
-            Button(
-                "CANCEL SELECTION" if pending else "BACK TO SHOP",
-                self.leave,
-                pygame.Rect(content.right - 212, footer_top, 212, 36),
-                variant="primary",
-            )
-        )
-        count_text = (
-            f"{len(filtered)} OWNED COPIES  ·  MOUSE WHEEL / PAGE UP / PAGE DOWN TO BROWSE"
-        )
+        buttons.extend(filter_buttons)
+        buttons.append(kit_button(
+            "CANCEL SELECTION" if pending else "BACK TO SHOP", self.leave,
+            pygame.Rect(content.right - 212, footer_top, 212, 42), variant="kit-primary",
+        ))
+        hint = "WHEEL / PAGE UP / PAGE DOWN TO BROWSE  ·  HOVER OR PRESS I FOR DETAILS"
         if pending:
-            count_text += "  ·  EACH DECK KEEPS AT LEAST 4 CARDS"
-        draw_text(
-            surface,
-            count_text,
-            (content.left + 2, footer_top + 11),
-            self._small_font,
-            self.theme.muted,
-        )
+            hint += "  ·  EACH DECK KEEPS AT LEAST 4 CARDS"
+        hint_box = pygame.Rect(content.left, footer_top, content.width - 228, 42)
+        hint_font = plain_font(12)
+        if self.error:
+            hint, hint_color = f"CHECK: {self.error}", MATCH_DANGER
+        else:
+            hint_color = MATCH_MUTED
+        blit_text(surface, hint_font, fit_text(hint, hint_font, hint_box.width), hint_color, hint_box,
+                  midleft=(hint_box.left + 2, hint_box.centery))
+        close = self.interaction.inspect.prepare(contents, hover_key, focus_key)
+        if close is not None:
+            buttons.append(close)
         return buttons
+
+    def _paint_card(self, surface: pygame.Surface, button: PaintedButton, entry: "_PlaybookEntry",
+                    hovered: bool, pressed: bool, *, pending: bool, removable: bool,
+                    number: int, total: int) -> None:
+        highlighted = hovered or (button.focused and self.interaction.inspect.keyboard)
+        rect = button.rect.move(0, -5 if highlighted and not pressed else 0)
+        if highlighted:
+            draw_focus_ring(surface, rect, 9)
+        draw_play_card_face(surface, rect, entry.definition, entry.rarity, bottom_gap=44)
+        footer = pygame.Rect(rect.left + 8, rect.bottom - 38, rect.width - 16, 30)
+        if total > 1:
+            badge_font = plain_font(11)
+            text = f"{number}/{total}"
+            badge = pygame.Rect(0, 0, badge_font.size(text)[0] + 12, 18)
+            badge.topleft = (rect.left + 8, rect.top + 12)
+            pygame.draw.rect(surface, MATCH_INK, badge, border_radius=7)
+            blit_text(surface, badge_font, text, MATCH_TEXT, badge.inflate(2, 2), center=badge.center)
+        if not pending:
+            label_font = plain_font(13)
+            blit_text(surface, label_font, _RARITY_LABELS[entry.rarity], rarity_color(entry.rarity), footer,
+                      midleft=(footer.left + 2, footer.centery))
+            copy_font = plain_font(11, False)
+            blit_text(surface, copy_font, f"COPY {number} OF {total}", MATCH_MUTED, footer,
+                      midright=(footer.right - 2, footer.centery))
+            return
+        draw_rect = footer.move(0, 2) if pressed and removable else footer
+        if removable:
+            fill = mix(MATCH_DANGER, MATCH_PANEL_DEEP, 0.15 if highlighted else 0.3)
+            edge, ink = MATCH_DANGER, MATCH_INK
+        else:
+            fill, edge, ink = MATCH_PANEL_DEEP, MATCH_PANEL_EDGE_SOFT, MATCH_DIM
+        pygame.draw.rect(surface, fill, draw_rect, border_radius=7)
+        pygame.draw.rect(surface, edge, draw_rect, 2, border_radius=7)
+        blit_text(surface, plain_font(15), "REMOVE" if removable else "DECK AT MIN", ink, draw_rect,
+                  center=draw_rect.center)

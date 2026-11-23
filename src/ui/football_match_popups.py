@@ -20,12 +20,13 @@ from src.ui.football_match_events import (
 from src.ui.football_match_outcome import OUTCOME_COLORS
 from src.ui.football_match_palette import (
     MATCH_CANVAS, MATCH_DANGER, MATCH_DIM, MATCH_FOCUS, MATCH_GOLD, MATCH_INK,
-    MATCH_MUTED, MATCH_PANEL, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT,
+    MATCH_MUTED, MATCH_PANEL, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT,
     MATCH_PANEL_HIGH, MATCH_TEXT, match_font, plain_font,
 )
 from src.ui.football_match_piles import card_label, pile_cards
 from src.ui.football_match_scoreboard import clock_text
 from src.ui.football_shop_review import ShopReviewInteraction
+from src.ui.football_ui_kit import draw_popup_button, draw_popup_panel, draw_veil  # noqa: F401  (re-exported)
 from src.ui.text import fit_text
 from src.ui.theme import Theme
 from src.ui.widgets import Button
@@ -92,45 +93,8 @@ class PopupState:
         return True
 
 
-def _veil(surface: pygame.Surface) -> None:
-    overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-    overlay.fill((*MATCH_CANVAS[:3], 205))
-    surface.blit(overlay, (0, 0))
-
-
-def _panel(surface: pygame.Surface, rect: pygame.Rect, title: str, subtitle: str) -> pygame.Rect:
-    pygame.draw.rect(surface, MATCH_INK, rect.move(0, 6), border_radius=16)
-    pygame.draw.rect(surface, MATCH_PANEL_DEEP, rect, border_radius=16)
-    pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=16)
-    title_surface = plain_font(28).render(title, True, MATCH_TEXT)
-    surface.blit(title_surface, (rect.left + 24, rect.top + 16))
-    if subtitle:
-        sub = match_font(13, False).render(subtitle, True, MATCH_MUTED)
-        surface.blit(sub, (rect.left + 26, rect.top + 52))
-    pygame.draw.line(surface, MATCH_PANEL_EDGE_SOFT, (rect.left + 20, rect.top + 76),
-                     (rect.right - 20, rect.top + 76))
-    return pygame.Rect(rect.left + 20, rect.top + 86, rect.width - 40, rect.height - 86 - 64)
-
-
-def draw_popup_button(
-    surface: pygame.Surface, button: Button, *, focused: bool, hovered: bool, pressed: bool
-) -> None:
-    rect = button.rect.move(0, 2) if pressed else button.rect
-    primary = button.variant == "popup-primary"
-    danger = button.variant == "popup-danger"
-    if primary:
-        fill = MATCH_FOCUS
-        ink = MATCH_INK
-    else:
-        fill = MATCH_PANEL_HIGH if focused or hovered else MATCH_PANEL
-        ink = MATCH_DANGER if danger else MATCH_TEXT
-    if focused:
-        pygame.draw.rect(surface, MATCH_TEXT, rect.inflate(6, 6), 2, border_radius=11)
-    pygame.draw.rect(surface, fill, rect, border_radius=9)
-    pygame.draw.rect(surface, MATCH_FOCUS if focused else MATCH_PANEL_EDGE, rect, 2, border_radius=9)
-    font = match_font(17)
-    label = font.render(fit_text(button.label, font, rect.width - 20), True, ink)
-    surface.blit(label, label.get_rect(center=rect.center))
+_veil = draw_veil
+_panel = draw_popup_panel
 
 
 def draw_pause_menu(
