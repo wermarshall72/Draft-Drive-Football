@@ -238,7 +238,7 @@ def _recording_actions(**overrides) -> MatchActions:
         name: ignore
         for name in (
             "play_card", "fallback", "fourth_down", "conversion", "challenge",
-            "challenge_touchdown", "end_run",
+            "challenge_touchdown", "return_to_menu", "quit_run",
         )
     }
     fields.update(overrides)
@@ -677,15 +677,10 @@ def test_draft_progress_uses_selected_players_and_selection_actions(
     screen = desktop.run_screen
     displayed: list[str] = []
     original_text = football_run_screen_module.draw_text
-    original_wrapped = football_run_screen_module.draw_wrapped_text
 
     def capture_text(surface, text, position, font, color):
         displayed.append(text)
         original_text(surface, text, position, font, color)
-
-    def capture_wrapped(surface, text, rect, font, color, **kwargs):
-        displayed.append(text)
-        original_wrapped(surface, text, rect, font, color, **kwargs)
 
     monkeypatch.setattr(football_player_draft_module, "draw_text", capture_text)
     chosen = []
@@ -811,16 +806,17 @@ def test_coach_view_navigation_resets_inspection_and_uses_updated_profile(
     ))
     assert screen.coach_inspection.hover_index == 1
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_ESCAPE}))
-    assert screen.confirm_exit
+    assert screen.pause.is_open
     _activate(desktop, "KEEP PLAYING")
-    assert not screen.confirm_exit
+    assert not screen.pause.is_open
     assert first_controller.state == before
     _activate(desktop, "CHOOSE STAFF 02", keyboard=True)
     assert first_controller.state.selected_coach_pair is before.team_builder.coach_offer[1]
     assert first_controller.state.phase is FootballRunPhase.PLAYER_DRAFT
 
-    _activate(desktop, "END RUN")
-    _activate(desktop, "DISCARD RUN")
+    _activate(desktop, "PAUSE")
+    _activate(desktop, "QUIT RUN")
+    _activate(desktop, "CONFIRM QUIT")
     assert desktop.router.current_id == "main_menu"
     desktop.save_profile("Fresh Coaches", "crimson", "gold")
     displayed: list[str] = []
@@ -1081,15 +1077,15 @@ def test_result_screen_is_full_screen_with_focused_primary_and_end_run(
         desktop.router.draw(_surface())
     texts = [text for text, _, _ in records]
     assert "GAME 01" in texts and "WIN" in texts and "TEAM STATS" in texts
-    assert [button.label for button in screen.buttons] == ["OPEN NEXT GAME SHOP", "END RUN"]
+    assert [button.label for button in screen.buttons] == ["OPEN NEXT GAME SHOP", "PAUSE"]
     assert screen.buttons[0].focused
 
-    next(button for button in screen.buttons if button.label == "END RUN").action()
+    next(button for button in screen.buttons if button.label == "PAUSE").action()
     desktop.router.draw(_surface())
-    assert screen.confirm_exit
-    assert {button.label for button in screen.buttons} == {"DISCARD RUN", "KEEP PLAYING"}
+    assert screen.pause.is_open
+    assert [button.label for button in screen.buttons] == ["KEEP PLAYING", "RETURN TO MENU", "QUIT RUN"]
     _activate(desktop, "KEEP PLAYING")
-    assert not screen.confirm_exit
+    assert not screen.pause.is_open
 
     desktop.router.draw(_surface())
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
@@ -1122,7 +1118,7 @@ def test_result_return_then_new_run_uses_updated_profile(
     assert desktop.run_screen.team_name == "Fresh Team"
     assert desktop.run_screen.theme == desktop.theme
     assert desktop.run_screen.last_error is None
-    assert not desktop.run_screen.confirm_exit
+    assert not desktop.run_screen.pause.is_open
     drawn_colors: list[tuple[pygame.Color, pygame.Color]] = []
     original_art = football_player_draft_module.draw_draft_player
 
@@ -1222,7 +1218,7 @@ def test_repeated_draws_do_not_change_state_or_consume_gameplay_rng(
     assert not (tmp_path / "replay" / "legacy-game.db").exists()
 
 
-def test_escape_requests_explicit_discard_confirmation(tmp_path: Path) -> None:
+def test_escape_opens_the_pause_menu_with_keep_playing_focused(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
     screen = desktop.run_screen
@@ -1231,14 +1227,14 @@ def test_escape_requests_explicit_discard_confirmation(tmp_path: Path) -> None:
     )
     assert desktop.router.current_id == "football_run"
     desktop.router.draw(_surface())
-    assert {button.label for button in screen.buttons} == {
-        "DISCARD RUN",
-        "KEEP PLAYING",
-    }
+    assert [button.label for button in screen.buttons] == [
+        "KEEP PLAYING", "RETURN TO MENU", "QUIT RUN",
+    ]
+    assert screen.buttons[0].focused
 
     _activate(desktop, "KEEP PLAYING")
     assert desktop.router.current_id == "football_run"
-    assert not screen.confirm_exit
+    assert not screen.pause.is_open
 
 
 def test_match_hand_clock_preview_matches_resolved_play_and_incomplete_rule(
@@ -1534,7 +1530,7 @@ def test_opponent_hand_shows_counts_without_revealing_card_identities(tmp_path: 
     assert not any(secret in joined for secret in secrets)
 
 
-def test_pause_menu_opens_depth_chart_and_play_log_and_keeps_exit_confirmation(
+def test_pause_menu_opens_depth_chart_and_play_log_and_quit_needs_confirmation(
     tmp_path: Path,
 ) -> None:
     desktop = _new_desktop(tmp_path)
@@ -1546,8 +1542,9 @@ def test_pause_menu_opens_depth_chart_and_play_log_and_keeps_exit_confirmation(
     desktop.router.handle_event(escape)
     desktop.router.draw(_surface())
     assert [button.label for button in screen.buttons] == [
-        "RESUME", "DEPTH CHART", "PLAY LOG", "END RUN",
+        "KEEP PLAYING", "DEPTH CHART", "PLAY LOG", "RETURN TO MENU", "QUIT RUN",
     ]
+    assert screen.buttons[0].focused
     _activate(desktop, "DEPTH CHART")
     desktop.router.draw(_surface())
     assert screen.match_screen.popup.kind == "depth"
@@ -1558,17 +1555,17 @@ def test_pause_menu_opens_depth_chart_and_play_log_and_keeps_exit_confirmation(
     assert screen.match_screen.popup.kind == "log"
     _activate(desktop, "CLOSE [ESC]")
     assert screen.match_screen.popup.kind == "pause"
-    _activate(desktop, "RESUME")
+    _activate(desktop, "KEEP PLAYING")
     assert not screen.match_screen.popup.open
     _activate(desktop, "PAUSE")
     assert screen.match_screen.popup.kind == "pause"
-    _activate(desktop, "END RUN")
-    assert screen.confirm_exit
+    _activate(desktop, "QUIT RUN")
     desktop.router.draw(_surface())
-    assert {button.label for button in screen.buttons} == {"DISCARD RUN", "KEEP PLAYING"}
-    _activate(desktop, "KEEP PLAYING")
-    assert not screen.confirm_exit
+    assert screen.buttons[-1].label == "CONFIRM QUIT"
+    desktop.router.handle_event(escape)
     assert screen.match_screen.popup.kind == "pause"
+    desktop.router.draw(_surface())
+    assert screen.buttons[-1].label == "QUIT RUN"
     desktop.router.handle_event(escape)
     assert not screen.match_screen.popup.open
     assert controller.state == unchanged
@@ -1591,6 +1588,7 @@ def test_match_interaction_reset_between_runs(tmp_path: Path) -> None:
     desktop.navigate("main_menu")
     desktop.seed_factory = lambda: 17
     _start_run(desktop)
+    _activate(desktop, "START NEW RUN")
     assert screen.match_screen is match_screen
     assert match_screen.interaction.group_scroll["offense"] == 0
     assert match_screen.interaction.dragging_card_id is None

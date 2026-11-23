@@ -178,7 +178,8 @@ class FootballReviewView:
                       chip.inflate(2, 2), center=chip.center)
             chip_x = chip.right + 6
         if removal is not None:
-            banner = pygame.Rect(content.left + 420, content.top + 2, content.width - 420, 50)
+            # Leave the top-right 120px slot (plus a gap) for the run screen's PAUSE button.
+            banner = pygame.Rect(content.left + 420, content.top + 2, content.width - 420 - 130, 50)
             draw_message_banner(
                 surface, banner,
                 f"REMOVAL MODE · PICK THE COPY TO REMOVE · {removal.cost} AP WHEN CONFIRMED",

@@ -11,6 +11,8 @@ from src.engine.football_controller import FootballGameController, FootballRunPh
 from src.engine.football_appearance import FootballPlayerAppearance
 from src.profile import ProfileError, TeamProfile, validate_team_name
 from src.ui.football_run_screen import FootballRunScreen
+from src.ui.football_ui_kit import match_font, plain_font
+from src.ui.football_run_summary import replace_run_summary, run_summary
 from src.ui.layout import LOGICAL_SIZE
 from src.ui.main_menu import FootballMainMenuScreen
 from src.ui.main_menu_art import draw_menu_stadium
@@ -60,6 +62,8 @@ class DesktopApplication:
             navigate,
             self.quit,
             self.start_new_run,
+            on_continue_run=self.continue_run,
+            run_summary=self.remembered_run_summary,
         )
         self.router.register("main_menu", self.menu_screen)
         self.profile_screen = ProfileScreen(
@@ -71,6 +75,7 @@ class DesktopApplication:
             team_name,
             navigate,
             self.quit,
+            on_run_discarded=self._forget_run,
         )
         self.router.register("football_run", self.run_screen)
         self.router.show("main_menu")
@@ -110,8 +115,11 @@ class DesktopApplication:
         self.menu_screen.theme = self.theme
         self.profile_screen.profile = profile
         self.profile_screen.theme = self.theme
-        self.run_screen.team_name = profile.team_name
+        if not self.run_screen.resumable:
+            # A remembered run keeps its own team name; only the colors change.
+            self.run_screen.team_name = profile.team_name
         self.run_screen.theme = self.theme
+        self.run_screen.match_screen.theme = self.theme
         self.navigate("main_menu")
 
     def start_new_run(self, difficulty: FootballAIDifficulty) -> None:
@@ -129,8 +137,25 @@ class DesktopApplication:
             match_seed=match_seed,
         )
         self.football_controller = football_controller
+        self.run_screen.team_name = self.menu_state.profile.team_name
         self.run_screen.begin(football_controller)
         self.navigate("football_run")
+
+    def remembered_run_summary(self) -> tuple[str, str] | None:
+        """(menu summary, replace-warning summary) for a resumable run, else None."""
+        if not self.run_screen.resumable:
+            return None
+        state = self.run_screen.controller.state
+        return run_summary(state), replace_run_summary(state)
+
+    def continue_run(self) -> None:
+        if not self.run_screen.resumable:
+            raise RuntimeError("There is no run to continue.")
+        self.run_screen.resume()
+        self.navigate("football_run")
+
+    def _forget_run(self) -> None:
+        self.football_controller = None
 
     def run(self, event_source: EventSource | None = None) -> None:
         pygame.init()
@@ -176,7 +201,7 @@ class DesktopApplication:
                         if self.router.current_id == "football_run"
                         and self.run_screen.state is not None
                         and self.run_screen.state.phase is FootballRunPhase.PLAYER_DRAFT
-                        and not self.run_screen.confirm_exit
+                        and not self.run_screen.pause_open
                         and not self._transition_is_active(now)
                         else ()
                     ),
@@ -184,6 +209,9 @@ class DesktopApplication:
                 clock.tick(60)
         finally:
             self.running = False
+            # Cached fonts die with the font module; drop them so a later init rebuilds them.
+            match_font.cache_clear()
+            plain_font.cache_clear()
             pygame.quit()
 
     def _logical_event(self, event: pygame.event.Event) -> pygame.event.Event:

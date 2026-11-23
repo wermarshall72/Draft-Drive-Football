@@ -16,24 +16,42 @@ auto-battler is a separate legacy reference.
   [widgets.py](src/ui/widgets.py), and [theme.py](src/ui/theme.py) provide
   shared screen, layout, input, and visual components.
 - [main_menu.py](src/ui/main_menu.py) presents profile status and selects
-  difficulty to start a run; [main_menu_art.py](src/ui/main_menu_art.py)
+  difficulty to start a run. While `DesktopApplication` remembers an unfinished
+  run it leads with a focused CONTINUE RUN button whose summary comes from
+  [football_run_summary.py](src/ui/football_run_summary.py), and START RUN
+  opens a replace-run confirmation drawn with the shared pause-menu panel.
+  The run is kept in memory only (`continue_run`, `remembered_run_summary`,
+  `_forget_run`); it is not saved to disk; [main_menu_art.py](src/ui/main_menu_art.py)
   draws its procedural stadium and tints the user-supplied helmet layers in
   `src/ui/assets/menu_helmet_*.png` to the team's primary color.
   [profile_screen.py](src/ui/profile_screen.py) creates or edits the profile.
   Saving flows through `DesktopApplication` and the profile methods of
   [ApplicationController](src/application.py) to validation and JSON storage
   in [profile.py](src/profile.py); the application refreshes the theme and
-  screen data. See [test_desktop.py](tests/test_desktop.py) and
-  [test_profile.py](tests/test_profile.py), and
-  [test_main_menu.py](tests/test_main_menu.py).
+  screen data; a remembered run keeps its own team name. See
+  [test_desktop.py](tests/test_desktop.py),
+  [test_profile.py](tests/test_profile.py),
+  [test_main_menu.py](tests/test_main_menu.py), and
+  [test_pause_menu.py](tests/test_pause_menu.py).
 
 ## Follow a run or change a screen
 
 [football_run_screen.py](src/ui/football_run_screen.py) coordinates run
-phases, buttons, input, exit confirmation, view callbacks, and error display.
+phases, buttons, input, the pause menu, view callbacks, and error display.
 It renders controller state and submits actions; football rules and progression
 belong in [football_controller.py](src/engine/football_controller.py) and the
-engine, not Pygame. `begin` resets transient UI state between runs.
+engine, not Pygame. `begin` resets transient UI state for a new run; `resume`
+returns to a remembered run without resetting it (draft step, shop sub-screen
+and pending removal, match with any replay settled, regular result, and focus).
+[football_pause_menu.py](src/ui/football_pause_menu.py) owns `PauseMenu`
+(open state, saved focus, and the 3-second two-step QUIT RUN on an injectable
+clock), the shared veil/panel/button drawing, and the PAUSE [ESC] button look.
+Every run screen shows PAUSE [ESC] and opens the same menu on Esc (KEEP
+PLAYING, RETURN TO MENU, QUIT RUN; the match variant adds DEPTH CHART and PLAY
+LOG); inner popups, pinned inspect panels, and a pending removal take Esc
+first. FIRED and PLAYOFFS runs have ended: no pause, and leaving discards them.
+[test_pause_menu.py](tests/test_pause_menu.py) covers the menu, resume, Quit
+Run, and the replace-run confirmation.
 [test_football_desktop.py](tests/test_football_desktop.py) covers the
 headless run flow, navigation, controls, rendering, and reset;
 [test_football_ui_interactions.py](tests/test_football_ui_interactions.py)
@@ -174,9 +192,10 @@ covers extracted interaction state.
   decision;
   [football_match_piles.py](src/ui/football_match_piles.py) draws draw and
   discard piles; [football_match_popups.py](src/ui/football_match_popups.py)
-  draws the pause menu (Resume, Depth Chart, Play Log, End Run), the in-match
-  Depth Chart (temporary upgrades labeled active this match), the play log,
-  and read-only pile lists. [football_match_interaction.py](src/ui/football_match_interaction.py)
+  draws the in-match Depth Chart (temporary upgrades labeled active this match), the play log,
+  and read-only pile lists (the match pause menu is the shared
+  `football_pause_menu` panel with Depth Chart and Play Log added).
+  [football_match_interaction.py](src/ui/football_match_interaction.py)
   tracks drag, drop areas, and group scroll. Colors, fonts, and the
   `text_audit` fit recorder are re-exported by [football_match_palette.py](src/ui/football_match_palette.py)
   from the shared [football_ui_kit.py](src/ui/football_ui_kit.py).
@@ -184,7 +203,7 @@ covers extracted interaction state.
   result (no shared app header): a compact GAME/FINAL header, scoreboard hero
   with WIN/LOSS banner and OT label, a verdict ribbon (next shop, FIRED,
   PLAYOFFS, or BYE WEEK), team stats, the 10-game season tracker with the
-  3-strike loss meter, and the primary action plus END RUN (regular-season
+  3-strike loss meter, and the primary action plus PAUSE [ESC] (regular-season
   results only). An injectable clock drives a score count-up that never
   blocks the button; the Bye Week game-10 marker never shows the retained
   previous match. [football_result_stats.py](src/ui/football_result_stats.py)

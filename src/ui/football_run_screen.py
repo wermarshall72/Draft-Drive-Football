@@ -24,17 +24,22 @@ from src.ui.football_match_interaction import HandEventKind, MatchInteraction
 from src.ui.football_match_screen import FootballMatchScreen, MatchActions
 from src.ui.football_draft_interaction import CoachInspection, PlayerInspection
 from src.ui.football_shop_review import ShopReviewInteraction
-from src.ui.football_ui_kit import kit_button, stadium_backdrop
+from src.ui.football_pause_menu import PauseMenu, draw_pause_button, draw_pause_menu
+from src.ui.football_ui_kit import stadium_backdrop
 from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
-from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
+from src.ui.widgets import Button, draw_text
 
 RESULT_PHASES = frozenset({
     FootballRunPhase.READY_FOR_NEXT_GAME,
     FootballRunPhase.FIRED,
     FootballRunPhase.PLAYOFFS,
 })
+# A run in one of these phases is over: it cannot be paused or resumed.
+ENDED_PHASES = frozenset({FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS})
+PAUSE_LABEL = "PAUSE"
+RUN_PAUSE_VARIANT = "run-pause"
 
 
 class FootballRunScreen(Screen):
@@ -46,14 +51,21 @@ class FootballRunScreen(Screen):
         team_name: str,
         navigate: Navigate,
         quit_application: Quit,
+        *,
+        clock: Callable[[], int] = pygame.time.get_ticks,
+        on_run_discarded: Callable[[], None] = lambda: None,
     ) -> None:
         super().__init__(theme, navigate, quit_application)
         self.team_name = team_name
         self.controller: FootballGameController | None = None
         self.state: FootballGameControllerState | None = None
         self.last_error: str | None = None
-        self.confirm_exit = False
-        self.match_screen = FootballMatchScreen(theme, self._small_font, self._label_font)
+        self.on_run_discarded = on_run_discarded
+        self.pause = PauseMenu(clock)
+        self._resume_focus: int | None = None
+        self.match_screen = FootballMatchScreen(
+            theme, self._small_font, self._label_font, pause_menu=self.pause,
+        )
         self.coach_inspection = CoachInspection()
         self.player_inspection = PlayerInspection()
         self._staff_body_font = staff_font(16)
@@ -72,14 +84,14 @@ class FootballRunScreen(Screen):
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance: FootballShopView | None = None
         self._result_view = FootballResultView(
-            self._open_next_shop, self._return_to_menu, self._request_exit,
+            self._open_next_shop, self._quit_run, self._open_pause,
         )
 
     def begin(self, controller: FootballGameController) -> None:
         self.controller = controller
         self.state = controller.state
         self.last_error = None
-        self.confirm_exit = False
+        self._resume_focus = None
         self.match_screen.reset()
         self.coach_inspection = CoachInspection()
         self.player_inspection = PlayerInspection()
@@ -89,6 +101,32 @@ class FootballRunScreen(Screen):
         self.pressed_index = None
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance = None
+
+    def resume(self) -> None:
+        """Return to a remembered run exactly where it was left; never resets it."""
+        controller = self._require_controller()
+        self.state = controller.state
+        # Rebuild cached views so a profile edit's theme colors apply.
+        self._shop_view_instance = None
+        self._resume_focus = self.pause.hide()
+        self.buttons = []
+        self.hover_index = None
+        self.pressed_index = None
+
+    def on_enter(self) -> None:
+        super().on_enter()
+        if self._resume_focus is not None:
+            self.focus_index = self._resume_focus
+            self._resume_focus = None
+
+    @property
+    def resumable(self) -> bool:
+        return self.controller is not None and self.controller.state.phase not in ENDED_PHASES
+
+    @property
+    def pause_open(self) -> bool:
+        """True while any pause menu covers the run (outside or inside a match)."""
+        return self.pause.is_open or self.match_screen.popup.kind == "pause"
 
     @property
     def match_interaction(self) -> MatchInteraction:
@@ -102,6 +140,14 @@ class FootballRunScreen(Screen):
 
     def handle_event(self, event: pygame.event.Event) -> None:
         state = self._current_state()
+        escape = event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        if self.pause.is_open:
+            if escape:
+                if not self.pause.cancel_quit():
+                    self._keep_playing()
+                return
+            super().handle_event(event)
+            return
         if self._match_screen_active(state):
             self._handle_match_event(event)
             return
@@ -109,7 +155,7 @@ class FootballRunScreen(Screen):
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is None
         ):
-            if not self.confirm_exit and self._shop_view().handle_event(event, **self._inspect_keys()):
+            if self._shop_view().handle_event(event, **self._inspect_keys()):
                 self.hover_index = None if event.type != pygame.MOUSEMOTION else self.hover_index
                 return
         if (
@@ -118,20 +164,21 @@ class FootballRunScreen(Screen):
         ):
             if (
                 self.shop_review.mode == "playbook"
-                and not self.confirm_exit
                 and self.shop_review.inspect.handle_event(event, **self._inspect_keys())
             ):
                 return
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if escape:
                 if self.shop_review.team_popup:
                     self.shop_review.close_team_upgrades()
                     self.buttons = []
                     return
-                self._leave_shop_review()
-                return
+                if state.shop is not None and state.shop.pending_removal is not None:
+                    # Esc cancels a pending removal (and its Playbook) before pausing.
+                    self._leave_shop_review()
+                    return
             if self.shop_review.handle_scroll(event):
                 return
-        if self._current_state().phase is FootballRunPhase.COACH_DRAFT and not self.confirm_exit:
+        if self._current_state().phase is FootballRunPhase.COACH_DRAFT:
             self.coach_inspection.handle_event(event)
             if (
                 event.type == pygame.MOUSEMOTION
@@ -142,39 +189,51 @@ class FootballRunScreen(Screen):
             if event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
                 self.pressed_index = None
-        if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT and not self.confirm_exit:
+        if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT:
             self.player_inspection.handle_event(event)
             if event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
                 self.pressed_index = None
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            if self.shop_review.mode is not None:
-                self._leave_shop_review()
-                return
-            self.confirm_exit = not self.confirm_exit
-            self.coach_inspection.hover_index = None
-            self.buttons = []
-            self.focus_index = 0
-            self.hover_index = None
-            self.pressed_index = None
+        if escape:
+            if self._current_state().phase not in ENDED_PHASES:
+                self._open_pause()
             return
         previous_focus = self.focus_index
         super().handle_event(event)
+        if self.state is None:  # the action discarded the run
+            return
         if (
             self._current_state().phase is FootballRunPhase.PLAYER_DRAFT
-            and not self.confirm_exit
+            and not self.pause.is_open
             and event.type == pygame.MOUSEMOTION
             and self.focus_index != previous_focus
         ):
             self._focus(previous_focus)
 
     def _handle_match_event(self, event: pygame.event.Event) -> None:
-        if self.confirm_exit:
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                self._keep_playing()
-                return
-            super().handle_event(event)
+        popup_before = self.match_screen.popup.kind
+        self._dispatch_match_event(event)
+        self._sync_match_pause_focus(popup_before)
+
+    def _sync_match_pause_focus(self, before: str | None) -> None:
+        """Open the match pause on KEEP PLAYING and restore the old focus on close."""
+        after = self.match_screen.popup.kind
+        if before == after or self.controller is None:
             return
+        if after == "pause" and before is None:
+            self.pause.saved_focus = self.focus_index
+            self.focus_index = 0
+        elif after == "pause":
+            self.focus_index = {"depth": 1, "log": 2}.get(before, 0)
+        elif after is None and before == "pause":
+            self.focus_index = self.pause.saved_focus
+        else:
+            return
+        self.buttons = []
+        self.hover_index = None
+        self.pressed_index = None
+
+    def _dispatch_match_event(self, event: pygame.event.Event) -> None:
         hand_event = self.match_screen.handle_event(event)
         if hand_event.kind is HandEventKind.SELECTED:
             assert hand_event.copy_id is not None
@@ -190,11 +249,29 @@ class FootballRunScreen(Screen):
         super().handle_event(event)
 
     def draw(self, surface: pygame.Surface) -> None:
+        if not self.pause.is_open:
+            self._draw_screen(surface)
+            return
+        # Draw the screen underneath as it was left, then the menu on top.
+        menu_focus, menu_hover, menu_pressed = self.focus_index, self.hover_index, self.pressed_index
+        self.focus_index, self.hover_index, self.pressed_index = self.pause.saved_focus, None, None
+        self._draw_screen(surface)
+        self.focus_index, self.hover_index, self.pressed_index = menu_focus, menu_hover, menu_pressed
+        entries = self.pause.entries(
+            keep_playing=self._keep_playing,
+            return_to_menu=self._return_to_menu,
+            quit_run=self._quit_run,
+        )
+        buttons = draw_pause_menu(
+            surface, self.pause, entries, focus_index=self.focus_index,
+            hover_index=self.hover_index, pressed_index=self.pressed_index,
+        )
+        self._set_buttons(buttons)
+
+    def _draw_screen(self, surface: pygame.Surface) -> None:
         state = self._current_state()
         if self._match_screen_active(state):
             self._draw_match_screen(surface, state)
-            if self.confirm_exit:
-                self._draw_exit_confirmation(surface)
             return
         if state.phase in RESULT_PHASES:
             self._draw_result_screen(surface, state)
@@ -252,7 +329,7 @@ class FootballRunScreen(Screen):
                 layout.content.height - 34,
             )
         if state.phase is FootballRunPhase.COACH_DRAFT:
-            self._set_buttons(self._coach_view().draw(surface, content, state))
+            self.buttons = self._coach_view().draw(surface, content, state)
         elif state.phase is FootballRunPhase.PLAYER_DRAFT:
             self.buttons = self._player_draft_view().draw(surface, content, state)
         elif state.phase is FootballRunPhase.PRE_MATCH_SHOP:
@@ -273,7 +350,7 @@ class FootballRunScreen(Screen):
                         hover_key=getattr(self._button_at(self.hover_index), "inspect_key", None),
                         focus_key=getattr(self._button_at(self.focus_index), "inspect_key", None),
                     )
-                self._set_buttons(buttons)
+                self.buttons = buttons
             else:
                 shop_view = self._shop_view()
                 hovered = self._button_at(self.hover_index)
@@ -289,15 +366,15 @@ class FootballRunScreen(Screen):
                     focus_key=getattr(focused, "inspect_key", None),
                     error=self.last_error is not None,
                 )
-                self._set_buttons(shop_buttons)
+                self.buttons = shop_buttons
 
-        exit_rect = (
-            pygame.Rect(1097, 37, 145, 32)
+        pause_rect = (
+            pygame.Rect(1122, 37, 120, 32)
             if state.phase is FootballRunPhase.COACH_DRAFT
-            else pygame.Rect(38, 647, 254, 32)
+            else pygame.Rect(38, 647, 120, 32)
             if state.phase is FootballRunPhase.PLAYER_DRAFT
             else pygame.Rect(content.right - 120, content.top, 120, 36)
-            if depth_review
+            if depth_review or playbook_review
             else pygame.Rect(content.right - 120, 656, 120, 42)
             if state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None
             else pygame.Rect(layout.content.right - 118, layout.content.top, 118, 30)
@@ -305,19 +382,15 @@ class FootballRunScreen(Screen):
         shop_landing = (
             state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None
         )
-        if not playbook_review and not (depth_review and self.shop_review.team_popup):
-            if shop_landing:
-                end_run = kit_button("END RUN", self._request_exit, exit_rect, variant="kit-danger")
-            elif depth_review:
-                end_run = kit_button("END RUN", self._request_exit, exit_rect, variant="kit-danger")
-            else:
-                end_run = Button("END RUN", self._request_exit, exit_rect, variant="quiet")
-            self.buttons.append(end_run)
+        if not (depth_review and self.shop_review.team_popup):
+            self.buttons.append(
+                Button(PAUSE_LABEL, self._open_pause, pause_rect, variant=RUN_PAUSE_VARIANT)
+            )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
-        if shop_landing and not self.confirm_exit:
+        if shop_landing and not self.pause.is_open:
             self._shop_view().draw_overlay(surface, hovered_button=self._button_at(self.hover_index))
-        if playbook_review and not self.confirm_exit:
+        if playbook_review and not self.pause.is_open:
             self.shop_review.inspect.paint(surface, hovered_button=self._button_at(self.hover_index))
         if self.last_error is not None and state.phase is not FootballRunPhase.PRE_MATCH_SHOP:
             error_rect = pygame.Rect(
@@ -339,8 +412,6 @@ class FootballRunScreen(Screen):
                 else self._small_font,
                 self.theme.danger,
             )
-        if self.confirm_exit:
-            self._draw_exit_confirmation(surface)
 
     def _draw_result_screen(
         self,
@@ -349,14 +420,8 @@ class FootballRunScreen(Screen):
     ) -> None:
         """Full-screen result: the view owns the backdrop, header, and every button."""
         buttons = self._result_view.draw(surface, state, self.theme, error=self.last_error)
-        if not self.confirm_exit:
-            self._set_buttons(buttons)
-            self._draw_buttons(surface)
-        else:
-            for button in buttons:
-                button.focused = False
-                button.draw(surface, self._main_font, self.theme)
-            self._draw_exit_confirmation(surface)
+        self._set_buttons(buttons)
+        self._draw_buttons(surface)
 
     def _draw_match_screen(
         self,
@@ -380,15 +445,15 @@ class FootballRunScreen(Screen):
             challenge_touchdown=lambda: self._submit_match_action(
                 controller().challenge_touchdown
             ),
-            end_run=self._request_exit,
+            return_to_menu=self._return_to_menu,
+            quit_run=self._quit_run,
         )
         buttons = self.match_screen.draw(
             surface, state, actions,
             focus_index=self.focus_index, hover_index=self.hover_index,
             pressed_index=self.pressed_index, error=self.last_error,
         )
-        if not self.confirm_exit:
-            self._set_buttons(buttons)
+        self._set_buttons(buttons)
 
     def _submit_match_hand_card(self, copy_id: str) -> None:
         state = self._current_state()
@@ -426,6 +491,12 @@ class FootballRunScreen(Screen):
 
     def _draw_buttons(self, surface: pygame.Surface) -> None:
         for index, button in enumerate(self.buttons):
+            if button.variant == RUN_PAUSE_VARIANT:
+                draw_pause_button(
+                    surface, button, focused=button.focused,
+                    hovered=self.hover_index == index, pressed=self.pressed_index == index,
+                )
+                continue
             if button.variant not in ("coach-select", "draft-select"):
                 button.draw(
                     surface,
@@ -565,46 +636,6 @@ class FootballRunScreen(Screen):
         if is_removal and shop is not None and shop.pending_removal is not None:
             self.shop_review.open_playbook()
 
-    def _draw_exit_confirmation(self, surface: pygame.Surface) -> None:
-        overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 170))
-        surface.blit(overlay, (0, 0))
-        rect = Layout.from_surface(surface).centered_panel(0.52, 0.30)
-        draw_panel(surface, rect, self.theme, fill=self.theme.panel_alt)
-        draw_text(
-            surface,
-            "End this run?",
-            (rect.left + 28, rect.top + 24),
-            self._staff_dialog_title_font
-            if self._current_state().phase is FootballRunPhase.COACH_DRAFT else self._title_font,
-            self.theme.text,
-        )
-        draw_wrapped_text(
-            surface,
-            "Your current draft, upgrades, and season progress will be discarded.",
-            pygame.Rect(rect.left + 28, rect.top + 70, rect.width - 56, 48),
-            self._staff_body_font
-            if self._current_state().phase is FootballRunPhase.COACH_DRAFT else self._body_font,
-            self.theme.muted,
-        )
-        button_width = (rect.width - 76) // 2
-        button_y = rect.bottom - 62
-        buttons = [
-            Button(
-                "DISCARD RUN",
-                self._return_to_menu,
-                pygame.Rect(rect.left + 28, button_y, button_width, 42),
-                variant="primary",
-            ),
-            Button(
-                "KEEP PLAYING",
-                self._keep_playing,
-                pygame.Rect(rect.left + 48 + button_width, button_y, button_width, 42),
-            ),
-        ]
-        self._set_buttons(buttons)
-        self._draw_buttons(surface)
-
     def _submit(self, action: Callable[[], object]) -> None:
         self.last_error = None
         old_state = self._current_state()
@@ -634,25 +665,58 @@ class FootballRunScreen(Screen):
     def _move_to_next_day(self) -> None:
         self._submit(self._require_controller().move_to_next_day)
 
-    def _request_exit(self) -> None:
-        if self._current_state().phase is FootballRunPhase.PRE_MATCH_SHOP:
+    # -- pause menu and leaving the run ----------------------------------------------
+
+    def _open_pause(self) -> None:
+        state = self._current_state()
+        if state.phase in ENDED_PHASES and not self._match_screen_active(state):
+            return
+        if self._match_screen_active(state):
+            popup_before = self.match_screen.popup.kind
+            self.match_screen.open_pause()
+            self._sync_match_pause_focus(popup_before)
+            return
+        if state.phase is FootballRunPhase.PRE_MATCH_SHOP:
             self._shop_view().inspect.reset()
-        self.confirm_exit = True
+            self.shop_review.inspect.reset()
+        self.coach_inspection.hover_index = None
+        self.pause.show(self.focus_index)
         self.buttons = []
         self.focus_index = 0
         self.hover_index = None
         self.pressed_index = None
 
     def _keep_playing(self) -> None:
-        self.confirm_exit = False
+        self.focus_index = self.pause.hide()
         self.buttons = []
-        self.focus_index = 0
         self.hover_index = None
         self.pressed_index = None
 
     def _return_to_menu(self) -> None:
-        self.confirm_exit = False
+        """Leave for the main menu, remembering the run unless it has ended."""
+        if self._require_controller().state.phase in ENDED_PHASES:
+            self._quit_run()
+            return
+        focus = self.pause.saved_focus
+        self.pause.hide()
+        self.match_screen.settle()
+        self.state = self._require_controller().state
+        self.pause.saved_focus = focus
         self.navigate("main_menu")
+
+    def _quit_run(self) -> None:
+        """QUIT RUN, or leaving a run that has ended: forget it and show the menu."""
+        self._discard_run()
+        self.navigate("main_menu")
+
+    def _discard_run(self) -> None:
+        self.pause.reset()
+        self.match_screen.reset()
+        self.controller = None
+        self.state = None
+        self._resume_focus = None
+        self.buttons = []
+        self.on_run_discarded()
 
     def _current_state(self) -> FootballGameControllerState:
         if self.state is None:

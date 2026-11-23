@@ -41,7 +41,7 @@ SEASON = pygame.Rect(796, 330, 464, 310)
 FOOTER = pygame.Rect(20, 654, 1240, 48)
 PRIMARY_RECT = pygame.Rect(0, 0, 380, 48)
 PRIMARY_RECT.midtop = (FOOTER.centerx, FOOTER.top)
-END_RUN_RECT = pygame.Rect(HEADER.right - 120, HEADER.top, 120, 36)
+PAUSE_RECT = pygame.Rect(HEADER.right - 120, HEADER.top, 120, 36)
 
 LOSS_TONE = pygame.Color("#8fa6bf")
 FIRED_RED = pygame.Color("#d9645b")
@@ -152,7 +152,7 @@ class FootballResultView:
         if variant is ResultVariant.REGULAR:
             buttons: list[Button] = [
                 kit_button(OPEN_NEXT_SHOP, self.open_next_shop, PRIMARY_RECT, variant="kit-primary"),
-                kit_button("END RUN", self.request_exit, END_RUN_RECT, variant="kit-danger"),
+                Button("PAUSE", self.request_exit, PAUSE_RECT, variant="run-pause"),
             ]
         else:
             buttons = [kit_button(RETURN_TO_MENU, self.return_to_menu, PRIMARY_RECT,

@@ -218,7 +218,7 @@ def test_tab_reaches_every_card_including_unaffordable_and_purchased(tmp_path: P
              if isinstance(button, ShopCardButton) and button.card_id is not None]
     assert set(cards) <= visited
     labels = {button.label for button in screen.buttons}
-    assert {"NEXT DAY · 1 AP", "DEPTH CHART", "PLAYBOOK", "FINISH SHOP / START MATCH", "END RUN"} <= labels
+    assert {"NEXT DAY · 1 AP", "DEPTH CHART", "PLAYBOOK", "FINISH SHOP / START MATCH", "PAUSE"} <= labels
 
 
 def test_price_buttons_show_cost_purchased_and_dimmed_states(tmp_path: Path) -> None:
@@ -531,7 +531,7 @@ def test_inspect_key_pins_panel_and_escape_or_close_button_dismisses(tmp_path: P
     assert screen.buttons.index(close) > max(screen.buttons.index(b) for b in _cards(desktop))
     _key(desktop, pygame.K_ESCAPE)
     _draw(desktop)
-    assert not view.inspect_open and not screen.confirm_exit
+    assert not view.inspect_open and not screen.pause.is_open
     _key(desktop, pygame.K_i)
     _draw(desktop)
     close = next(b for b in screen.buttons if b.label == "CLOSE [ESC]")
@@ -667,7 +667,7 @@ def test_depth_chart_shows_art_staff_and_toggles(tmp_path: Path, monkeypatch) ->
     flips = [label for label in labels if label.startswith("FLIP ")]
     assert flips == ["FLIP OFFENSE COACH", "FLIP DEFENSE COACH", *(
         f"FLIP {label}" for label in ("QB", "RB", "WR", "O-LINE", "D-LINE", "LINEBACKERS", "CORNERBACKS", "SAFETIES"))]
-    assert "UPGRADES & PERKS" not in labels and "END RUN" in labels
+    assert "UPGRADES & PERKS" not in labels and "PAUSE" in labels
     _activate(desktop, "MODIFIED STATS")
     assert screen.shop_review.modified_stats
     _activate(desktop, "MODIFIED STATS")
@@ -1056,7 +1056,7 @@ def test_playbook_removal_can_be_cancelled_or_confirmed_in_the_ui(tmp_path: Path
     _buy_removal(desktop)
     assert desktop.run_screen.shop_review.mode == "playbook"
     _draw(desktop)
-    assert "END RUN" not in {button.label for button in desktop.run_screen.buttons}
+    assert "PAUSE" in {button.label for button in desktop.run_screen.buttons}
     pending = controller.state.shop
     assert pending.pending_removal is not None and pending.remaining_ap == before.remaining_ap
     texts = {text for text, _r, _c in _texts(desktop)}
@@ -1088,4 +1088,4 @@ def test_review_escape_cancels_pending_removal_without_spending_ap(tmp_path: Pat
     after = controller.state.shop
     assert after.pending_removal is None and after.remaining_ap == before.remaining_ap
     assert after.offensive_deck == before.offensive_deck
-    assert desktop.run_screen.shop_review.mode is None and not desktop.run_screen.confirm_exit
+    assert desktop.run_screen.shop_review.mode is None and not desktop.run_screen.pause.is_open

@@ -164,14 +164,14 @@ def test_each_variant_has_its_banner_and_primary_action(finished) -> None:
         buttons[0].action()
         assert calls == [call]
         labels = [button.label for button in buttons]
-        assert ("END RUN" in labels) is (variant is ResultVariant.REGULAR)
+        assert ("PAUSE" in labels) is (variant is ResultVariant.REGULAR)
     fired_texts = _draw(_variants(finished)[ResultVariant.FIRED])[1]
     assert "LOSS" in fired_texts and "RUN OVER" in fired_texts
 
 
-def test_end_run_requests_the_existing_confirmation(finished) -> None:
+def test_pause_button_opens_the_pause_menu(finished) -> None:
     buttons, _texts, _records, calls, _view = _draw(finished)
-    next(button for button in buttons if button.label == "END RUN").action()
+    next(button for button in buttons if button.label == "PAUSE").action()
     assert calls == ["exit"]
 
 

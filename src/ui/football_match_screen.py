@@ -39,14 +39,17 @@ from src.ui.football_match_outcome import (
     status_prompt,
 )
 from src.ui.football_match_palette import (
-    MATCH_CANVAS, MATCH_DANGER, MATCH_FOCUS, MATCH_INK, MATCH_PANEL,
-    MATCH_PANEL_EDGE, MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, match_font,
+    MATCH_CANVAS, MATCH_DANGER, MATCH_INK, MATCH_PANEL,
+    MATCH_PANEL_EDGE, MATCH_TEXT, blit_text, match_font,
 )
 from src.ui.football_match_piles import draw_pile_panel
 from src.ui.football_match_playback import EVENT_DURATION_MS, MatchPlayback
 from src.ui.football_match_popups import (
     DEPTH, LOG, PAUSE, PILE, PopupState, draw_depth_popup, draw_log_popup,
-    draw_pause_menu, draw_pile_popup, draw_popup_button,
+    draw_pile_popup, draw_popup_button,
+)
+from src.ui.football_pause_menu import (
+    DEPTH_CHART, PLAY_LOG, MenuEntry, PauseMenu, draw_pause_button, draw_pause_menu,
 )
 from src.ui.football_match_scoreboard import SCOREBOARD_HEIGHT, draw_scoreboard
 from src.ui.football_ui_kit import stadium_backdrop
@@ -77,7 +80,8 @@ class MatchActions:
     conversion: Callable[[FootballConversionAction, str | None], None]
     challenge: Callable[[bool], None]
     challenge_touchdown: Callable[[], None]
-    end_run: Callable[[], None]
+    return_to_menu: Callable[[], None]
+    quit_run: Callable[[], None]
 
 
 _backdrop = stadium_backdrop
@@ -92,11 +96,13 @@ class FootballMatchScreen:
         small_font: pygame.font.Font,
         label_font: pygame.font.Font,
         clock: Callable[[], int] = pygame.time.get_ticks,
+        pause_menu: PauseMenu | None = None,
     ) -> None:
         self.theme = theme
         self._small_font = small_font
         self._label_font = label_font
         self.clock = clock
+        self.pause_menu = pause_menu or PauseMenu(clock)
         self.reset()
 
     def reset(self) -> None:
@@ -109,6 +115,15 @@ class FootballMatchScreen:
         self._strip_actions: list[StripAction] = []
         self._selectable_cards: list[Button] = []
         self.buttons: list[Button] = []
+        self.pause_menu.reset()
+
+    def settle(self) -> None:
+        """Leave the match for the menu: close popups and finish any replay."""
+        self.close_popups()
+        self.interaction.cancel_drag()
+        self.pause_menu.reset()
+        if self.playback.blocking():
+            self.playback.skip()
 
     # -- state -------------------------------------------------------------------
 
@@ -152,11 +167,13 @@ class FootballMatchScreen:
 
     def open_depth_chart(self) -> None:
         self._freeze()
+        self.pause_menu.cancel_quit()
         self._popup_from_pause = self.popup.kind == PAUSE
         self.popup.show(DEPTH)
 
     def open_play_log(self) -> None:
         self._freeze()
+        self.pause_menu.cancel_quit()
         self._popup_from_pause = self.popup.kind == PAUSE
         self.popup.show(LOG)
 
@@ -167,11 +184,14 @@ class FootballMatchScreen:
         self.popup.show(PILE, pile_id)
 
     def close_popups(self) -> None:
+        self.pause_menu.cancel_quit()
         self.popup.close()
         self._popup_from_pause = False
         self._thaw()
 
     def back_from_popup(self) -> None:
+        if self.popup.kind == PAUSE and self.pause_menu.cancel_quit():
+            return
         if self.popup.kind == DEPTH and self.popup.review.team_popup:
             self.popup.review.close_team_upgrades()
             return
@@ -347,7 +367,7 @@ class FootballMatchScreen:
                     hovered=hover_index == index, pressed=pressed_index == index,
                 )
             elif button.variant == "match-pause":
-                self._draw_pause_button(
+                draw_pause_button(
                     surface, button, focused=focus_index == index,
                     hovered=hover_index == index, pressed=pressed_index == index,
                 )
@@ -375,9 +395,16 @@ class FootballMatchScreen:
         match = state.match
         assert match is not None
         if kind == PAUSE:
-            buttons = draw_pause_menu(
-                surface, resume=self.close_popups, depth_chart=self.open_depth_chart,
-                play_log=self.open_play_log, end_run=actions.end_run,
+            entries = self.pause_menu.entries(
+                keep_playing=self.close_popups,
+                return_to_menu=actions.return_to_menu,
+                quit_run=actions.quit_run,
+                extra=(MenuEntry(DEPTH_CHART, self.open_depth_chart),
+                       MenuEntry(PLAY_LOG, self.open_play_log)),
+            )
+            return draw_pause_menu(
+                surface, self.pause_menu, entries, focus_index=focus_index,
+                hover_index=hover_index, pressed_index=pressed_index,
             )
         elif kind == DEPTH:
             buttons = draw_depth_popup(
@@ -397,19 +424,6 @@ class FootballMatchScreen:
             draw_popup_button(surface, button, focused=focus_index == index,
                               hovered=hover_index == index, pressed=pressed_index == index)
         return buttons
-
-    @staticmethod
-    def _draw_pause_button(
-        surface: pygame.Surface, button: Button, *, focused: bool, hovered: bool, pressed: bool
-    ) -> None:
-        rect = button.rect.move(0, 1) if pressed else button.rect
-        fill = MATCH_PANEL_HIGH if hovered or focused else MATCH_PANEL
-        pygame.draw.rect(surface, fill, rect, border_radius=6)
-        pygame.draw.rect(surface, MATCH_FOCUS if focused else MATCH_PANEL_EDGE, rect,
-                         2 if focused else 1, border_radius=6)
-        font = match_font(12)
-        label = font.render("PAUSE [ESC]", True, MATCH_TEXT)
-        surface.blit(label, label.get_rect(center=rect.center))
 
     @staticmethod
     def _draw_post_replay_marks(surface: pygame.Surface, opponent_hand: pygame.Rect) -> None:

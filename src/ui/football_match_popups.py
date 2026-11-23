@@ -1,4 +1,7 @@
-"""Modal match popups: pause menu, Depth Chart, play-by-play log, and pile lists."""
+"""Modal match popups: Depth Chart, play-by-play log, and pile lists.
+
+The pause menu itself is drawn by ``football_pause_menu``; ``PAUSE`` is its popup kind.
+"""
 
 from __future__ import annotations
 
@@ -95,31 +98,6 @@ class PopupState:
 
 _veil = draw_veil
 _panel = draw_popup_panel
-
-
-def draw_pause_menu(
-    surface: pygame.Surface,
-    *,
-    resume: Callable[[], None],
-    depth_chart: Callable[[], None],
-    play_log: Callable[[], None],
-    end_run: Callable[[], None],
-) -> list[Button]:
-    _veil(surface)
-    rect = pygame.Rect(0, 0, 420, 380)
-    rect.center = (surface.get_width() // 2, surface.get_height() // 2)
-    _panel(surface, rect, "PAUSED", "Esc resumes the match")
-    entries = (
-        ("RESUME", resume, "popup-primary"),
-        ("DEPTH CHART", depth_chart, "popup"),
-        ("PLAY LOG", play_log, "popup"),
-        ("END RUN", end_run, "popup-danger"),
-    )
-    buttons = []
-    for index, (label, action, variant) in enumerate(entries):
-        button_rect = pygame.Rect(rect.left + 40, rect.top + 98 + index * 64, rect.width - 80, 48)
-        buttons.append(Button(label, action, button_rect, variant=variant))
-    return buttons
 
 
 def draw_depth_popup(

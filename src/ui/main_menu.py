@@ -7,6 +7,7 @@ import pygame
 from src.application import MainMenuState
 from src.engine.football_ai import FootballAIDifficulty
 from src.ui.coach_fonts import staff_font
+from src.ui.football_pause_menu import MenuEntry, draw_menu_panel
 from src.ui.main_menu_art import draw_menu_stadium
 from src.ui.screens import Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
@@ -15,6 +16,11 @@ from src.ui.widgets import Button, draw_text
 _TEXT = pygame.Color("#eef5ff")
 _MUTED = pygame.Color("#b5c8dc")
 _EDGE = pygame.Color("#507397")
+CONTINUE_RUN = "CONTINUE RUN"
+START_RUN = "START RUN"
+START_NEW_RUN = "START NEW RUN"
+CANCEL = "CANCEL"
+REPLACE_TITLE = "START A NEW RUN?"
 
 
 def _marquee(surface: pygame.Surface, text: str, rect: pygame.Rect,
@@ -52,11 +58,18 @@ class FootballMainMenuScreen(Screen):
         navigate: Navigate,
         quit_application: Quit,
         on_start_run: Callable[[FootballAIDifficulty], None],
+        *,
+        on_continue_run: Callable[[], None] = lambda: None,
+        run_summary: Callable[[], tuple[str, str] | None] = lambda: None,
     ) -> None:
         super().__init__(theme, navigate, quit_application)
         self.menu_state = menu_state
         self.profile_error = profile_error
         self.on_start_run = on_start_run
+        self.on_continue_run = on_continue_run
+        # (menu summary, replace-warning summary) for a remembered run, else None.
+        self.run_summary = run_summary
+        self.confirm_replace = False
         self.difficulty = FootballAIDifficulty.STANDARD
         self.title_font = staff_font(48, semibold=True)
         self.menu_font = staff_font(25, semibold=True)
@@ -68,9 +81,11 @@ class FootballMainMenuScreen(Screen):
 
     def on_enter(self) -> None:
         super().on_enter()
+        self.focus_index = 0
         self.hover_index = None
         self.pressed_index = None
         self.keyboard_focus = True
+        self.confirm_replace = False
 
     def on_exit(self) -> None:
         super().on_exit()
@@ -88,7 +103,34 @@ class FootballMainMenuScreen(Screen):
             self.keyboard_focus = True
         elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
             self.keyboard_focus = False
+        if (
+            self.confirm_replace
+            and event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        ):
+            self._cancel_replace()
+            return
         super().handle_event(event)
+
+    def _start_run_pressed(self) -> None:
+        if self.run_summary() is not None:
+            self.confirm_replace = True
+            self._reset_focus()
+            return
+        self.on_start_run(self.difficulty)
+
+    def _confirm_replace(self) -> None:
+        self.confirm_replace = False
+        self.on_start_run(self.difficulty)
+
+    def _cancel_replace(self) -> None:
+        self.confirm_replace = False
+        self._reset_focus(focus=1)
+
+    def _reset_focus(self, focus: int = 0) -> None:
+        self.buttons = []
+        self.focus_index = focus
+        self.hover_index = None
+        self.pressed_index = None
 
     def draw(self, surface: pygame.Surface) -> None:
         draw_menu_stadium(surface, self.theme.primary, self.theme.secondary)
@@ -114,66 +156,94 @@ class FootballMainMenuScreen(Screen):
                  pygame.Rect(badge.left + 42, badge.top + 30, badge.width - 54, 29),
                  self.badge_font, _TEXT)
 
-        buttons = [
-            Button("START RUN", lambda: self.on_start_run(self.difficulty),
-                   pygame.Rect(40, 139, 500, 77), enabled=self.menu_state is not None),
-        ]
+        summary = self.run_summary() if self.menu_state is not None else None
+        continuing = summary is not None
+        if not continuing:
+            self.confirm_replace = False
+        # With a remembered run, CONTINUE RUN leads and the rest compress to fit.
+        start_rect, panel_rect, difficulty_y, settings_rect, quit_rect, warning_y = (
+            (pygame.Rect(40, 222, 500, 62), pygame.Rect(40, 296, 500, 80), 326,
+             pygame.Rect(40, 388, 500, 62), pygame.Rect(40, 462, 500, 62), 536)
+            if continuing else
+            (pygame.Rect(40, 139, 500, 77), pygame.Rect(40, 228, 500, 86), 262,
+             pygame.Rect(40, 323, 500, 77), pygame.Rect(40, 415, 500, 77), 511)
+        )
+        buttons: list[Button] = []
+        if continuing:
+            buttons.append(Button(CONTINUE_RUN, self.on_continue_run,
+                                  pygame.Rect(40, 124, 500, 86), variant="continue"))
+        buttons.append(Button(START_RUN, self._start_run_pressed, start_rect,
+                              enabled=self.menu_state is not None))
+        first_difficulty = len(buttons)
         for index, difficulty in enumerate(FootballAIDifficulty):
             buttons.append(Button(
                 difficulty.value.upper(),
                 lambda choice=difficulty: self._select_difficulty(choice),
-                pygame.Rect(53 + index * 159, 262, 151, 42),
+                pygame.Rect(53 + index * 159, difficulty_y,
+                            151, 38 if continuing else 42),
                 variant="primary" if difficulty is self.difficulty else "quiet",
             ))
         buttons.extend((
             Button("SETTINGS" if self.menu_state else "CREATE PROFILE",
-                   lambda: self.navigate("settings"), pygame.Rect(40, 323, 500, 77),
+                   lambda: self.navigate("settings"), settings_rect,
                    enabled=self.profile_error is None),
-            Button("QUIT", self.quit_application, pygame.Rect(40, 415, 500, 77)),
+            Button("QUIT", self.quit_application, quit_rect),
         ))
         if self.focus_index == 0 and self.menu_state is None:
             self.focus_index = 4 if self.profile_error is None else 5
-        self._set_buttons(buttons)
-        difficulty_panel = pygame.Rect(40, 228, 500, 86)
-        pygame.draw.rect(surface, "#102b47", difficulty_panel, border_radius=6)
-        pygame.draw.rect(surface, _EDGE, difficulty_panel, 2, border_radius=6)
-        draw_text(surface, "OPPONENT DIFFICULTY", (54, 235), self.small_font, _MUTED)
+        if not self.confirm_replace:
+            self._set_buttons(buttons)
+        else:
+            for button in buttons:
+                button.focused = False
+        pygame.draw.rect(surface, "#102b47", panel_rect, border_radius=6)
+        pygame.draw.rect(surface, _EDGE, panel_rect, 2, border_radius=6)
+        draw_text(surface, "OPPONENT DIFFICULTY", (panel_rect.left + 14, panel_rect.top + 7),
+                  self.small_font, _MUTED)
 
         details = {
-            "START RUN": "Draft your team and begin a new run.",
+            CONTINUE_RUN: summary[0] if summary else "",
+            START_RUN: (
+                "Abandon the current run and draft a new team."
+                if continuing else "Draft your team and begin a new run."
+            ),
             "SETTINGS": "Edit your team name and colors.",
             "CREATE PROFILE": "Create a team before starting a run.",
             "QUIT": "Exit the game.",
         }
+        menu_active = not self.confirm_replace
         for index, button in enumerate(buttons):
-            active = (
+            active = menu_active and (
                 (self.keyboard_focus and button.focused)
                 or self.hover_index == index
                 or self.pressed_index == index
             )
-            pressed = self.pressed_index == index
-            if 1 <= index <= 3:
+            pressed = menu_active and self.pressed_index == index
+            if first_difficulty <= index < first_difficulty + len(FootballAIDifficulty):
                 self._draw_difficulty(surface, button, active, pressed)
+            elif button.variant == "continue":
+                self._draw_continue_button(surface, button, details[CONTINUE_RUN], active, pressed)
             else:
                 self._draw_menu_button(surface, button, details[button.label], active, pressed)
 
         if self.profile_error or (self.theme.warning and self.menu_state):
-            warning = pygame.Rect(40, 511, 650, 105)
+            warning = pygame.Rect(40, warning_y, 650, 96 if continuing else 105)
             pygame.draw.rect(surface, "#182c40", warning, border_radius=6)
             pygame.draw.rect(surface, "#e29c82", warning, 2, border_radius=6)
+            top = warning.top
             if self.profile_error:
-                draw_text(surface, "PROFILE COULD NOT LOAD", (54, 520),
+                draw_text(surface, "PROFILE COULD NOT LOAD", (54, top + 9),
                           self.small_font, pygame.Color("#ffb4a3"))
                 draw_text(surface, "Resolve the saved file outside the game; it will not be overwritten.",
-                          (54, 542), self.detail_font, _TEXT)
+                          (54, top + 31), self.detail_font, _TEXT)
                 _marquee(surface, self.profile_error,
-                         pygame.Rect(54, 568, warning.width - 28, 27),
+                         pygame.Rect(54, top + 57, warning.width - 28, 27),
                          self.detail_font, _MUTED)
             else:
-                draw_text(surface, "COLOR FALLBACK", (54, 520),
+                draw_text(surface, "COLOR FALLBACK", (54, top + 9),
                           self.small_font, pygame.Color("#ffb4a3"))
                 _marquee(surface, self.theme.warning or "",
-                         pygame.Rect(54, 545, warning.width - 28, 30),
+                         pygame.Rect(54, top + 34, warning.width - 28, 30),
                          self.detail_font, _TEXT)
 
         footer = pygame.Rect(40, 642, 1200, 49)
@@ -190,10 +260,26 @@ class FootballMainMenuScreen(Screen):
         else:
             message = "Choose a difficulty, then start a new run."
         _marquee(surface, message, pygame.Rect(80, 650, 1128, 32), self.detail_font, _TEXT)
+        if self.confirm_replace and summary is not None:
+            self._draw_replace_confirmation(surface, summary[1])
+
+    def _draw_replace_confirmation(self, surface: pygame.Surface, run_label: str) -> None:
+        entries = (
+            MenuEntry(CANCEL, self._cancel_replace, "popup-primary"),
+            MenuEntry(START_NEW_RUN, self._confirm_replace, "popup-danger"),
+        )
+        buttons = draw_menu_panel(
+            surface, REPLACE_TITLE, f"Your current run ({run_label}) will be lost.", entries,
+            focus_index=self.focus_index if self.focus_index < len(entries) else 0,
+            hover_index=self.hover_index, pressed_index=self.pressed_index,
+            width=460, button_width=380,
+        )
+        self._set_buttons(buttons)
 
     def _draw_menu_button(self, surface: pygame.Surface, button: Button,
                           detail: str, active: bool, pressed: bool) -> None:
         rect = button.rect.move(0, 2 if pressed else 0)
+        compact = rect.height < 70
         fill = self.theme.primary if active and button.enabled else pygame.Color("#102e4a")
         text = readable_ink(fill) if active and button.enabled else _TEXT
         if not button.enabled:
@@ -205,9 +291,33 @@ class FootballMainMenuScreen(Screen):
             pygame.draw.rect(surface, self.theme.primary, rect.inflate(-10, -10), 2, border_radius=4)
         if self.keyboard_focus and button.focused and button.enabled:
             focus_label = self.small_font.render("FOCUS", True, text)
-            surface.blit(focus_label, (rect.right - focus_label.get_width() - 18, rect.top + 13))
-        draw_text(surface, button.label, (rect.left + 25, rect.top + 8), self.menu_font, text)
-        draw_text(surface, detail, (rect.left + 26, rect.top + 43), self.detail_font, text)
+            surface.blit(focus_label, (rect.right - focus_label.get_width() - 18,
+                                       rect.top + (8 if compact else 13)))
+        draw_text(surface, button.label, (rect.left + 25, rect.top + (4 if compact else 8)),
+                  self.menu_font, text)
+        draw_text(surface, detail, (rect.left + 26, rect.top + (34 if compact else 43)),
+                  self.detail_font, text)
+
+    def _draw_continue_button(self, surface: pygame.Surface, button: Button,
+                              summary: str, active: bool, pressed: bool) -> None:
+        """Always lit in the team color; the focus ring marks keyboard/hover state."""
+        rect = button.rect.move(0, 2 if pressed else 0)
+        fill = self.theme.primary
+        ink = readable_ink(fill)
+        pygame.draw.rect(surface, "#061629", rect.move(0, 4), border_radius=7)
+        pygame.draw.rect(surface, fill, rect, border_radius=6)
+        pygame.draw.rect(surface, self.theme.secondary, (rect.left, rect.top + 10, 8, rect.height - 20))
+        pygame.draw.rect(surface, ink if active else _EDGE, rect, 3 if active else 2, border_radius=6)
+        if active:
+            pygame.draw.rect(surface, fill, rect.inflate(-10, -10), 2, border_radius=4)
+        tag = self.small_font.render("RESUME", True, fill)
+        tag_rect = tag.get_rect().inflate(16, 6)
+        tag_rect.topright = (rect.right - 16, rect.top + 12)
+        pygame.draw.rect(surface, ink, tag_rect, border_radius=4)
+        surface.blit(tag, tag.get_rect(center=tag_rect.center))
+        draw_text(surface, button.label, (rect.left + 25, rect.top + 10), self.menu_font, ink)
+        _marquee(surface, summary, pygame.Rect(rect.left + 26, rect.top + 48, rect.width - 52, 26),
+                 self.badge_font, ink)
 
     def _draw_difficulty(self, surface: pygame.Surface, button: Button,
                          active: bool, pressed: bool) -> None:

@@ -81,6 +81,20 @@ or the design changes.
   10-game season tracker with a 3-strike loss meter (backed by a read-only
   per-game controller history), and distinct Run Over, Playoffs, and Bye Week
   endings.
+- [x] Replace the legacy "End this run?" dialog with one pause menu on every
+  run screen (KEEP PLAYING, RETURN TO MENU, two-step QUIT RUN; the match adds
+  DEPTH CHART and PLAY LOG), PAUSE [ESC] buttons, and an in-memory Continue
+  Run on the main menu with a replace-run confirmation.
+- [ ] Save the single active run to disk so it survives closing and reopening
+  the game. Only one saved run ever exists, and starting a new run replaces it
+  after the existing confirmation. Save at safe points (after each shop action,
+  at match decisions, and on Return to Menu or app quit). Restore every piece
+  of run, shop, deck, match, and random-number state exactly, and handle
+  missing or corrupt saves safely. The in-memory resume (the run is kept only
+  for the current app session) is the interim behavior.
+- [ ] Drafted players keep the jersey colors chosen at draft time; a profile
+  color edit while a run is remembered recolors the UI theme on resume but not
+  those saved appearances. Decide whether saved runs should follow the profile.
 - [ ] Give local AI opponents their own names and team colors; the result
   screen and match scoreboard currently show a neutral grey helmet.
 - [ ] Shop polish ideas: number-key shortcuts for shop cards, and a live-app
