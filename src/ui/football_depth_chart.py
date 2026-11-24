@@ -18,7 +18,7 @@ from src.ui.coach_art import draw_coach_portrait
 from src.ui.football_coach_upgrade_details import (
     coach_upgrade_area, coach_upgrade_detail_sections, coach_upgrade_short_line,
 )
-from src.ui.football_coach_view import coach_perk_text
+from src.ui.football_coach_perks import coach_perk_short, modifier_text
 from src.ui.football_display import _POSITION_LABELS, player_partnership_text, player_perk_text
 from src.ui.football_player_draft_view import _draft_percentage
 from src.ui.football_player_upgrade_details import stat_value
@@ -32,13 +32,10 @@ from src.ui.football_ui_kit import (
     MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT, MATCH_PANEL_HIGH, MATCH_TEXT, PaintedButton,
     asset_icon, blit_text, draw_popup_button, draw_popup_panel, draw_stat_value, draw_veil, fit_wrapped,
     match_font, mix, plain_font, rarity_color, rarity_label, smooth_icon, team_accent,
+    MODIFIER_NEGATIVE as _NEGATIVE, MODIFIER_NEUTRAL as _NEUTRAL, MODIFIER_POSITIVE as _POSITIVE,
 )
 from src.ui.stat_icons import stat_icon
 from src.ui.text import fit_text
-
-_POSITIVE = pygame.Color("#9fe4ad")
-_NEGATIVE = pygame.Color("#ff9d98")
-_NEUTRAL = pygame.Color("#c1cbd5")
 
 
 
@@ -91,30 +88,29 @@ def _staff_card(surface: pygame.Surface, rect: pygame.Rect, side: str, coach, th
     name = coach.name.upper() if coach is not None else "NO COACH"
     blit_text(surface, plain_font(17), fit_text(name, plain_font(17), inner.width - FLIP_SIZE - 6), MATCH_TEXT,
               inner, topleft=(inner.left, inner.top + 14))
-    portrait = pygame.Rect(inner.left, inner.top + 40, 92, 92)
+    # The short perk line needs one compact strip; the portrait and modifiers get the rest.
+    perk = pygame.Rect(inner.left, inner.bottom - 46, inner.width, 46)
+    portrait_height = max(64, min(132, perk.top - 10 - (inner.top + 40)))
+    portrait = pygame.Rect(inner.left, inner.top + 40, 96, portrait_height)
     pygame.draw.rect(surface, MATCH_PANEL_DEEP, portrait, border_radius=8)
     if coach is not None:
         draw_coach_portrait(surface, portrait.inflate(-6, -4), coach.coach_id, theme.primary)
-    mods = pygame.Rect(portrait.right + 12, portrait.top + 2, inner.right - portrait.right - 12, portrait.height)
     items = tuple(coach.position_modifiers.items()) if coach is not None else ()
+    row_step = min(28, portrait.height // 4)
+    mods = pygame.Rect(portrait.right + 12, 0, inner.right - portrait.right - 12, row_step * 4)
+    mods.centery = portrait.centery
     row_font = plain_font(15)
     for row, (position, value) in enumerate(items[:4]):
-        y = mods.top + row * 23
+        y = mods.top + row * row_step + (row_step - 23) // 2
         color = _POSITIVE if value > 0 else _NEGATIVE if value < 0 else _NEUTRAL
         blit_text(surface, plain_font(13, False), fit_text(_POSITION_LABELS[position], plain_font(13, False), mods.width - 52),
                   MATCH_MUTED, mods, topleft=(mods.left, y + 2))
-        blit_text(surface, row_font, f"{value:+.0%}", color, mods, topright=(mods.right, y))
-    perk = pygame.Rect(inner.left, portrait.bottom + 10, inner.width, inner.bottom - portrait.bottom - 10)
+        blit_text(surface, row_font, modifier_text(value), color, mods, topright=(mods.right, y))
     pygame.draw.rect(surface, MATCH_PANEL_DEEP, perk, border_radius=6)
     blit_text(surface, plain_font(10), "COACH PERK", MATCH_MUTED, perk, topleft=(perk.left + 8, perk.top + 5))
-    text = coach_perk_text(coach) if coach is not None else "No perk."
     box = pygame.Rect(perk.left + 8, perk.top + 20, perk.width - 16, perk.height - 24)
-    lines_available = max(1, box.height // plain_font(12, False).get_height())
-    font, lines = fit_wrapped(text, box.width, (13, 12, 11), lines_available)
-    y = box.top
-    for line in lines:
-        blit_text(surface, font, line, MATCH_TEXT, perk, topleft=(box.left, y))
-        y += font.get_height()
+    font, lines = fit_wrapped(coach_perk_short(coach), box.width, (13, 12, 11), 1)
+    blit_text(surface, font, lines[0], MATCH_TEXT, perk, topleft=(box.left, box.top))
 
 
 def _draw_staff(surface: pygame.Surface, rect: pygame.Rect, state: FootballGameControllerState,
@@ -546,7 +542,7 @@ def _roster_back(surface: pygame.Surface, card: pygame.Rect, position: FootballP
 
 
 def coach_back_rows(side: str, coach, shop) -> list[tuple]:
-    rows: list[tuple] = [("head", "COACH PERK"), ("text", coach_perk_text(coach) if coach else "No perk.")]
+    rows: list[tuple] = [("head", "COACH PERK"), ("text", coach_perk_short(coach))]
     rows.append(("head", f"{side} UPGRADES"))
     owned = [card for card in shop.owned_coach_upgrades
              if card.coach_upgrade_effect is not None

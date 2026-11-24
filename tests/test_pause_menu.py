@@ -214,13 +214,18 @@ def test_inner_popups_keep_escape_priority_over_pause(tmp_path: Path) -> None:
 
     _activate(desktop, "PLAYBOOK")
     _draw(desktop)
+    now = [0]
+    screen.shop_review.inspect.clock = lambda: now[0]
     card = next(b for b in screen.buttons if getattr(b, "inspect_key", None) is not None)
+    _key(desktop, pygame.K_TAB)
     screen._focus(screen.buttons.index(card))
-    _key(desktop, pygame.K_i)
     _draw(desktop)
-    assert screen.shop_review.inspect.pinned_key is not None
+    now[0] += 1000
+    _draw(desktop)
+    assert screen.shop_review.inspect.shown_key == card.inspect_key
     _esc(desktop)
-    assert screen.shop_review.inspect.pinned_key is None and not screen.pause.is_open
+    _draw(desktop)
+    assert screen.shop_review.inspect.shown_key is None and not screen.pause.is_open
     _activate(desktop, "BACK TO SHOP")
     _draw(desktop)
 

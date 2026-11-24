@@ -6,7 +6,11 @@ import pytest
 from src.engine.football_coaches import COACH_PAIR_OFFERS
 from src.engine.football_controller import FootballRunPhase
 from src.ui import coach_art, football_coach_view
-from src.ui.text import wrap_text_lines
+from src.ui.football_coach_perks import coach_perk_rules, coach_perk_short, modifier_text
+from src.ui.football_display import _POSITION_LABELS
+from src.ui.football_ui_kit import (
+    MATCH_PANEL, MODIFIER_NEGATIVE, MODIFIER_NEUTRAL, MODIFIER_POSITIVE, text_audit,
+)
 from src.ui.theme import readable_ink, relative_luminance
 from scripts.process_coach_portraits import GRASS_TOP, is_background
 from test_football_desktop import _new_desktop, _start_run, _surface
@@ -88,42 +92,28 @@ def test_every_pair_renders_complete_inline_data(tmp_path, monkeypatch, pair):
     state = desktop.football_controller.state
     state = replace(state, team_builder=replace(state.team_builder, coach_offer=(pair,) * 3))
     view = desktop.run_screen._coach_view()
-    texts = []
     portraits = []
-    original_text = football_coach_view.draw_text
-    original_wrapped = football_coach_view.draw_complete_wrapped_text
-
-    def capture(surface, text, position, font, color):
-        texts.append((text, pygame.Color(color)))
-        return original_text(surface, text, position, font, color)
-
-    def wrapped(surface, text, rect, font, color, **kwargs):
-        texts.append((text, pygame.Color(color)))
-        lines = wrap_text_lines(text, font, rect.width)
-        assert len(lines) * font.get_height() + max(0, len(lines) - 1) * kwargs.get("line_gap", 2) <= rect.height
-        return original_wrapped(surface, text, rect, font, color, **kwargs)
 
     def portrait(surface, rect, coach_id, primary):
         portraits.append(coach_id)
         return coach_art.draw_coach_portrait(surface, rect, coach_id, primary)
 
-    monkeypatch.setattr(football_coach_view, "draw_text", capture)
-    monkeypatch.setattr(football_coach_view, "draw_complete_wrapped_text", wrapped)
     monkeypatch.setattr(football_coach_view, "draw_coach_portrait", portrait)
-    buttons = view.draw(_surface(), pygame.Rect(38, 122, 1204, 558), state)
+    with text_audit() as records:
+        buttons = view.draw(_surface(), pygame.Rect(38, 122, 1204, 558), state)
+    texts = [(text, rect) for text, rect, _container in records]
     assert portraits == [pair.offense.coach_id, pair.defense.coach_id] * 3
     assert all(not a.rect.colliderect(b.rect) for a, b in zip(buttons, buttons[1:]))
+    for text, rect, container in records:
+        assert container.contains(rect), (text, rect, container)
     for coach in (pair.offense, pair.defense):
         assert sum(text == coach.name for text, _ in texts) == 3
-        summary = f"{coach.side.value.title()}: {football_coach_view.coach_perk_text(coach)}"
-        assert sum(text == summary for text, _ in texts) == 3
-        if coach.perk is None:
-            assert "No perk." in summary
+        same = sum(coach_perk_short(other) == coach_perk_short(coach) for other in (pair.offense, pair.defense))
+        assert sum(text == coach_perk_short(coach) for text, _ in texts) == 3 * same
+        assert all(text != coach_perk_rules(coach) for text, _ in texts)
         for position, modifier in coach.position_modifiers.items():
-            label = f"{football_coach_view._coach_position_label(position)} {round(modifier * 100):+d}%"
-            color = (football_coach_view._POSITIVE if modifier > 0 else
-                     football_coach_view._NEGATIVE if modifier < 0 else football_coach_view._NEUTRAL)
-            assert (label, color) in texts
+            assert sum(text == _POSITION_LABELS[position] for text, _ in texts) >= 3
+            assert sum(text == modifier_text(modifier) for text, _ in texts) >= 3
 
 
 @pytest.mark.parametrize("window_size", [(1280, 720), (960, 540), (1024, 768)])
@@ -226,6 +216,5 @@ def test_primary_and_stat_colors_are_readable():
     for item in COLOR_CHOICES:
         color = pygame.Color(item.hex_value)
         assert contrast(color, readable_ink(color)) >= 4.5
-    for color in (football_coach_view._POSITIVE, football_coach_view._NEGATIVE,
-                  football_coach_view._NEUTRAL):
-        assert contrast(color, "#102e4a") >= 4.5
+    for color in (MODIFIER_POSITIVE, MODIFIER_NEGATIVE, MODIFIER_NEUTRAL):
+        assert contrast(color, MATCH_PANEL) >= 4.5

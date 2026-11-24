@@ -515,27 +515,32 @@ def test_inspect_content_has_full_rules_for_each_card_type(tmp_path: Path) -> No
         _draw(desktop)
 
 
-def test_inspect_key_pins_panel_and_escape_or_close_button_dismisses(tmp_path: Path) -> None:
+def test_i_key_does_nothing_and_escape_hides_panel_before_pausing(tmp_path: Path) -> None:
     desktop = _shop_desktop(tmp_path)
     _every_kind(desktop)
     view = desktop.run_screen._shop_view()
-    _clock(desktop)
+    now = _clock(desktop)
     screen = desktop.run_screen
     card = _cards(desktop, FootballShopSection.COACH_UPGRADES)[0]
-    _key(desktop, pygame.K_TAB)
-    screen._focus(screen.buttons.index(card))
+    # No panel showing: I opens nothing, even after the delay would have passed.
     _key(desktop, pygame.K_i)
     _draw(desktop)
-    assert view.inspect_open and view.inspect.pinned_key == card.inspect_key
-    close = next(b for b in screen.buttons if b.label == "CLOSE [ESC]")
-    assert screen.buttons.index(close) > max(screen.buttons.index(b) for b in _cards(desktop))
+    assert not view.inspect_open
+    # Panel showing: I neither closes nor changes it, and adds no buttons.
+    _hover_open(desktop, card, now)
+    labels = [b.label for b in screen.buttons]
+    _key(desktop, pygame.K_i)
+    with text_audit() as records:
+        _draw(desktop)
+    assert view.inspect_open and view.inspect.shown_key == card.inspect_key
+    assert [b.label for b in screen.buttons] == labels and "CLOSE [ESC]" not in labels
+    assert not {"PRESS I TO PIN", "CLOSE [ESC]"} & {text for text, _r, _c in records}
+    # Esc hides the visible panel first; the next Esc pauses.
     _key(desktop, pygame.K_ESCAPE)
     _draw(desktop)
     assert not view.inspect_open and not screen.pause.is_open
-    _key(desktop, pygame.K_i)
-    _draw(desktop)
-    close = next(b for b in screen.buttons if b.label == "CLOSE [ESC]")
-    _click(desktop, close.rect.center)
+    _key(desktop, pygame.K_ESCAPE)
+    assert screen.pause.is_open
     _draw(desktop)
     assert not view.inspect_open
 
@@ -567,22 +572,23 @@ def test_inspect_never_blocks_buying_the_hovered_card(tmp_path: Path) -> None:
     assert len(controller.state.shop.purchased_upgrades) == 1
 
 
-def test_pinned_panel_swallows_clicks_on_cards_beneath_it(tmp_path: Path) -> None:
+def test_hover_panel_never_takes_clicks_on_cards_beneath_it(tmp_path: Path) -> None:
     desktop = _shop_desktop(tmp_path)
     controller = desktop.football_controller
     view = desktop.run_screen._shop_view()
-    _clock(desktop)
-    screen = desktop.run_screen
-    first = _cards(desktop, FootballShopSection.PLAYER_UPGRADES)[0]
-    screen._focus(screen.buttons.index(first))
-    _key(desktop, pygame.K_i)
-    _draw(desktop)
-    panel = view.inspect.panel_rect
-    covered = next(b for b in _cards(desktop) if b is not first and panel.colliderect(b.hit_rect)
-                   and panel.contains(pygame.Rect(b.hit_rect.center, (1, 1))))
+    now = _clock(desktop)
+    cards = _cards(desktop)
+    for first in cards:
+        _hover_open(desktop, first, now)
+        panel = view.inspect.panel_rect
+        covered = [b for b in _cards(desktop) if b is not first and b.enabled and b.purchasable
+                   and panel.collidepoint(b.hit_rect.center)]
+        if covered:
+            break
+    assert covered, "expected a hover panel over another card's price button"
     before = controller.state.shop
-    _click(desktop, covered.hit_rect.center)
-    assert controller.state.shop == before
+    _click(desktop, covered[0].hit_rect.center)
+    assert controller.state.shop != before
 
 
 def test_buying_a_play_keeps_it_purchased_with_an_added_ribbon(tmp_path: Path) -> None:

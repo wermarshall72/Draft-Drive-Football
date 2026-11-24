@@ -72,7 +72,7 @@ or the design changes.
 - [x] Redesign the pre-match shop, Depth Chart, and Playbook in the match-screen
   style: cost-only price buttons, one rarity palette (Rare blue), icon-only
   player upgrade cards, coach short lines, shared play/scheme card faces, and
-  hover/focus/I-key inspect panels with the full rules.
+  hover/focus inspect panels with the full rules.
 - [x] Keep purchased plays, schemes, and bonus cards visible as purchased until
   Next Day; replace the Depth Chart details page with flippable player and
   coach cards and a Team upgrades popup.
@@ -85,6 +85,10 @@ or the design changes.
   run screen (KEEP PLAYING, RETURN TO MENU, two-step QUIT RUN; the match adds
   DEPTH CHART and PLAY LOG), PAUSE [ESC] buttons, and an in-memory Continue
   Run on the main menu with a replace-run confirmation.
+- [x] Redesign the coach selection screen in the match-screen style: kit
+  panels and stadium backdrop, Depth Chart-style modifiers, one short perk line
+  per coach (shared with the Depth Chart coach cards), and hover/focus
+  inspect panels with the full perk rules.
 - [ ] Save the single active run to disk so it survives closing and reopening
   the game. Only one saved run ever exists, and starting a new run replaces it
   after the existing confirmation. Save at safe points (after each shop action,

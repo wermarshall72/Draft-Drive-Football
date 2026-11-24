@@ -292,7 +292,7 @@ class FootballReviewView:
             "CANCEL SELECTION" if pending else "BACK TO SHOP", self.leave,
             pygame.Rect(content.right - 212, footer_top, 212, 42), variant="kit-primary",
         ))
-        hint = "WHEEL / PAGE UP / PAGE DOWN TO BROWSE  ·  HOVER OR PRESS I FOR DETAILS"
+        hint = "WHEEL / PAGE UP / PAGE DOWN TO BROWSE  ·  HOVER FOR DETAILS"
         if pending:
             hint += "  ·  EACH DECK KEEPS AT LEAST 4 CARDS"
         hint_box = pygame.Rect(content.left, footer_top, content.width - 228, 42)
@@ -303,9 +303,7 @@ class FootballReviewView:
             hint_color = MATCH_MUTED
         blit_text(surface, hint_font, fit_text(hint, hint_font, hint_box.width), hint_color, hint_box,
                   midleft=(hint_box.left + 2, hint_box.centery))
-        close = self.interaction.inspect.prepare(contents, hover_key, focus_key)
-        if close is not None:
-            buttons.append(close)
+        self.interaction.inspect.prepare(contents, hover_key, focus_key)
         return buttons
 
     def _paint_card(self, surface: pygame.Surface, button: PaintedButton, entry: "_PlaybookEntry",

@@ -162,9 +162,9 @@ class FootballShopView:
 
     # -- input ---------------------------------------------------------------------
 
-    def handle_event(self, event: pygame.event.Event, *, hover_key: tuple | None = None,
-                     focus_key: tuple | None = None) -> bool:
-        return self.inspect.handle_event(event, hover_key=hover_key, focus_key=focus_key)
+    def handle_event(self, event: pygame.event.Event) -> bool:
+        """Esc hides a visible inspect panel; True when it did."""
+        return self.inspect.handle_event(event)
 
     @property
     def inspect_open(self) -> bool:
@@ -224,18 +224,12 @@ class FootballShopView:
 
         buttons.extend(self._footer(surface, content, shop))
 
-        close = self.inspect.prepare(self._inspect_contents, hover_key, focus_key)
-        if close is not None:
-            buttons.append(close)
+        self.inspect.prepare(self._inspect_contents, hover_key, focus_key)
         return buttons
 
-    @property
-    def close_button(self) -> PaintedButton | None:
-        return self.inspect.close_button
-
-    def draw_overlay(self, surface: pygame.Surface, *, hovered_button=None) -> None:
+    def draw_overlay(self, surface: pygame.Surface) -> None:
         """Paint the inspect panel above the cards (after buttons are drawn)."""
-        self.inspect.paint(surface, hovered_button=hovered_button)
+        self.inspect.paint(surface)
 
     def _draw_header(self, surface: pygame.Surface, content: pygame.Rect, shop: FootballShopState,
                      team_name: str, message: str | None, error: bool) -> None:

@@ -36,6 +36,11 @@ MATCH_DANGER = pygame.Color("#ff8a80")
 MATCH_GOLD = pygame.Color("#ffd75e")
 MATCH_GOOD = pygame.Color("#7ee2a0")
 
+# Coach position modifiers (Depth Chart and coach selection): up, down, unchanged.
+MODIFIER_POSITIVE = pygame.Color("#9fe4ad")
+MODIFIER_NEGATIVE = pygame.Color("#ff9d98")
+MODIFIER_NEUTRAL = pygame.Color("#c1cbd5")
+
 # The local AI wears a neutral steel uniform so it never clashes with team colors.
 MATCH_OPPONENT = pygame.Color("#7d8ea3")
 MATCH_OPPONENT_DARK = pygame.Color("#3f4d5e")

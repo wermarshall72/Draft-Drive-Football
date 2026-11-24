@@ -23,9 +23,10 @@ from src.ui.football_coach_view import FootballCoachView
 from src.ui.football_match_interaction import HandEventKind, MatchInteraction
 from src.ui.football_match_screen import FootballMatchScreen, MatchActions
 from src.ui.football_draft_interaction import CoachInspection, PlayerInspection
+from src.ui.football_inspect import InspectState
 from src.ui.football_shop_review import ShopReviewInteraction
 from src.ui.football_pause_menu import PauseMenu, draw_pause_button, draw_pause_menu
-from src.ui.football_ui_kit import stadium_backdrop
+from src.ui.football_ui_kit import draw_message_banner, stadium_backdrop
 from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
@@ -40,6 +41,8 @@ RESULT_PHASES = frozenset({
 ENDED_PHASES = frozenset({FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS})
 PAUSE_LABEL = "PAUSE"
 RUN_PAUSE_VARIANT = "run-pause"
+# Coach selection shows choice errors in the header, between the title and PAUSE.
+COACH_ERROR_RECT = pygame.Rect(640, 18, 484, 52)
 
 
 class FootballRunScreen(Screen):
@@ -62,18 +65,14 @@ class FootballRunScreen(Screen):
         self.last_error: str | None = None
         self.on_run_discarded = on_run_discarded
         self.pause = PauseMenu(clock)
+        self._clock = clock
         self._resume_focus: int | None = None
         self.match_screen = FootballMatchScreen(
             theme, self._small_font, self._label_font, pause_menu=self.pause,
         )
-        self.coach_inspection = CoachInspection()
+        self.coach_inspection = self._new_coach_inspection()
         self.player_inspection = PlayerInspection()
-        self._staff_body_font = staff_font(16)
-        self._staff_stat_font = staff_font(16, semibold=True)
-        self._staff_small_font = staff_font(14, semibold=True)
-        self._staff_main_font = staff_font(18, semibold=True)
         self._staff_button_font = staff_font(17, semibold=True)
-        self._staff_dialog_title_font = staff_font(27, semibold=True)
         self._draft_title_font = staff_font(36, semibold=True)
         self._draft_name_font = staff_font(25, semibold=True)
         self._draft_stat_font = staff_font(21, semibold=True)
@@ -93,7 +92,7 @@ class FootballRunScreen(Screen):
         self.last_error = None
         self._resume_focus = None
         self.match_screen.reset()
-        self.coach_inspection = CoachInspection()
+        self.coach_inspection = self._new_coach_inspection()
         self.player_inspection = PlayerInspection()
         self.buttons = []
         self.focus_index = 0
@@ -155,7 +154,7 @@ class FootballRunScreen(Screen):
             state.phase is FootballRunPhase.PRE_MATCH_SHOP
             and self.shop_review.mode is None
         ):
-            if self._shop_view().handle_event(event, **self._inspect_keys()):
+            if self._shop_view().handle_event(event):
                 self.hover_index = None if event.type != pygame.MOUSEMOTION else self.hover_index
                 return
         if (
@@ -164,7 +163,7 @@ class FootballRunScreen(Screen):
         ):
             if (
                 self.shop_review.mode == "playbook"
-                and self.shop_review.inspect.handle_event(event, **self._inspect_keys())
+                and self.shop_review.inspect.handle_event(event)
             ):
                 return
             if escape:
@@ -189,6 +188,9 @@ class FootballRunScreen(Screen):
             if event.type == pygame.WINDOWLEAVE:
                 self.hover_index = None
                 self.pressed_index = None
+            # Esc hides a visible coach panel before it can pause.
+            if self.coach_inspection.inspect.handle_event(event):
+                return
         if self._current_state().phase is FootballRunPhase.PLAYER_DRAFT:
             self.player_inspection.handle_event(event)
             if event.type == pygame.WINDOWLEAVE:
@@ -369,7 +371,7 @@ class FootballRunScreen(Screen):
                 self.buttons = shop_buttons
 
         pause_rect = (
-            pygame.Rect(1122, 37, 120, 32)
+            pygame.Rect(1140, 20, 120, 36)
             if state.phase is FootballRunPhase.COACH_DRAFT
             else pygame.Rect(38, 647, 120, 32)
             if state.phase is FootballRunPhase.PLAYER_DRAFT
@@ -389,10 +391,14 @@ class FootballRunScreen(Screen):
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
         if shop_landing and not self.pause.is_open:
-            self._shop_view().draw_overlay(surface, hovered_button=self._button_at(self.hover_index))
+            self._shop_view().draw_overlay(surface)
         if playbook_review and not self.pause.is_open:
-            self.shop_review.inspect.paint(surface, hovered_button=self._button_at(self.hover_index))
-        if self.last_error is not None and state.phase is not FootballRunPhase.PRE_MATCH_SHOP:
+            self.shop_review.inspect.paint(surface)
+        if state.phase is FootballRunPhase.COACH_DRAFT and not self.pause.is_open:
+            self._coach_view().draw_overlay(surface)
+        if self.last_error is not None and state.phase is FootballRunPhase.COACH_DRAFT:
+            draw_message_banner(surface, COACH_ERROR_RECT, f"CHECK: {self.last_error}", danger=True)
+        elif self.last_error is not None and state.phase is not FootballRunPhase.PRE_MATCH_SHOP:
             error_rect = pygame.Rect(
                 layout.margin,
                 layout.height - 23
@@ -405,9 +411,7 @@ class FootballRunScreen(Screen):
                 surface,
                 f"CHECK: {self.last_error}",
                 error_rect.topleft,
-                self._staff_small_font
-                if state.phase is FootballRunPhase.COACH_DRAFT
-                else self._draft_label_font
+                self._draft_label_font
                 if state.phase is FootballRunPhase.PLAYER_DRAFT
                 else self._small_font,
                 self.theme.danger,
@@ -553,14 +557,16 @@ class FootballRunScreen(Screen):
                 surface.blit(label, label.get_rect(center=rect.center))
                 continue
 
+    def _new_coach_inspection(self) -> CoachInspection:
+        return CoachInspection(inspect=InspectState(lambda: self._clock()))
+
     def _coach_view(self) -> FootballCoachView:
         return FootballCoachView(
             self.theme, self.coach_inspection, self.focus_index,
-            self._staff_body_font, self._staff_stat_font,
-            self._staff_small_font, self._staff_main_font, self._staff_button_font,
             lambda choice: self._submit(
                 lambda: self._require_controller().choose_coach(choice)
             ),
+            self.team_name,
         )
 
     def _player_draft_view(self) -> FootballPlayerDraftView:
@@ -616,12 +622,6 @@ class FootballRunScreen(Screen):
         self.focus_index = 0
         self.hover_index = None
         self.pressed_index = None
-
-    def _inspect_keys(self) -> dict:
-        return {
-            "hover_key": getattr(self._button_at(self.hover_index), "inspect_key", None),
-            "focus_key": getattr(self._button_at(self.focus_index), "inspect_key", None),
-        }
 
     def _button_at(self, index: int | None) -> Button | None:
         if index is None or not 0 <= index < len(self.buttons):
@@ -680,6 +680,7 @@ class FootballRunScreen(Screen):
             self._shop_view().inspect.reset()
             self.shop_review.inspect.reset()
         self.coach_inspection.hover_index = None
+        self.coach_inspection.reset_inspect()
         self.pause.show(self.focus_index)
         self.buttons = []
         self.focus_index = 0

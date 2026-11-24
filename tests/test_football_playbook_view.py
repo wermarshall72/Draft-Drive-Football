@@ -362,15 +362,30 @@ def test_inspect_panel_opens_on_hover_and_closes_for_each_card_type(category: st
     assert not interaction.inspect.panel_rect.colliderect(card.rect)
     view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop)
     assert interaction.inspect.overlay is None
-    interaction.inspect.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_i}),
-                                     focus_key=card.inspect_key)
-    close = None
-    for button in view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop):
-        if button.label == "CLOSE [ESC]":
-            close = button
-    assert close is not None and interaction.inspect.pinned_key == card.inspect_key
+    # I never opens, pins, or closes a panel; no close button is ever added.
+    i_key = pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_i})
+    assert not interaction.inspect.handle_event(i_key)
+    buttons = view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop)
+    assert interaction.inspect.overlay is None
+    assert "CLOSE [ESC]" not in [button.label for button in buttons]
+    view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop,
+                       hover_key=card.inspect_key)
+    now[0] += HOVER_DELAY_MS + 1
+    view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop,
+                       hover_key=card.inspect_key)
+    assert interaction.inspect.shown_key == card.inspect_key
+    assert not interaction.inspect.handle_event(i_key)
+    view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop,
+                       hover_key=card.inspect_key)
+    assert interaction.inspect.shown_key == card.inspect_key
+    with text_audit() as records:
+        interaction.inspect.paint(pygame.Surface(LOGICAL_SIZE))
+    assert "PRESS I TO PIN" not in [text for text, _r, _c in records]
+    # Esc hides a visible panel.
     assert interaction.inspect.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_ESCAPE}))
-    assert interaction.inspect.pinned_key is None
+    view.draw_playbook(pygame.Surface(LOGICAL_SIZE), pygame.Rect(20, 16, 1240, 688), shop,
+                       hover_key=card.inspect_key)
+    assert interaction.inspect.overlay is None
 
 
 @pytest.mark.parametrize(("primary", "secondary"), [("navy", "gold"), ("silver", "navy"), ("yellow", "green")])

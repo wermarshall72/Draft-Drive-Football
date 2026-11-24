@@ -63,7 +63,6 @@ from src.engine.football_shop import (
 from src.ui.application import DesktopApplication
 from src.ui import football_run_screen as football_run_screen_module
 from src.ui.football_display import _PLAY_LABELS
-from src.ui import football_coach_view as football_coach_module
 from src.ui import football_review_view as football_review_module
 from src.ui import football_depth_chart as football_depth_module
 from src.ui.football_card_art import (
@@ -771,23 +770,21 @@ def test_coach_selection_error_preserves_offer_and_is_displayed(tmp_path: Path, 
     controller = desktop.football_controller
     assert controller is not None
     before = controller.state
-    displayed: list[str] = []
-    original_draw = football_run_screen_module.draw_text
 
     def reject_choice(_choice):
         raise ValueError("Staff could not be chosen.")
 
-    def capture(surface, text, position, font, color):
-        displayed.append(text)
-        original_draw(surface, text, position, font, color)
-
     monkeypatch.setattr(controller, "choose_coach", reject_choice)
-    monkeypatch.setattr(football_run_screen_module, "draw_text", capture)
     _activate(desktop, "CHOOSE STAFF 02")
-    desktop.router.draw(_surface())
+    with text_audit() as records:
+        desktop.router.draw(_surface())
     assert controller.state == before
     assert desktop.run_screen.last_error == "Staff could not be chosen."
-    assert "CHECK: Staff could not be chosen." in displayed
+    banner = [(rect, container) for text, rect, container in records
+              if text == "CHECK: Staff could not be chosen."]
+    assert banner and all(container.contains(rect) for rect, container in banner)
+    cards = desktop.run_screen.coach_inspection.card_rects
+    assert all(not rect.colliderect(card) for rect, _ in banner for card in cards)
 
 
 def test_coach_view_navigation_resets_inspection_and_uses_updated_profile(
@@ -819,16 +816,10 @@ def test_coach_view_navigation_resets_inspection_and_uses_updated_profile(
     _activate(desktop, "CONFIRM QUIT")
     assert desktop.router.current_id == "main_menu"
     desktop.save_profile("Fresh Coaches", "crimson", "gold")
-    displayed: list[str] = []
-    original_text = football_coach_module.draw_text
-
-    def capture(surface, text, position, font, color):
-        displayed.append(text)
-        original_text(surface, text, position, font, color)
-
-    monkeypatch.setattr(football_coach_module, "draw_text", capture)
     _start_run(desktop)
-    desktop.router.draw(_surface())
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    assert "FRESH COACHES" in [text for text, _rect, _container in records]
     assert desktop.football_controller is not first_controller
     assert desktop.football_controller.state.phase is FootballRunPhase.COACH_DRAFT
     assert screen.coach_inspection.hover_index is None

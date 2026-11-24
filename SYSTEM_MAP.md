@@ -48,7 +48,7 @@ and pending removal, match with any replay settled, regular result, and focus).
 clock), the shared veil/panel/button drawing, and the PAUSE [ESC] button look.
 Every run screen shows PAUSE [ESC] and opens the same menu on Esc (KEEP
 PLAYING, RETURN TO MENU, QUIT RUN; the match variant adds DEPTH CHART and PLAY
-LOG); inner popups, pinned inspect panels, and a pending removal take Esc
+LOG); inner popups, visible inspect panels, and a pending removal take Esc
 first. FIRED and PLAYOFFS runs have ended: no pause, and leaving discards them.
 [test_pause_menu.py](tests/test_pause_menu.py) covers the menu, resume, Quit
 Run, and the replace-run confirmation.
@@ -60,8 +60,17 @@ covers extracted interaction state.
 - **Coach and player draft:** [football_coach_view.py](src/ui/football_coach_view.py)
   and [football_player_draft_view.py](src/ui/football_player_draft_view.py)
   render choices and details; [football_draft_interaction.py](src/ui/football_draft_interaction.py)
-  tracks coach pair highlighting and player-card interaction and cosmetic skin tones.
-  Coach cards show position modifiers and active perks inline; the fixed portraits
+  tracks coach pair highlighting, the coach inspect panel (`CoachInspection`:
+  a hovered coach column/perk row shows that coach; a keyboard-focused pair
+  shows both coaches' perk lines and full rules), and
+  player-card interaction and cosmetic skin tones. The coach screen uses the
+  shared kit look (stadium backdrop, kit panels, team accent only on the active
+  pair outline and SELECT PAIR fill); each card shows Depth Chart-style position
+  modifiers and one short perk line per coach, and the full rules open in the
+  shared `football_inspect` panel (`coach_inspect`, `coach_pair_inspect`). Perk wording has one source,
+  [football_coach_perks.py](src/ui/football_coach_perks.py): `coach_perk_short`
+  for cards (coach selection and both faces of the Depth Chart coach card),
+  `coach_perk_rules` for the panel, and `modifier_text`. The fixed portraits
   and primary-color clothing masks are in `assets/draft_coaches`.
   Player cards display complete inactive perk details without a popup. Six
   position-mapped, team-colored sprites and a shared Heisman hover/focus pose
@@ -79,7 +88,9 @@ covers extracted interaction state.
   executed. See
   [test_football_team_builder.py](tests/test_football_team_builder.py),
   [test_football_coaches.py](tests/test_football_coaches.py), and
-  [test_coach_draft_redesign.py](tests/test_coach_draft_redesign.py), and
+  [test_coach_draft_redesign.py](tests/test_coach_draft_redesign.py),
+  [test_coach_selection_screen.py](tests/test_coach_selection_screen.py) (perk
+  wording, text fit, Depth Chart wording, inspect panel), and
   [test_football_player_catalog.py](tests/test_football_player_catalog.py), and
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
@@ -94,9 +105,9 @@ covers extracted interaction state.
   which also supplies the full detail sections. Play, scheme, bonus, and Remove
   One Card faces come from [football_card_faces.py](src/ui/football_card_faces.py)
   (shared with the Playbook). [football_inspect.py](src/ui/football_inspect.py)
-  owns hover/focus/I-key inspect panels (`InspectState`) and their content for
-  every card type; panels sit beside the card and pinned panels swallow clicks
-  beneath them. [football_ui_kit.py](src/ui/football_ui_kit.py) holds the shared
+  owns hover/focus inspect panels (`InspectState`) and their content for
+  every card type: a panel appears after a short delay, hides when the pointer
+  or focus moves away or on Esc, sits beside its card, and never takes clicks. [football_ui_kit.py](src/ui/football_ui_kit.py) holds the shared
   navy palette, fonts, `text_audit`, stadium backdrop, popup panel and buttons,
   kit/painted buttons, card shell, and the single rarity palette (Rare blue);
   `football_match_palette.py` re-exports it for the match modules.
