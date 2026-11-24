@@ -839,6 +839,53 @@ def test_removal_is_transactional_cancelable_and_charges_only_on_confirmation() 
     assert replacement not in (s.card for s in removed.section(FootballShopSection.PLAYS_SCHEMES).slots)
 
 
+def test_used_removal_is_not_rerolled_by_next_day_until_the_next_visit() -> None:
+    removal = FootballShopCard(
+        card_id="remove-one-card",
+        name="Remove One Card",
+        description="Remove one owned play or scheme.",
+        section=FootballShopSection.PLAYS_SCHEMES,
+        rarity=FootballShopRarity.RARE,
+        cost=CARD_REMOVAL_COST,
+        eligible=lambda _roster: True,
+        effect=lambda roster: roster,
+        is_removal=True,
+    )
+    other_rare = _future_catalog_card(
+        "other-rare", FootballShopSection.PLAYS_SCHEMES, FootballShopRarity.RARE
+    )
+    shop = FootballShop(
+        _roster(),
+        rng=_FixedShopRng(0.9),
+        # _FixedShopRng makes choice() pick the last eligible card, so the
+        # removal service wins every roll whenever it is eligible.
+        catalogs={FootballShopSection.PLAYS_SCHEMES: (other_rare, removal)},
+    )
+    section = FootballShopSection.PLAYS_SCHEMES
+    shop._offers[section] = [removal, None, None, None]
+    shop.buy_card(section, removal.card_id)
+    state = shop.remove_owned_card(shop.state.offensive_deck[-1].copy_id)
+    assert state.section(section).slots[0].purchased
+
+    for _ in range(3):
+        state = shop.move_to_next_day()
+        offered = [slot.card for slot in state.section(section).slots if slot.unlocked]
+        assert removal not in offered
+        assert other_rare in offered
+        assert all(not slot.purchased for slot in state.section(section).slots)
+    with pytest.raises(ValueError, match="not in the current offer"):
+        shop.buy_card(section, removal.card_id)
+
+    shop.finish()
+    next_visit = shop.open_next_visit(2)
+    # The once-per-visit exclusion ends with the visit.
+    seen = [
+        slot for slot in next_visit.section(section).slots if slot.card is removal
+    ]
+    assert seen
+    assert all(not slot.purchased and slot.disabled_reason is None for slot in seen)
+
+
 def test_bonus_purchase_stays_in_its_slot_until_next_day() -> None:
     shop = FootballShop(_roster(), rng=_FixedShopRng(0.99))
     section = FootballShopSection.PLAYS_SCHEMES

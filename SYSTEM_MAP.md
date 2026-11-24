@@ -246,7 +246,10 @@ covers extracted interaction state.
   24-scheme, and six-bonus-card catalogs plus the starter decks. The shop adds
   repeatable owned copies and removes explicitly selected copies. The
   controller passes those decks into the simulator, which deals and cycles
-  match hands. Bonus draws can target either human deck; Challenge restores
+  match hands (`_deal_deck`, `_cycle_played_card`, `_draw_one_into_hand`;
+  bonus effects in `resolve_bonus_card`). Every card replaces itself in its own
+  hand; Draw bonus cards add one extra offensive or defensive card with no
+  hand-size cap, and the hand UI shrinks then scrolls to fit; Challenge restores
   football state while retaining the post-play clock, card cycling, and event
   history. AI decks remain limited to named plays and schemes. UI calls use
   copy IDs, including two-point selections. See

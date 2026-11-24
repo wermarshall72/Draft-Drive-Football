@@ -384,3 +384,47 @@ def test_final_events_replay_even_when_single_and_new_matches_start_settled() ->
     assert playback.blocking() and playback.shown == 4
     playback.sync(_Match(2, seed=99), 200)
     assert playback.shown == 2 and not playback.blocking()
+
+
+def test_bonus_effect_wording_matches_the_new_draw_rules() -> None:
+    from src.ui.football_match_events import bonus_effect
+
+    assert "DRAW" not in bonus_effect(FootballBonusCardAction.OPPONENT_DISCARD)
+    assert bonus_effect(FootballBonusCardAction.OPPONENT_DISCARD) != bonus_effect(
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD
+    )
+    for action in (
+        FootballBonusCardAction.OFFENSIVE_DRAW,
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
+        FootballBonusCardAction.DEFENSIVE_DRAW,
+        FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD,
+    ):
+        assert bonus_effect(action).startswith("+1")
+
+
+def test_replay_snapshot_after_a_draw_card_keeps_live_hand_and_pile_counts() -> None:
+    from src.engine.football import FootballCardCopy, FootballDeckState
+    from src.engine.football_simulator import FootballMatchSimulator
+    from src.ui.football_match_events import snapshot_state
+    from src.ui.football_match_piles import pile_counts
+    from tests.test_football_bonus_cards import _deck, _match_state
+
+    bonus = FootballCardCopy("human:draw", FootballBonusCardAction.OFFENSIVE_DRAW.value)
+    plays = tuple(
+        FootballCardCopy(f"human:play:{index}", OffensivePlayAction.RB_RUN.value)
+        for index in range(5)
+    )
+    simulator = FootballMatchSimulator(
+        _match_state(_deck((bonus,) + plays, (bonus,) + plays[:2], plays[2:]))
+    )
+    simulator.resolve_bonus_card(bonus.copy_id)
+    after_draw = simulator.resolve_offensive_play(plays[0].copy_id)
+    deck = after_draw.team_a_offense_deck
+    assert isinstance(deck, FootballDeckState)
+    for shown in range(1, len(after_draw.match_events) + 1):
+        display = snapshot_state(after_draw, shown)
+        assert display.team_a_offense_deck == deck
+        counts = pile_counts(display.team_a_offense_deck)
+        assert counts.hand + counts.draw + counts.discard == counts.owned
+    # The enlarged hand (3 -> 4) survived the following normal play.
+    assert len(deck.hand) == 4

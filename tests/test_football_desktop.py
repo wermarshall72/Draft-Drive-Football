@@ -2352,3 +2352,179 @@ def test_match_screen_uses_kickoff_pending_during_replay_and_keeps_conversion_te
     texts = [text for text, _, _ in records]
     assert any("PAT / 2-PT TRY" in text for text in texts)
     assert not any("KICKOFF NEXT" in text for text in texts)
+
+
+_BIG_PLAY_IDS = tuple(list(OFFENSIVE_PLAY_CATALOG)[::6][:6] + list(OFFENSIVE_PLAY_CATALOG)[1::6])[:9]
+_BIG_SCHEME_IDS = tuple(list(DEFENSIVE_SCHEME_CATALOG)[::4] + list(DEFENSIVE_SCHEME_CATALOG)[1::4])
+
+
+def _drive_to_decision(desktop: DesktopApplication, decision: FootballHumanDecision) -> None:
+    controller = desktop.football_controller
+    for _ in range(400):
+        _skip_match_playback(desktop)
+        if controller.state.human_decision is decision:
+            return
+        _play_human_decision(desktop)
+    raise AssertionError(f"never reached {decision}")
+
+
+def _set_human_hands(
+    desktop: DesktopApplication, offense_ids: tuple[str, ...], defense_ids: tuple[str, ...]
+) -> None:
+    """Replace both human hands with enlarged ones; prior hand cards move to draw."""
+    simulator = desktop.football_controller._simulator
+    state = simulator.state
+    offense, defense = state.team_a_offense_deck, state.team_a_defense_deck
+    offense_hand = tuple(FootballCardCopy(f"big-o-{i}", cid) for i, cid in enumerate(offense_ids))
+    defense_hand = tuple(FootballCardCopy(f"big-d-{i}", cid) for i, cid in enumerate(defense_ids))
+    simulator.state = replace(
+        state,
+        team_a_offense_deck=FootballDeckState(
+            offense.owned + offense_hand, draw_pile=offense.draw_pile + offense.hand,
+            hand=offense_hand, discard_pile=offense.discard_pile,
+        ),
+        team_a_defense_deck=FootballDeckState(
+            defense.owned + defense_hand, draw_pile=defense.draw_pile + defense.hand,
+            hand=defense_hand, discard_pile=defense.discard_pile,
+        ),
+    )
+    desktop.run_screen.state = desktop.football_controller.state
+    desktop.run_screen.match_screen.interaction.auto_scroll_key = None
+
+
+def _assert_large_hand_frame(desktop: DesktopApplication) -> None:
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    _assert_text_fits(records)
+    buttons = desktop.run_screen.buttons
+    hand = [b for b in buttons if b.variant in ("hand-card", "hand-fallback")]
+    scroll = [b for b in buttons if b.variant == "hand-scroll"]
+    for button in hand + scroll:
+        assert HAND_RECT.contains(button.rect), button.label
+        for other in (LEFT_PILES_RECT, RIGHT_PILES_RECT, STRIP_RECT):
+            assert not button.rect.colliderect(other), button.label
+    for index, button in enumerate(hand):
+        assert button.rect.width >= 72
+        for other in hand[index + 1:] + scroll:
+            assert not button.rect.colliderect(other.rect), (button.label, other.label)
+
+
+@pytest.mark.parametrize(
+    ("decision", "offense_count", "defense_count"),
+    [
+        (FootballHumanDecision.OFFENSIVE_PLAY, offense, defense)
+        for offense, defense in ((4, 3), (5, 4), (6, 4), (7, 4), (7, 5))
+    ] + [(FootballHumanDecision.DEFENSIVE_SCHEME, 7, 5), (FootballHumanDecision.DEFENSIVE_SCHEME, 4, 3)],
+)
+def test_enlarged_hands_fit_the_match_screen_without_overlap(
+    tmp_path: Path, decision, offense_count, defense_count
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _drive_to_decision(desktop, decision)
+    _set_human_hands(desktop, _BIG_PLAY_IDS[:offense_count], _BIG_SCHEME_IDS[:defense_count])
+    _assert_large_hand_frame(desktop)
+    match_screen = desktop.run_screen.match_screen
+    off, de = layout_groups(HAND_RECT, offense_count, defense_count, {})
+    active_before = de.active_slot
+    scrolls = {b.label for b in desktop.run_screen.buttons if b.variant == "hand-scroll"}
+    if off.max_scroll:
+        assert {"SCROLL OFFENSE LEFT", "SCROLL OFFENSE RIGHT"} <= scrolls
+    if de.max_scroll:
+        assert {"SCROLL DEFENSE LEFT", "SCROLL DEFENSE RIGHT"} <= scrolls
+    # Scrolling never moves the fixed ACTIVE scheme slot.
+    for group in ("offense", "defense"):
+        match_screen.interaction.scroll_group(group, 10)
+    _assert_large_hand_frame(desktop)
+    _, scrolled_defense = layout_groups(HAND_RECT, offense_count, defense_count,
+                                        match_screen.interaction.group_scroll)
+    assert scrolled_defense.active_slot == active_before
+
+
+def test_enlarged_bonus_only_hand_keeps_the_fallback_slot_in_view(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _drive_to_decision(desktop, FootballHumanDecision.OFFENSIVE_PLAY)
+    _set_human_hands(
+        desktop,
+        ("offensive_draw", "defensive_draw", "opponent_discard", "challenge", "offensive_draw_discard"),
+        _BIG_SCHEME_IDS[:4],
+    )
+    _assert_large_hand_frame(desktop)
+    match_screen = desktop.run_screen.match_screen
+    match_screen.interaction.scroll_group("offense", 10)
+    _assert_large_hand_frame(desktop)
+    fallback = [b for b in desktop.run_screen.buttons if b.variant == "hand-fallback"]
+    assert [b.label for b in fallback] == ["FALLBACK / INSIDE RUN"]
+    assert fallback[0] in match_screen.shortcut_targets()
+
+
+@pytest.mark.parametrize(
+    ("decision", "group", "count"),
+    [
+        (FootballHumanDecision.OFFENSIVE_PLAY, "OFFENSE", 7),
+        (FootballHumanDecision.DEFENSIVE_SCHEME, "DEFENSE", 5),
+    ],
+)
+def test_keyboard_scrolling_and_number_keys_reach_every_enlarged_hand_card(
+    tmp_path: Path, decision, group, count
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _drive_to_decision(desktop, decision)
+    _set_human_hands(desktop, _BIG_PLAY_IDS[:7], _BIG_SCHEME_IDS[:5])
+    screen = desktop.run_screen
+    match_screen = screen.match_screen
+    reached: set[str] = set()
+    for _ in range(count + 2):
+        desktop.router.draw(_surface())
+        targets = match_screen.shortcut_targets()
+        cards = [b for b in targets if b.variant == "hand-card"]
+        assert 0 < len(cards) <= 9
+        reached.update(match_screen.interaction.card_rects)
+        scroll_right = next(
+            b for b in screen.buttons if b.label == f"SCROLL {group} RIGHT"
+        )
+        if not scroll_right.enabled:
+            break
+        screen.focus_index = screen.buttons.index(scroll_right)
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+    prefix = "big-o-" if group == "OFFENSE" else "big-d-"
+    assert {copy_id for copy_id in reached if copy_id.startswith(prefix)} == {
+        f"{prefix}{index}" for index in range(count)
+    }
+    # The last number key in view plays the last card in the hand.
+    desktop.router.draw(_surface())
+    before = len(desktop.football_controller.state.match.match_events)
+    key = pygame.K_1 + len(match_screen.shortcut_targets()) - 1
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": key}))
+    played = desktop.football_controller.state.match.match_events[before]
+    assert played.card_copy_id == f"{prefix}{count - 1}"
+
+
+def test_offensive_draw_from_the_hand_grows_hand_and_keeps_pile_counts(tmp_path: Path) -> None:
+    desktop = _new_desktop(tmp_path)
+    _start_match(desktop)
+    _drive_to_decision(desktop, FootballHumanDecision.OFFENSIVE_PLAY)
+    _set_human_hands(desktop, ("offensive_draw",) + _BIG_PLAY_IDS[:2], _BIG_SCHEME_IDS[:2])
+    desktop.router.draw(_surface())
+    screen = desktop.run_screen
+    match_before = desktop.football_controller.state.match
+    bonus = next(b for b in screen.buttons if b.label == "OFFENSIVE DRAW")
+    bonus.action()
+    _skip_match_playback(desktop)
+    match = desktop.football_controller.state.match
+    offense = match.team_a_offense_deck
+    assert len(offense.hand) == 4
+    assert offense.discard_pile[-1].copy_id == "big-o-0"
+    counts = pile_counts(offense)
+    assert counts.hand + counts.draw + counts.discard == counts.owned
+    assert counts.draw == len(match_before.team_a_offense_deck.draw_pile) - 2
+    assert pile_counts(match.team_a_defense_deck).hand == 2
+    # Replaying up to the bonus event shows the post-draw decks, not stale ones.
+    display = snapshot_state(match, len(match.match_events))
+    assert display.team_a_offense_deck == offense
+    with text_audit() as records:
+        desktop.router.draw(_surface())
+    _assert_text_fits(records)
+    assert len([b for b in screen.buttons if b.variant == "hand-card"]) == 4

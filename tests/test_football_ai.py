@@ -693,3 +693,42 @@ def test_ai_two_point_card_choice_is_from_its_current_hand(
         team_b_offense_deck=FootballDeckState((legal,)),
     )
     assert ai.choose_conversion_card(empty_state) is None
+
+
+@pytest.mark.parametrize("difficulty", list(FootballAIDifficulty))
+def test_ai_chooses_from_enlarged_hands_of_any_size(
+    difficulty: FootballAIDifficulty,
+) -> None:
+    plays = tuple(
+        FootballCardCopy(f"big:offense:{card_id}", card_id)
+        for card_id in OFFENSIVE_PLAY_CATALOG
+    )
+    schemes = tuple(
+        FootballCardCopy(f"big:defense:{card_id}", card_id)
+        for card_id in DEFENSIVE_SCHEME_CATALOG
+    )
+    for offense_size, defense_size in ((4, 3), (7, 5)):
+        offense = FootballDeckState(
+            plays, draw_pile=plays[offense_size:], hand=plays[:offense_size]
+        )
+        defense = FootballDeckState(
+            schemes, draw_pile=schemes[defense_size:], hand=schemes[:defense_size]
+        )
+        hand_actions = {
+            OFFENSIVE_PLAY_CATALOG[card.card_id].action for card in offense.hand
+        }
+        scheme_actions = {
+            DEFENSIVE_SCHEME_CATALOG[card.card_id].action for card in defense.hand
+        }
+        ai = _ai(difficulty, seed=offense_size)
+        play_state = _state(
+            awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+            team_a_offense_deck=offense,
+        )
+        assert ai.choose_action(play_state) in hand_actions
+        scheme_state = _state(
+            possession=FootballTeamSide.TEAM_B,
+            awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+            team_a_defense_deck=defense,
+        )
+        assert ai.choose_action(scheme_state) in scheme_actions

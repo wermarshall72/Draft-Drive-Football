@@ -907,7 +907,12 @@ class FootballShop:
         return None
 
     def _card_is_available(self, card: FootballShopCard) -> bool:
-        if card.is_removal and not self._removable_cards():
+        if card.is_removal and (
+            not self._removable_cards()
+            # Remove One Card is once per visit: a Next Day reroll (or a new
+            # slot unlock) must not offer it again after it was used.
+            or (card.section, card.card_id) in self._purchased
+        ):
             return False
         effect = card.coach_upgrade_effect
         if effect is not None:

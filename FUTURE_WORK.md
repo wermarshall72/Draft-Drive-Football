@@ -49,6 +49,10 @@ or the design changes.
   Remove One Card a Rare shop-only service, not a playable deck card.
 - [x] Implement match-local hands, draw/discard cycling, empty-hand fallbacks,
   period-boundary resets, a shared active-hand UI, and hand-limited AI choices.
+- [x] Make offensive and defensive hands independent: every played card replaces
+  itself, Draw bonus cards add one extra card with no hand-size cap, and
+  halftime/overtime redeal to three and two. Balance of enlarged hands is
+  untested in playtesting.
 - [x] Resolve "Go For It" through a normal offensive card play using the active
   defensive scheme; failed fourth-down plays turn the ball over at the play
   spot, while punts and field goals remain separate special-teams actions.
@@ -129,12 +133,10 @@ or the design changes.
 
 ## Known bugs
 
-- [ ] Opponent Discard (Rare) and Offensive Draw & Discard (Very Rare) resolve
-  identically: each draws one offensive replacement and randomly discards one
-  card from the opponent's hand, and their descriptions are nearly the same.
-  Decide how the Very Rare card should differ, then update its effect, text,
-  and tests.
-- [ ] After Remove One Card is used in a shop visit, a Next Day reroll can offer
-  it again even though it cannot be bought until the next visit. Either exclude
-  it from rerolled offers for the rest of the visit or change its purchase
-  limit, and show a consistent disabled state.
+- [x] Opponent Discard (Rare) and Offensive Draw & Discard (Very Rare) resolved
+  identically. Fixed by the independent-hand rules: every card replaces itself,
+  and Draw bonus cards add one extra card, so Offensive Draw & Discard now also
+  draws an extra offensive card while Opponent Discard only replaces itself.
+- [x] After Remove One Card is used in a shop visit, a Next Day reroll could
+  offer it again. It is now excluded from rerolled offers (and new slot
+  unlocks) for the rest of that visit and returns at the next visit.

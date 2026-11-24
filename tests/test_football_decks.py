@@ -258,3 +258,30 @@ def test_overtime_resets_once_and_later_overtime_periods_do_not_reset_again() ->
     assert simulator.state.period == 4
     assert simulator.state.team_a_offense_deck == before_next_overtime.team_a_offense_deck
     assert simulator.state.team_a_defense_deck == before_next_overtime.team_a_defense_deck
+
+
+def test_bonus_card_text_describes_extra_draws_with_stable_ids() -> None:
+    from src.engine.football import FootballBonusCardAction
+    from src.engine.football_decks import BONUS_CARD_CATALOG
+
+    assert list(BONUS_CARD_CATALOG) == [
+        "offensive_draw",
+        "defensive_draw",
+        "opponent_discard",
+        "offensive_draw_discard",
+        "defensive_draw_discard",
+        "challenge",
+    ]
+    text = {action: BONUS_CARD_CATALOG[action.value].description for action in FootballBonusCardAction}
+    assert text[FootballBonusCardAction.OFFENSIVE_DRAW] == (
+        "Draw one extra offensive card. Costs 10 seconds."
+    )
+    assert text[FootballBonusCardAction.DEFENSIVE_DRAW] == (
+        "Draw one extra defensive scheme. Costs 10 seconds."
+    )
+    assert text[FootballBonusCardAction.OPPONENT_DISCARD] == (
+        "Randomly discard one card from the opposing hand. Costs 10 seconds."
+    )
+    assert "extra offensive card" in text[FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD]
+    assert "extra defensive scheme" in text[FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD]
+    assert len(set(text.values())) == len(text)

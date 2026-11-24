@@ -481,7 +481,9 @@ class HandView:
         text_box = pygame.Rect(inner.left, tile.bottom, inner.width, stats.top - tile.bottom)
         y = tile.bottom + 5
         name = self._card_name(card, group).upper()
-        name_font, lines = fit_wrapped(name, inner.width, (14, 13, 12, 11, 10), 2)
+        # 9 and 8 only apply to the narrowest (scrolling) cards, so long words
+        # such as QUARTERBACK never split mid-word.
+        name_font, lines = fit_wrapped(name, inner.width, (14, 13, 12, 11, 10, 9, 8), 2)
         for line in lines:
             blit_text(surface, name_font, line, MATCH_TEXT, text_box, midtop=(rect.centerx, y))
             y += name_font.get_height() - 1

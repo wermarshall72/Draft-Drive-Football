@@ -130,6 +130,12 @@ RUN_FUMBLE_PROBABILITIES = {
     FootballCardFamily.RB_RUN: 0.012,
 }
 
+_OFFENSIVE_EXTRA_DRAW_ACTIONS = frozenset(
+    (
+        FootballBonusCardAction.OFFENSIVE_DRAW,
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
+    )
+)
 _PASS_PLAYS = frozenset(
     definition.action
     for definition in OFFENSIVE_PLAY_CATALOG.values()
@@ -1460,10 +1466,6 @@ class FootballMatchSimulator:
             self.state.awaited_action is not FootballAwaitedAction.OFFENSIVE_PLAY
         ):
             raise ValueError("Bonus cards can only be played at a human offensive decision.")
-        if is_defensive_draw:
-            target_deck = self._deck_for(FootballTeamSide.TEAM_A, offensive=False)
-            if not (target_deck.draw_pile or target_deck.discard_pile):
-                raise ValueError("The defensive deck has no drawable card.")
 
         before = self.state
         clock_cost = 0 if action is FootballBonusCardAction.CHALLENGE else 10
@@ -1471,8 +1473,7 @@ class FootballMatchSimulator:
             FootballTeamSide.TEAM_A,
             offensive=True,
             card=selected,
-            draw_replacement=not is_defensive_draw
-            and action is not FootballBonusCardAction.CHALLENGE,
+            draw_replacement=False,
         )
         if action is FootballBonusCardAction.CHALLENGE:
             if not self._draw_one_into_hand(
@@ -1481,12 +1482,27 @@ class FootballMatchSimulator:
                 excluded_copy_ids=excluded,
             ):
                 raise RuntimeError("The offensive deck replacement became unavailable.")
-        if is_defensive_draw:
-            if not self._draw_one_into_hand(
+        else:
+            # Every other bonus card replaces itself, then a Draw card adds one
+            # extra card on top. Neither draw may return the bonus card itself;
+            # an empty draw (every other card already in hand) is a no-op.
+            own_copy = frozenset((selected.copy_id,))
+            self._draw_one_into_hand(
                 FootballTeamSide.TEAM_A,
-                offensive=False,
-            ):
-                raise RuntimeError("The defensive deck draw became unavailable.")
+                offensive=True,
+                excluded_copy_ids=own_copy,
+            )
+            if action in _OFFENSIVE_EXTRA_DRAW_ACTIONS:
+                self._draw_one_into_hand(
+                    FootballTeamSide.TEAM_A,
+                    offensive=True,
+                    excluded_copy_ids=own_copy,
+                )
+            elif is_defensive_draw:
+                self._draw_one_into_hand(
+                    FootballTeamSide.TEAM_A,
+                    offensive=False,
+                )
         if action in (
             FootballBonusCardAction.OPPONENT_DISCARD,
             FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,

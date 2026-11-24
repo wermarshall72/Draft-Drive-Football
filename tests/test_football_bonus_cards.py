@@ -247,30 +247,44 @@ def test_bonus_shop_purchase_stays_purchased_and_adds_offensive_copy() -> None:
     assert shop.remaining_ap == 10
 
 
+def _three_card_offense(
+    bonus: FootballCardCopy,
+) -> tuple[FootballDeckState, tuple[FootballCardCopy, ...]]:
+    plays = tuple(
+        FootballCardCopy(f"human:play:{action.value}", action.value)
+        for action in (
+            OffensivePlayAction.RB_RUN,
+            OffensivePlayAction.SCREEN_PASS,
+            OffensivePlayAction.PA_PASS,
+            OffensivePlayAction.SHORT_PASS,
+        )
+    )
+    owned = (bonus,) + plays
+    return _deck(owned, (bonus,) + plays[:2], plays[2:]), plays
+
+
 @pytest.mark.parametrize(
-    ("action", "draws_defense", "discards_opponent"),
+    ("action", "offense_extra", "defense_extra", "discards_opponent"),
     [
-        (FootballBonusCardAction.OFFENSIVE_DRAW, False, False),
-        (FootballBonusCardAction.DEFENSIVE_DRAW, True, False),
-        (FootballBonusCardAction.OPPONENT_DISCARD, False, True),
-        (FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD, False, True),
-        (FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD, True, True),
+        (FootballBonusCardAction.OFFENSIVE_DRAW, 1, 0, False),
+        (FootballBonusCardAction.DEFENSIVE_DRAW, 0, 1, False),
+        (FootballBonusCardAction.OPPONENT_DISCARD, 0, 0, True),
+        (FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD, 1, 0, True),
+        (FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD, 0, 1, True),
     ],
 )
-def test_bonus_effects_cycle_once_and_preserve_football_situation(
+def test_bonus_effects_replace_themselves_and_draw_extras(
     action: FootballBonusCardAction,
-    draws_defense: bool,
+    offense_extra: int,
+    defense_extra: int,
     discards_opponent: bool,
 ) -> None:
-    bonus, play, reserve = _owned_bonus_and_plays(action)
-    offense = _deck((bonus, play, reserve), (bonus, play), (reserve,))
+    bonus = FootballCardCopy(f"human:{action.value}", action.value)
+    offense, _plays = _three_card_offense(bonus)
     defense_cards = starting_defensive_deck("human")
     defense = _deck(defense_cards, defense_cards[:2], defense_cards[2:])
     opponent_cards = starting_defensive_deck("ai")
-    if discards_opponent:
-        opponent_defense = _deck(opponent_cards, opponent_cards[:2], opponent_cards[2:])
-    else:
-        opponent_defense = _deck(opponent_cards, (), opponent_cards)
+    opponent_defense = _deck(opponent_cards, opponent_cards[:2], opponent_cards[2:])
     simulator = FootballMatchSimulator(
         _match_state(
             offense,
@@ -284,8 +298,13 @@ def test_bonus_effects_cycle_once_and_preserve_football_situation(
     result = simulator.resolve_bonus_card(bonus.copy_id)
     next_offense = result.team_a_offense_deck
     assert next_offense is not None
-    assert bonus in next_offense.discard_pile
-    assert len(next_offense.hand) == len(offense.hand) - int(draws_defense)
+    assert next_offense.discard_pile == (bonus,)
+    assert bonus not in next_offense.hand
+    assert len(next_offense.hand) == 3 + offense_extra
+    assert {card.copy_id for card in next_offense.hand} <= {
+        card.copy_id for card in offense.owned
+    }
+    assert next_offense.owned == offense.owned
     assert len(next_offense.hand) + len(next_offense.draw_pile) + len(
         next_offense.discard_pile
     ) == len(next_offense.owned)
@@ -307,23 +326,49 @@ def test_bonus_effects_cycle_once_and_preserve_football_situation(
     )
     assert result.match_events[-1].action is action
     assert result.match_events[-1].card_copy_id == bonus.copy_id
+    assert result.match_events[-1].card_id == bonus.card_id
 
     next_defense = result.team_a_defense_deck
     assert next_defense is not None
-    if draws_defense:
-        assert len(next_defense.hand) == len(defense.hand) + 1
-    else:
+    assert len(next_defense.hand) == 2 + defense_extra
+    if not defense_extra:
         assert next_defense == defense
     opponent_after = result.team_b_defense_deck
     assert opponent_after is not None
-    if discards_opponent and opponent_hand:
+    if discards_opponent:
         assert len(opponent_after.hand) == len(opponent_hand) - 1
         assert len(opponent_after.discard_pile) == len(opponent_defense.discard_pile) + 1
     else:
-        assert opponent_after.hand == opponent_hand
+        assert opponent_after == opponent_defense
 
 
-def test_cross_deck_draw_reshuffles_and_fails_atomically_when_empty() -> None:
+def test_opponent_discard_and_offensive_draw_discard_now_differ() -> None:
+    sizes = {}
+    for action in (
+        FootballBonusCardAction.OPPONENT_DISCARD,
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
+    ):
+        bonus = FootballCardCopy(f"human:{action.value}", action.value)
+        offense, _plays = _three_card_offense(bonus)
+        opponent_cards = starting_defensive_deck("ai")
+        opponent = _deck(opponent_cards, opponent_cards[:2], opponent_cards[2:])
+        result = FootballMatchSimulator(
+            _match_state(offense, opponent_defense=opponent)
+        ).resolve_bonus_card(bonus.copy_id)
+        assert len(result.team_b_defense_deck.hand) == 1
+        assert len(result.team_b_defense_deck.discard_pile) == 1
+        sizes[action] = len(result.team_a_offense_deck.hand)
+    assert sizes == {
+        FootballBonusCardAction.OPPONENT_DISCARD: 3,
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD: 4,
+    }
+    descriptions = {
+        BONUS_CARD_CATALOG[action.value].description for action in sizes
+    }
+    assert len(descriptions) == 2
+
+
+def test_cross_deck_draw_reshuffles_and_empty_decks_are_a_no_op() -> None:
     bonus, play, reserve = _owned_bonus_and_plays(
         FootballBonusCardAction.DEFENSIVE_DRAW
     )
@@ -335,14 +380,92 @@ def test_cross_deck_draw_reshuffles_and_fails_atomically_when_empty() -> None:
     assert result.team_a_defense_deck is not None
     assert len(result.team_a_defense_deck.hand) == 3
     assert len(result.team_a_defense_deck.discard_pile) == 0
+    assert set(result.team_a_offense_deck.hand) == {play, reserve}
 
-    empty_simulator = FootballMatchSimulator(
-        _match_state(offense, defense=FootballDeckState(()))
+    # Nothing drawable anywhere: the card still plays, replaces nothing, and
+    # never draws itself back.
+    for action in FootballBonusCardAction:
+        if action is FootballBonusCardAction.CHALLENGE:
+            continue
+        lone = FootballCardCopy(f"human:{action.value}", action.value)
+        lone_play = FootballCardCopy("human:play:only", OffensivePlayAction.RB_RUN.value)
+        empty_simulator = FootballMatchSimulator(
+            _match_state(
+                _deck((lone, lone_play), (lone, lone_play)),
+                defense=FootballDeckState(()),
+            )
+        )
+        outcome = empty_simulator.resolve_bonus_card(lone.copy_id)
+        assert outcome.team_a_offense_deck.hand == (lone_play,)
+        assert outcome.team_a_offense_deck.discard_pile == (lone,)
+        assert outcome.team_a_defense_deck == FootballDeckState(())
+        assert outcome.game_clock_seconds == 890
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        FootballBonusCardAction.OFFENSIVE_DRAW,
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
+    ],
+)
+def test_draw_card_never_redraws_itself_as_its_own_extra(
+    action: FootballBonusCardAction,
+) -> None:
+    bonus = FootballCardCopy(f"human:{action.value}", action.value)
+    plays = tuple(
+        FootballCardCopy(f"human:play:{index}", OffensivePlayAction.RB_RUN.value)
+        for index in range(3)
     )
-    before = empty_simulator.state
-    with pytest.raises(ValueError, match="no drawable card"):
-        empty_simulator.resolve_bonus_card(bonus.copy_id)
-    assert empty_simulator.state is before
+    # Empty draw pile: both draws must reshuffle a discard that holds only the
+    # bonus card itself plus one play, so exactly one play comes back.
+    offense = _deck((bonus,) + plays, (bonus,) + plays[:2], (), plays[2:])
+    for seed in range(20):
+        state = replace(_match_state(offense), random_seed=seed)
+        result = FootballMatchSimulator(state).resolve_bonus_card(bonus.copy_id)
+        deck = result.team_a_offense_deck
+        assert bonus not in deck.hand
+        assert deck.discard_pile == (bonus,)
+        assert set(deck.hand) == set(plays)
+
+
+def test_several_draw_cards_grow_hands_without_a_cap() -> None:
+    bonuses = tuple(
+        FootballCardCopy(f"human:bonus:{index}", action.value)
+        for index, action in enumerate(
+            (
+                FootballBonusCardAction.OFFENSIVE_DRAW,
+                FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
+                FootballBonusCardAction.DEFENSIVE_DRAW,
+                FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD,
+            )
+        )
+    )
+    plays = tuple(
+        FootballCardCopy(f"human:play:{index}", OffensivePlayAction.RB_RUN.value)
+        for index in range(10)
+    )
+    owned = bonuses + plays
+    # Every bonus card is in hand along with three plays (7 cards); the rest
+    # wait in the draw pile.
+    offense = _deck(owned, bonuses + plays[:3], plays[3:])
+    defense_cards = starting_defensive_deck("human")
+    defense = _deck(defense_cards, defense_cards[:2], defense_cards[2:])
+    simulator = FootballMatchSimulator(_match_state(offense, defense=defense))
+
+    for bonus in bonuses:
+        simulator.resolve_bonus_card(bonus.copy_id)
+    state = simulator.state
+    plays_in_hand = [
+        card for card in state.team_a_offense_deck.hand if card in plays
+    ]
+    # 3 plays + 4 replacements + 2 offensive extras.
+    assert len(plays_in_hand) == 9
+    assert len(state.team_a_offense_deck.hand) == 9
+    assert len(state.team_a_defense_deck.hand) == 4
+    assert len(state.team_a_offense_deck.hand) + len(state.team_a_defense_deck.hand) > 5
+    assert set(state.team_a_offense_deck.discard_pile) == set(bonuses)
+    assert state.game_clock_seconds == 900 - 40
 
 
 def test_opponent_discard_is_seeded_and_empty_hand_does_not_block_own_draw() -> None:
@@ -767,3 +890,17 @@ def test_failed_fourth_down_also_prompts_before_the_opponent_advances() -> None:
     assert resumed.human_decision is FootballHumanDecision.OFFENSIVE_PLAY
     assert resumed.match.down == 4
     assert resumed.match.yards_to_go == controller_start.yards_to_go
+
+
+def test_draw_cards_replay_deterministically_for_a_seed() -> None:
+    bonus = FootballCardCopy("human:draw", FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD.value)
+    offense, plays = _three_card_offense(bonus)
+    opponent_cards = starting_defensive_deck("ai")
+    opponent = _deck(opponent_cards, opponent_cards[:2], opponent_cards[2:])
+    initial = _match_state(offense, opponent_defense=opponent)
+    results = []
+    for _ in range(2):
+        simulator = FootballMatchSimulator(initial)
+        simulator.resolve_bonus_card(bonus.copy_id)
+        results.append(simulator.resolve_offensive_play(plays[0].copy_id))
+    assert results[0] == results[1]

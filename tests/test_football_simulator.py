@@ -2157,3 +2157,75 @@ def test_expired_clock_and_non_tied_overtime_cannot_start_a_simulator():
                 game_clock_seconds=300,
             )
         )
+
+
+def _enlarged_team_a_decks() -> dict[str, FootballDeckState]:
+    plays = tuple(
+        FootballCardCopy(f"big:offense:{card_id}", card_id)
+        for card_id in OFFENSIVE_PLAY_CATALOG
+    )
+    schemes = tuple(
+        FootballCardCopy(f"big:defense:{card_id}", card_id)
+        for card_id in DEFENSIVE_SCHEME_CATALOG
+    )
+    return {
+        "team_a_offense_deck": FootballDeckState(
+            plays, draw_pile=plays[6:], hand=plays[:6]
+        ),
+        "team_a_defense_deck": FootballDeckState(
+            schemes, draw_pile=schemes[4:], hand=schemes[:4]
+        ),
+    }
+
+
+def test_enlarged_hand_stays_enlarged_after_a_normal_play():
+    decks = _enlarged_team_a_decks()
+    sim = FootballMatchSimulator(
+        _match_state(
+            awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+            current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+            **decks,
+        )
+    )
+    played = decks["team_a_offense_deck"].hand[0]
+    after = sim.resolve_offensive_play(played.copy_id)
+    deck = after.team_a_offense_deck
+    assert after.period == 1
+    assert len(deck.hand) == 6
+    assert played in deck.discard_pile
+    assert played not in deck.hand
+
+
+def test_halftime_and_overtime_redeal_enlarged_hands_to_three_and_two():
+    halftime = FootballMatchSimulator(
+        _match_state(
+            period=1,
+            game_clock_seconds=4,
+            awaited_action=FootballAwaitedAction.OFFENSIVE_PLAY,
+            current_drive_defensive_scheme=DefensiveSchemeAction.RB_RUN,
+            **_enlarged_team_a_decks(),
+        )
+    )
+    second = halftime.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    assert second.period == 2
+    assert len(second.team_a_offense_deck.hand) == 3
+    assert len(second.team_a_defense_deck.hand) == 2
+    assert len(second.team_b_offense_deck.hand) == 3
+    assert len(second.team_b_defense_deck.hand) == 2
+
+    tied = FootballMatchSimulator(
+        _match_state(
+            period=2,
+            game_clock_seconds=4,
+            down=4,
+            awaited_action=FootballAwaitedAction.FOURTH_DOWN_DECISION,
+            **_enlarged_team_a_decks(),
+        )
+    )
+    tied.rng = SequenceRNG(choice_value=FootballTeamSide.TEAM_B)
+    overtime = tied.resolve_fourth_down(FootballFourthDownAction.PUNT)
+    assert overtime.period == 3
+    assert len(overtime.team_a_offense_deck.hand) == 3
+    assert len(overtime.team_a_defense_deck.hand) == 2
+    assert len(overtime.team_b_offense_deck.hand) == 3
+    assert len(overtime.team_b_defense_deck.hand) == 2

@@ -543,27 +543,27 @@ BONUS_CARD_CATALOG = MappingProxyType(
             FootballBonusCardDefinition(
                 FootballBonusCardAction.OFFENSIVE_DRAW,
                 "Offensive Draw",
-                "Draw one offensive card to your hand. Costs 10 seconds.",
+                "Draw one extra offensive card. Costs 10 seconds.",
             ),
             FootballBonusCardDefinition(
                 FootballBonusCardAction.DEFENSIVE_DRAW,
                 "Defensive Draw",
-                "Draw one defensive scheme into your next defensive hand. Costs 10 seconds.",
+                "Draw one extra defensive scheme. Costs 10 seconds.",
             ),
             FootballBonusCardDefinition(
                 FootballBonusCardAction.OPPONENT_DISCARD,
                 "Opponent Discard",
-                "Draw one offensive replacement and randomly discard one card from the opposing hand. Costs 10 seconds.",
+                "Randomly discard one card from the opposing hand. Costs 10 seconds.",
             ),
             FootballBonusCardDefinition(
                 FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD,
                 "Offensive Draw & Discard",
-                "Draw one offensive replacement and randomly discard one opposing hand card. Costs 10 seconds.",
+                "Draw one extra offensive card and randomly discard one opposing hand card. Costs 10 seconds.",
             ),
             FootballBonusCardDefinition(
                 FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD,
                 "Defensive Draw & Discard",
-                "Draw one defensive scheme and randomly discard one opposing hand card. Costs 10 seconds.",
+                "Draw one extra defensive scheme and randomly discard one opposing hand card. Costs 10 seconds.",
             ),
             FootballBonusCardDefinition(
                 FootballBonusCardAction.CHALLENGE,

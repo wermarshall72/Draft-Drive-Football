@@ -516,11 +516,11 @@ def _conversion_outcome(
 
 def bonus_effect(action: FootballBonusCardAction) -> str:
     return {
-        FootballBonusCardAction.OFFENSIVE_DRAW: "DRAW 1 PLAY",
-        FootballBonusCardAction.DEFENSIVE_DRAW: "DRAW 1 SCHEME",
-        FootballBonusCardAction.OPPONENT_DISCARD: "DRAW 1 · OPP DISCARDS",
-        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD: "DRAW PLAY · OPP DISCARDS",
-        FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD: "DRAW SCHEME · OPP DISCARDS",
+        FootballBonusCardAction.OFFENSIVE_DRAW: "+1 EXTRA PLAY",
+        FootballBonusCardAction.DEFENSIVE_DRAW: "+1 EXTRA SCHEME",
+        FootballBonusCardAction.OPPONENT_DISCARD: "OPP DISCARDS 1",
+        FootballBonusCardAction.OFFENSIVE_DRAW_DISCARD: "+1 PLAY · OPP DISCARDS",
+        FootballBonusCardAction.DEFENSIVE_DRAW_DISCARD: "+1 SCHEME · OPP DISCARDS",
         FootballBonusCardAction.CHALLENGE: "UNDO YOUR LAST PLAY",
     }[action]
 
