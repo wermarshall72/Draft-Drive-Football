@@ -89,6 +89,11 @@ or the design changes.
   panels and stadium backdrop, Depth Chart-style modifiers, one short perk line
   per coach (shared with the Depth Chart coach cards), and hover/focus
   inspect panels with the full perk rules.
+- [x] Redesign the player draft screen in the match-screen style: kit header
+  and PAUSE [ESC] placement shared with coach selection, a draft tracker with
+  each position's coach bonus, coached power, and partner links, candidate
+  cards showing base and coached power plus a callout for an already-drafted
+  partner, and display names such as "Basic O-Line" for basic players.
 - [ ] Save the single active run to disk so it survives closing and reopening
   the game. Only one saved run ever exists, and starting a new run replaces it
   after the existing confirmation. Save at safe points (after each shop action,

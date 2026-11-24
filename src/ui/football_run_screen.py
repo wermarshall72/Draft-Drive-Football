@@ -29,7 +29,7 @@ from src.ui.football_pause_menu import PauseMenu, draw_pause_button, draw_pause_
 from src.ui.football_ui_kit import draw_message_banner, stadium_backdrop
 from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen
-from src.ui.theme import Theme, readable_ink
+from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_text
 
 RESULT_PHASES = frozenset({
@@ -41,7 +41,8 @@ RESULT_PHASES = frozenset({
 ENDED_PHASES = frozenset({FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS})
 PAUSE_LABEL = "PAUSE"
 RUN_PAUSE_VARIANT = "run-pause"
-# Coach selection shows choice errors in the header, between the title and PAUSE.
+# Coach selection and the player draft show choice errors in the header, between the
+# title and PAUSE.
 COACH_ERROR_RECT = pygame.Rect(640, 18, 484, 52)
 
 
@@ -73,13 +74,6 @@ class FootballRunScreen(Screen):
         self.coach_inspection = self._new_coach_inspection()
         self.player_inspection = PlayerInspection()
         self._staff_button_font = staff_font(17, semibold=True)
-        self._draft_title_font = staff_font(36, semibold=True)
-        self._draft_name_font = staff_font(25, semibold=True)
-        self._draft_stat_font = staff_font(21, semibold=True)
-        self._draft_label_font = staff_font(14, semibold=True)
-        self._draft_detail_font = staff_font(14)
-        self._draft_small_font = staff_font(13)
-        self._draft_button_font = staff_font(17, semibold=True)
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance: FootballShopView | None = None
         self._result_view = FootballResultView(
@@ -316,8 +310,8 @@ class FootballRunScreen(Screen):
                 self._coach_view().draw_backdrop(surface)
                 content = pygame.Rect(38, 122, 1204, 558)
             else:
-                self._player_draft_view().draw_backdrop(surface)
-                content = pygame.Rect(20, 20, 1240, 674)
+                self._player_draft_view().draw_backdrop(surface, state)
+                content = pygame.Rect(38, 122, 1204, 558)
         elif state.phase is FootballRunPhase.PRE_MATCH_SHOP and self.shop_review.mode is None:
             layout = Layout.from_surface(surface)
             surface.fill("#061629")
@@ -372,9 +366,7 @@ class FootballRunScreen(Screen):
 
         pause_rect = (
             pygame.Rect(1140, 20, 120, 36)
-            if state.phase is FootballRunPhase.COACH_DRAFT
-            else pygame.Rect(38, 647, 120, 32)
-            if state.phase is FootballRunPhase.PLAYER_DRAFT
+            if state.phase in (FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT)
             else pygame.Rect(content.right - 120, content.top, 120, 36)
             if depth_review or playbook_review
             else pygame.Rect(content.right - 120, 656, 120, 42)
@@ -396,14 +388,14 @@ class FootballRunScreen(Screen):
             self.shop_review.inspect.paint(surface)
         if state.phase is FootballRunPhase.COACH_DRAFT and not self.pause.is_open:
             self._coach_view().draw_overlay(surface)
-        if self.last_error is not None and state.phase is FootballRunPhase.COACH_DRAFT:
+        if self.last_error is not None and state.phase in (
+            FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT,
+        ):
             draw_message_banner(surface, COACH_ERROR_RECT, f"CHECK: {self.last_error}", danger=True)
         elif self.last_error is not None and state.phase is not FootballRunPhase.PRE_MATCH_SHOP:
             error_rect = pygame.Rect(
                 layout.margin,
-                layout.height - 23
-                if state.phase is FootballRunPhase.PLAYER_DRAFT
-                else layout.height - 49,
+                layout.height - 49,
                 layout.width - layout.margin * 2,
                 18,
             )
@@ -411,9 +403,7 @@ class FootballRunScreen(Screen):
                 surface,
                 f"CHECK: {self.last_error}",
                 error_rect.topleft,
-                self._draft_label_font
-                if state.phase is FootballRunPhase.PLAYER_DRAFT
-                else self._small_font,
+                self._small_font,
                 self.theme.danger,
             )
 
@@ -517,44 +507,9 @@ class FootballRunScreen(Screen):
                 )
                 continue
             if button.variant == "draft-select":
-                pressed = self.pressed_index == index and button.enabled
-                active = self.player_inspection.active_index(self.focus_index) == index
-                rect = button.rect.move(0, 2) if pressed else button.rect
-                fill = self.theme.primary if active else pygame.Color("#234b70")
-                if pressed:
-                    fill = self.theme.primary_dark
-                pygame.draw.rect(surface, fill, rect, border_radius=8)
-                pygame.draw.rect(
-                    surface,
-                    readable_ink(fill),
-                    rect,
-                    1,
-                    border_radius=8,
+                self._player_draft_view().draw_button(
+                    surface, button, index, pressed=self.pressed_index == index,
                 )
-                if active:
-                    pygame.draw.rect(
-                        surface,
-                        pygame.Color("#f5ead1"),
-                        rect.inflate(-3, -3),
-                        2,
-                        border_radius=6,
-                    )
-                if button.focused and self.player_inspection.keyboard:
-                    pygame.draw.rect(surface, "#111416", rect.inflate(7, 7), 3,
-                                     border_radius=11)
-                    pygame.draw.rect(surface, "#ffffff", rect.inflate(3, 3), 1,
-                                     border_radius=9)
-                if pressed:
-                    pygame.draw.line(
-                        surface, readable_ink(fill),
-                        (rect.left + 12, rect.top + 4),
-                        (rect.right - 12, rect.top + 4), 2,
-                    )
-                position = button.label.removeprefix("DRAFT ").strip()
-                label = self._draft_button_font.render(
-                    f"Draft {position}", True, readable_ink(fill)
-                )
-                surface.blit(label, label.get_rect(center=rect.center))
                 continue
 
     def _new_coach_inspection(self) -> CoachInspection:
@@ -572,13 +527,12 @@ class FootballRunScreen(Screen):
     def _player_draft_view(self) -> FootballPlayerDraftView:
         return FootballPlayerDraftView(
             self.theme, self.player_inspection, self.focus_index,
-            self._draft_title_font, self._draft_name_font, self._draft_label_font,
-            self._draft_small_font, self._draft_stat_font, self._draft_detail_font,
             lambda position, choice, appearance: self._submit(
                 lambda: self._require_controller().choose_player(
                     position, choice, appearance=appearance
                 )
             ),
+            self.team_name,
         )
 
     def _leave_shop_review(self) -> None:

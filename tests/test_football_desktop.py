@@ -341,21 +341,19 @@ def test_coach_and_eight_position_draft_are_controller_driven(
     assert state.shop is not None and state.shop.remaining_ap == 12
 
 
-def test_draft_cards_show_complete_actual_catalog_data(tmp_path: Path, monkeypatch) -> None:
+def _draft_texts(desktop, canvas=None) -> list[tuple[str, pygame.Rect, pygame.Rect]]:
+    with text_audit() as records:
+        desktop.router.draw(canvas or _surface())
+    return list(records)
+
+
+def test_draft_cards_show_complete_actual_catalog_data(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
     _activate(desktop, "CHOOSE STAFF 01")
     screen = desktop.run_screen
     state = screen.state
     assert state is not None
-    shown = []
-    original = football_player_draft_module.draw_complete_wrapped_text
-
-    def capture(surface, text, rect, font, color, **kwargs):
-        shown.append((text, rect.copy()))
-        return original(surface, text, rect, font, color, **kwargs)
-
-    monkeypatch.setattr(football_player_draft_module, "draw_complete_wrapped_text", capture)
     for types in PLAYER_TYPES_BY_POSITION.values():
         for player_type in types:
             player = replace(player_from_type(player_type), power=63.25,
@@ -363,28 +361,29 @@ def test_draft_cards_show_complete_actual_catalog_data(tmp_path: Path, monkeypat
             candidate = FootballPlayerCandidate(player, "test")
             screen.state = replace(state, team_builder=replace(
                 state.team_builder, current_offer=(candidate, candidate, candidate)))
-            shown.clear()
-            desktop.router.draw(_surface())
-            assert len(shown) == 6
+            records = _draft_texts(desktop)
             for index in range(3):
-                name, name_rect = shown[index * 2]
-                text, text_rect = shown[index * 2 + 1]
-                assert name == player_type.name
-                assert screen.player_inspection.card_rects[index].contains(name_rect)
-                assert not text_rect.colliderect(screen.buttons[index].rect)
+                card = screen.player_inspection.card_rects[index]
+                button = screen.buttons[index].rect
+                inside = [(text, rect) for text, rect, _ in records if card.contains(rect)]
+                texts = [text for text, _ in inside]
+                assert player_type.name in texts
+                perk_lines = [text for text, rect in inside
+                              if rect.top >= card.top + 364 and not rect.colliderect(button)]
+                assert all(not rect.colliderect(button) for text, rect in inside
+                           if text in perk_lines)
+                joined = " ".join(perk_lines)
                 if player_type.perk is None:
-                    assert text == "Perk: None"
+                    assert "Perk: None" in joined
                 else:
-                    assert "PLANNED / INACTIVE" in text
+                    assert "PLANNED / INACTIVE" in joined
                     for part in (player_type.perk.name, player_type.perk.trigger,
                                  player_type.perk.effect, player_type.perk.duration,
                                  player_type.perk.reset, player_type.perk.dependency):
-                        assert part in text
+                        assert part in joined
 
 
-def test_draft_card_stats_and_partners_are_visible_without_interaction(
-    tmp_path: Path, monkeypatch,
-) -> None:
+def test_draft_card_stats_and_partners_are_visible_without_interaction(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
     _activate(desktop, "CHOOSE STAFF 01")
@@ -396,35 +395,24 @@ def test_draft_card_stats_and_partners_are_visible_without_interaction(
         candidate.player, power=61.25 + index, volatility=0.125 + index / 100,
         stamina=0.735 + index / 100)) for index, candidate in enumerate(offers))
     screen.state = replace(state, team_builder=replace(state.team_builder, current_offer=changed))
-    shown = []
-    original = football_player_draft_module.draw_text
-
-    def capture(surface, text, position, font, color):
-        shown.append((text, position, font))
-        original(surface, text, position, font, color)
-
-    monkeypatch.setattr(football_player_draft_module, "draw_text", capture)
-    desktop.router.draw(_surface())
+    records = _draft_texts(desktop)
     for index, candidate in enumerate(changed):
         rect = screen.player_inspection.card_rects[index]
-        card_text = [(text, point, font) for text, point, font in shown
-                     if rect.collidepoint(point)]
-        texts = [text for text, _, _ in card_text]
+        card_text = [(text, drawn) for text, drawn, _ in records if rect.contains(drawn)]
+        texts = [text for text, _ in card_text]
         player_type = player_type_for_id(candidate.player.player_type_id)
-        partner = ("None" if player_type.partner_position is None else
-                   football_player_draft_module._draft_position_label(player_type.partner_position))
-        assert f"Partner: {partner}" in texts
-        assert str(candidate.player.power) in texts
+        if player_type.partner_position is None:
+            assert football_player_draft_module.NO_PARTNER in texts
+        else:
+            assert "PARTNER" in texts
+            assert football_player_draft_module._draft_position_label(player_type.partner_position) in texts
+            assert football_player_draft_module.PARTNER_EXPLANATION in texts
+        assert f"{candidate.player.power:g}" in texts
         assert football_player_draft_module._draft_percentage(candidate.player.volatility) in texts
         assert football_player_draft_module._draft_percentage(candidate.player.stamina) in texts
-        strip_left = rect.left + 10
-        strip_width = rect.width - 20
-        column_width = strip_width // 3
-        for column, label in enumerate(("POWER", "VOLATILITY", "STAMINA")):
-            _, point, font = next(item for item in card_text if item[0] == label)
-            label_rect = pygame.Rect(point, font.size(label))
-            next_column = strip_left + 7 + (column + 1) * column_width
-            assert label_rect.right <= min(strip_left + strip_width, next_column)
+        labels = [drawn for text, drawn in card_text if text in ("POWER", "VOLATILITY", "STAMINA")]
+        assert len(labels) == 3
+        assert all(not first.colliderect(second) for i, first in enumerate(labels) for second in labels[i + 1:])
 
 
 def test_each_card_uses_its_actual_candidate_position(tmp_path: Path, monkeypatch) -> None:
@@ -542,9 +530,8 @@ def test_draft_button_events_activate_correct_card_at_scaled_sizes(
                and pose.secondary == tuple(desktop.theme.secondary[:3]) for pose, _ in poses)
     assert [active for _, active in poses] == [False, False, True]
     selected_appearance = poses[2][0]
-    rect = screen.player_inspection.card_rects[2]
-    assert canvas.get_at((rect.left, rect.centery)) == desktop.theme.primary
-    assert canvas.get_at((button.rect.left + 12, button.rect.top + 10)) == desktop.theme.primary
+    accent = football_player_draft_module.team_accent(desktop.theme.primary)
+    assert canvas.get_at((button.rect.centerx, button.rect.top + 5)) == accent
     mouse(pygame.MOUSEBUTTONDOWN, button.rect.center, button=1)
     desktop.router.handle_event(pygame.event.Event(pygame.WINDOWLEAVE))
     mouse(pygame.MOUSEBUTTONUP, button.rect.center, button=1)
@@ -578,8 +565,9 @@ def test_draft_keyboard_focus_and_skin_tone_lifetime(tmp_path: Path, monkeypatch
     desktop.router.draw(canvas)
     assert screen.player_inspection.active_index(screen.focus_index) == 1
     assert screen.player_inspection.skin_tones == first
-    rect = screen.player_inspection.card_rects[1]
-    assert canvas.get_at((rect.left, rect.centery)) == desktop.theme.primary
+    button = screen.buttons[1].rect
+    accent = football_player_draft_module.team_accent(desktop.theme.primary)
+    assert canvas.get_at((button.centerx, button.top + 5)) == accent
     selected = desktop.football_controller.state.team_builder.current_offer[1].player
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
     assert desktop.football_controller.state.team_builder.selected_players[FootballPosition.QB] is selected
@@ -665,38 +653,30 @@ def test_heisman_pose_is_preserved_in_resized_presentation(tmp_path: Path, monke
     ]
 
 
-def test_draft_progress_uses_selected_players_and_selection_actions(
-    tmp_path: Path, monkeypatch,
-) -> None:
+def test_draft_progress_uses_selected_players_and_selection_actions(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_run(desktop)
     _activate(desktop, "CHOOSE STAFF 01")
     controller = desktop.football_controller
     assert controller is not None
     screen = desktop.run_screen
-    displayed: list[str] = []
-    original_text = football_run_screen_module.draw_text
-
-    def capture_text(surface, text, position, font, color):
-        displayed.append(text)
-        original_text(surface, text, position, font, color)
-
-    monkeypatch.setattr(football_player_draft_module, "draw_text", capture_text)
     chosen = []
     appearances = {}
     for index, position in enumerate(PLAYER_DRAFT_ORDER):
-        displayed.clear()
-        canvas = _surface()
-        desktop.router.draw(canvas)
-        assert displayed.count("Drafted") == index
-        assert displayed.count("Current pick") == 1
-        assert displayed.count("Up next") == len(PLAYER_DRAFT_ORDER) - index - 1
-        assert all(name in displayed for name in chosen)
-        for row in range(len(PLAYER_DRAFT_ORDER)):
-            expected = "#35404b" if row < index else (
-                "#214363" if row == index else "#091c30"
-            )
-            assert canvas.get_at((180, 171 + row * 57 + 40)) == pygame.Color(expected)
+        records = _draft_texts(desktop)
+        rows = football_player_draft_module.tracker_row_rects()
+        displayed = [text for text, _, _ in records]
+        assert displayed.count("CURRENT PICK") == 1
+        assert displayed.count("UP NEXT") == len(PLAYER_DRAFT_ORDER) - index - 1
+        for row_index, row_position in enumerate(PLAYER_DRAFT_ORDER):
+            row_texts = [text for text, drawn, _ in records if rows[row_position].contains(drawn)]
+            if row_index < index:
+                assert any(text.startswith(chosen[row_index][:3]) for text in row_texts)
+                assert any(text.startswith("PWR ") for text in row_texts)
+            elif row_index == index:
+                assert "CURRENT PICK" in row_texts
+            else:
+                assert "UP NEXT" in row_texts
         candidate = controller.state.team_builder.current_offer[1]
         appearance = screen.player_inspection.skin_tones[1]
         chosen.append(candidate.name)
@@ -755,13 +735,12 @@ def test_player_draft_error_preserves_state_and_is_visible(
     assert controller.state == before
     assert screen.state == before
     assert screen.last_error == "Draft rejected."
-    canvas = _surface()
-    desktop.router.draw(canvas)
-    assert any(
-        canvas.get_at((x, y)) == desktop.theme.danger
-        for x in range(24, 800)
-        for y in range(canvas.get_height() - 27, canvas.get_height() - 7)
-    )
+    records = _draft_texts(desktop)
+    banner = [(rect, container) for text, rect, container in records if text == "CHECK: Draft rejected."]
+    assert banner and all(container.contains(rect) for rect, container in banner)
+    assert all(container == football_run_screen_module.COACH_ERROR_RECT for _, container in banner)
+    cards = screen.player_inspection.card_rects
+    assert all(not rect.colliderect(card) for rect, _ in banner for card in cards)
 
 
 def test_coach_selection_error_preserves_offer_and_is_displayed(tmp_path: Path, monkeypatch) -> None:
@@ -1152,16 +1131,10 @@ def test_invalid_action_is_visible_and_does_not_change_controller_state(
     assert desktop.run_screen.state == before
     assert desktop.run_screen.last_error is not None
     assert "phase" in desktop.run_screen.last_error
-    canvas = _surface()
-    desktop.router.draw(canvas)
+    records = _draft_texts(desktop)
     assert desktop.run_screen.last_error is not None
     assert desktop.run_screen.state == before
-    error_visible = any(
-        canvas.get_at((x, y)) == desktop.theme.danger
-        for x in range(24, 800)
-        for y in range(canvas.get_height() - 27, canvas.get_height() - 7)
-    )
-    assert error_visible
+    assert any(text == f"CHECK: {desktop.run_screen.last_error}" for text, _, _ in records)
 
 
 def test_repeated_draws_do_not_change_state_or_consume_gameplay_rng(

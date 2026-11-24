@@ -8,6 +8,7 @@ import pygame
 
 from src.ui.player_art import SKIN_TONES
 from src.engine.football_team_builder import FootballPlayerCandidate
+from src.engine.football import FootballPosition
 from src.engine.football_appearance import FootballPlayerAppearance
 
 if TYPE_CHECKING:
@@ -92,6 +93,8 @@ class PlayerInspection:
     offers: tuple[FootballPlayerCandidate, ...] = ()
     skin_tones: tuple[tuple[int, int, int], ...] = ()
     portraits: list[tuple[pygame.Rect, FootballPlayerAppearance, bool]] = field(default_factory=list)
+    # The tracker row lit as the active card's partner position in the last drawn frame.
+    partner_row: FootballPosition | None = None
 
     def set_offers(self, offers: tuple[FootballPlayerCandidate, ...]) -> None:
         if len(offers) != len(self.offers) or any(

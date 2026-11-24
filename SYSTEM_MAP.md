@@ -72,7 +72,14 @@ covers extracted interaction state.
   for cards (coach selection and both faces of the Depth Chart coach card),
   `coach_perk_rules` for the panel, and `modifier_text`. The fixed portraits
   and primary-color clothing masks are in `assets/draft_coaches`.
-  Player cards display complete inactive perk details without a popup. Six
+  The player draft uses the same kit header, PAUSE [ESC] spot, and header
+  error banner as coach selection. Its sidebar tracker shows each position's
+  coach-bonus chip and, once drafted, coached power and partner link
+  (`tracker_row`); the active card's partner row is lit
+  (`PlayerInspection.partner_row`). Cards show base and coached power
+  (`draft_coached_power`, built on the engine's `coached_player_power`, which
+  the Depth Chart's Modified Stats also use), a partner callout
+  (`partner_callout`), and complete inactive perk details without a popup. Six
   position-mapped, team-colored sprites and a shared Heisman hover/focus pose
   and their masks are in
   `assets/draft_players`; [process_player_art.py](scripts/process_player_art.py)
@@ -90,7 +97,9 @@ covers extracted interaction state.
   [test_football_coaches.py](tests/test_football_coaches.py), and
   [test_coach_draft_redesign.py](tests/test_coach_draft_redesign.py),
   [test_coach_selection_screen.py](tests/test_coach_selection_screen.py) (perk
-  wording, text fit, Depth Chart wording, inspect panel), and
+  wording, text fit, Depth Chart wording, inspect panel),
+  [test_player_draft_redesign.py](tests/test_player_draft_redesign.py)
+  (coached power, tracker rows, partner links, text fit), and
   [test_football_player_catalog.py](tests/test_football_player_catalog.py), and
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)

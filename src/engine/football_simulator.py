@@ -47,7 +47,7 @@ from src.engine.football_coaches import (
     OFFENSIVE_POSITIONS,
     coaches_for_assignment,
 )
-from src.engine.football_player_catalog import player_contribution_modifier
+from src.engine.football_player_catalog import coached_player_power, player_contribution_modifier
 from src.engine.football_decks import (
     BONUS_CARD_CATALOG,
     DEFENSIVE_SCHEME_CATALOG,
@@ -264,8 +264,7 @@ def coached_player_baseline_stats(
     offense = position in OFFENSIVE_POSITIONS
     coach = coaches_for_assignment(roster.coach_assignment)[0 if offense else 1]
     modifier = coach.position_modifiers[position] if coach is not None else 0.0
-    power = (player.power * player_contribution_modifier(player, (player,), modifier)
-             * coach_power_multiplier(upgrades, offense=offense))
+    power = coached_player_power(player, modifier) * coach_power_multiplier(upgrades, offense=offense)
     volatility = player.volatility * coach_volatility_multiplier(upgrades, offense=offense)
     stamina = effective_player_stamina(player, coach_stamina_bonus(upgrades, offense=offense))
     return power, volatility, stamina

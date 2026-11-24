@@ -172,8 +172,19 @@ _SPECIALISTS = (
     _specialist("s_cb_range_safety", FootballPosition.SAFETIES, FootballPosition.CORNERBACKS, "Range Safety", "Range Recall", "a Safety+Cornerback scheme faces a Short Pass", "reduce the opponent's next-play volatility by 0.05", "one snap", "each game"),
 )
 
+_BASIC_DISPLAY_NAMES = {
+    FootballPosition.QB: "Basic QB",
+    FootballPosition.RB: "Basic RB",
+    FootballPosition.WR: "Basic WR",
+    FootballPosition.O_LINE: "Basic O-Line",
+    FootballPosition.D_LINE: "Basic D-Line",
+    FootballPosition.LINEBACKERS: "Basic Linebackers",
+    FootballPosition.CORNERBACKS: "Basic Cornerbacks",
+    FootballPosition.SAFETIES: "Basic Safeties",
+}
+
 BASIC_PLAYER_TYPES = tuple(
-    FootballPlayerType(f"basic_{position.value.lower()}", position, f"Basic {position.value.replace('_', ' ').title()}", None, None)
+    FootballPlayerType(f"basic_{position.value.lower()}", position, _BASIC_DISPLAY_NAMES[position], None, None)
     for position in FootballPosition
 )
 
@@ -316,3 +327,8 @@ def player_contribution_modifier(
         MAX_COMBINED_PLAYER_MODIFIER,
         1.0 + coach_modifier + partnership_bonus,
     )
+
+
+def coached_player_power(player: FootballPlayer, coach_modifier: float) -> float:
+    """Power with only the coach position modifier (no partnership, fatigue, or scheme)."""
+    return player.power * player_contribution_modifier(player, (player,), coach_modifier)
