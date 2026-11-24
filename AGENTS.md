@@ -20,6 +20,12 @@
 * Remove One Card is once per shop visit: after it is used, Next Day rerolls and slot unlocks do not offer it again until the next visit.
 * Next Day costs 1 AP and rerolls every unlocked shop offer. It clears same-day purchase exclusions for player upgrades and plays/schemes; coach upgrades stay run-unique, Remove One Card stays once per visit, and Next Day is blocked while a card removal is pending.
 
+## Saving
+* Exactly one active run is saved, as `run.json` (plus `run.backup.json`, the previous good save) beside `profile.json` in the OS app-data folder named by `APP_DATA_NAME` in `src/persistence/paths.py` (`DDF_DATA_DIR` overrides it). The desktop saves after every successful decision, on Return to Menu, and on quit; ended (FIRED/PLAYOFFS) and quit runs delete the save.
+* Engine objects own their format via `to_save_data`/`from_save_data`: stable IDs and enum `.value`s only, exact `random.Random` states, and every attribute that affects play (audit new `__init__` attributes and save or document them). A restored run must continue identically to an uninterrupted one. Unknown IDs raise `UnsupportedSave`.
+* The file is a versioned, checksummed JSON envelope. Any payload change bumps `CURRENT_SCHEMA_VERSION` and adds a dict-only `N -> N+1` step to `src/persistence/migrations.py` with a test. Never load or overwrite a save from a newer version without asking; never delete a damaged or unloadable save (move it aside). Never use pickle, and never store absolute paths, user/machine names, or local times.
+* `src/persistence/` does all file I/O and imports no pygame; tests must use temporary folders (see `tests/conftest.py`).
+
 The existing auto-battler engine, controller, shop, and snapshot code are legacy reference implementations, not gameplay compatibility requirements. Reuse them only where they fit the current direction. Do not infer redesigned mechanics from their old behavior.
 
 See [FUTURE_WORK.md](FUTURE_WORK.md) for deferred redesign work and open decisions; update it when work is completed or the design changes.

@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import MappingProxyType
+from typing import Any
 
 from src.engine.football import (
     FootballBonusCardAction,
@@ -28,7 +29,19 @@ from src.engine.football_decks import (
     starting_defensive_deck,
     starting_offensive_deck,
 )
+from src.engine.football import card_copies_from_save_data, card_copies_to_save_data
 from src.engine.football_simulator import coached_player_baseline_stats
+from src.engine.save_data import (
+    UnsupportedSave,
+    build,
+    enum_value,
+    required,
+    items,
+    lookup,
+    optional,
+    rng_from_data,
+    rng_to_data,
+)
 
 ACTION_POINT_BUDGET = 12
 PLAY_SCHEME_SLOT_COUNT = 4
@@ -375,6 +388,162 @@ class FootballShop:
         self._catalogs = self._validated_catalogs(catalogs)
         self._offers: dict[FootballShopSection, list[FootballShopCard | None]] = {}
         self._reset_offers()
+
+    # -- save data -------------------------------------------------------------
+    # Saved: every attribute set in ``__init__`` except the catalogs, which are
+    # rebuilt from the current game (or the caller's) and resolve every saved
+    # card by its stable ID. Purchase sets are stored sorted; they are only used
+    # for membership. The RNG is optional because the run controller shares its
+    # shop RNG with the shop and saves it once.
+
+    def to_save_data(self, *, include_rng: bool = True) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "seed": self.seed,
+            "roster": self._roster.to_save_data(),
+            "game_number": self._game_number,
+            "day": self._day,
+            "remaining_ap": self._remaining_ap,
+            "purchased": [
+                [section.value, card_id] for section, card_id in self._purchased
+            ],
+            "purchased_play_schemes_today": sorted(self._purchased_play_schemes_today),
+            "play_slots_purchased": sorted(self._play_slots_purchased),
+            "run_purchased_upgrades": [
+                upgrade.upgrade_id for upgrade in self._run_purchased_upgrades
+            ],
+            "pending_player_upgrades": [
+                upgrade.upgrade_id for upgrade in self._pending_player_upgrades
+            ],
+            "player_offer_purchased": sorted(self._player_offer_purchased),
+            "owned_coach_upgrades": [card.card_id for card in self._owned_coach_upgrades],
+            "future_shop_ap_bonus": self._future_shop_ap_bonus,
+            "offensive_deck": card_copies_to_save_data(self._offensive_deck),
+            "defensive_deck": card_copies_to_save_data(self._defensive_deck),
+            "copy_sequence": self._copy_sequence,
+            "pending_removal": (
+                self._pending_removal.card_id if self._pending_removal is not None else None
+            ),
+            "pending_removal_slot": self._pending_removal_slot,
+            "finished": self._finished,
+            "unlocked_slots": {
+                section.value: self._unlocked_slots[section] for section in FootballShopSection
+            },
+            "offers": {
+                section.value: [
+                    card.card_id if card is not None else None
+                    for card in self._offers[section]
+                ]
+                for section in FootballShopSection
+            },
+        }
+        if include_rng:
+            data["rng"] = rng_to_data(self._rng)
+        return data
+
+    @classmethod
+    def from_save_data(
+        cls,
+        data: Any,
+        *,
+        rng: random.Random | None = None,
+        catalogs: Mapping[FootballShopSection, tuple[FootballShopCard, ...]] | None = None,
+    ) -> "FootballShop":
+        """Restore a shop visit exactly, without drawing new offers.
+
+        ``rng`` supplies a shared generator when the data omits its own.
+        """
+        what = "Shop"
+        shop = cls.__new__(cls)
+        shop.seed = optional(data, "seed", int, what)
+        if rng is None:
+            rng = rng_from_data(required(data, "rng", list, what), "shop RNG")
+        shop._rng = rng
+        shop._catalogs = build("shop catalogs", lambda: shop._validated_catalogs(catalogs))
+        by_id = {
+            section: {card.card_id: card for card in cards}
+            for section, cards in shop._catalogs.items()
+        }
+
+        def card(section: FootballShopSection, card_id: Any) -> FootballShopCard:
+            return lookup(by_id[section], card_id, f"{section.value} card")
+
+        def section_of(value: Any) -> FootballShopSection:
+            return enum_value(FootballShopSection, value, "shop section")
+
+        def upgrade(upgrade_id: Any) -> FootballUpgrade:
+            found = card(FootballShopSection.PLAYER_UPGRADES, upgrade_id).upgrade
+            if found is None:
+                raise UnsupportedSave(f"Shop card {upgrade_id!r} is not a player upgrade.")
+            return found
+
+        def int_set(key: str) -> set[int]:
+            values = items(required(data, key, list, what), key)
+            if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+                raise UnsupportedSave(f"Shop {key} must list integers.")
+            return set(values)
+
+        def str_set(key: str) -> set[str]:
+            values = items(required(data, key, list, what), key)
+            if any(not isinstance(value, str) for value in values):
+                raise UnsupportedSave(f"Shop {key} must list strings.")
+            return set(values)
+
+        from src.engine.football import FootballRoster
+
+        shop._roster = FootballRoster.from_save_data(required(data, "roster", dict, what))
+        shop._game_number = required(data, "game_number", int, what)
+        shop._day = required(data, "day", int, what)
+        shop._remaining_ap = required(data, "remaining_ap", int, what)
+        shop._purchased = {}
+        for entry in items(required(data, "purchased", list, what), "Shop purchases"):
+            if not isinstance(entry, list) or len(entry) != 2:
+                raise UnsupportedSave("A shop purchase must be [section, card_id].")
+            section = section_of(entry[0])
+            shop._purchased[(section, entry[1])] = card(section, entry[1])
+        shop._purchased_play_schemes_today = str_set("purchased_play_schemes_today")
+        shop._play_slots_purchased = int_set("play_slots_purchased")
+        shop._run_purchased_upgrades = [
+            upgrade(item)
+            for item in items(required(data, "run_purchased_upgrades", list, what), "Upgrades")
+        ]
+        shop._pending_player_upgrades = [
+            upgrade(item)
+            for item in items(required(data, "pending_player_upgrades", list, what), "Upgrades")
+        ]
+        shop._player_offer_purchased = str_set("player_offer_purchased")
+        shop._owned_coach_upgrades = [
+            card(FootballShopSection.COACH_UPGRADES, item)
+            for item in items(required(data, "owned_coach_upgrades", list, what), "Upgrades")
+        ]
+        shop._future_shop_ap_bonus = required(data, "future_shop_ap_bonus", int, what)
+        shop._offensive_deck = card_copies_from_save_data(
+            required(data, "offensive_deck", list, what), "Offensive deck"
+        )
+        shop._defensive_deck = card_copies_from_save_data(
+            required(data, "defensive_deck", list, what), "Defensive deck"
+        )
+        shop._copy_sequence = required(data, "copy_sequence", int, what)
+        pending = optional(data, "pending_removal", str, what)
+        shop._pending_removal = (
+            card(FootballShopSection.PLAYS_SCHEMES, pending) if pending is not None else None
+        )
+        shop._pending_removal_slot = optional(data, "pending_removal_slot", int, what)
+        shop._finished = required(data, "finished", bool, what)
+        unlocked = required(data, "unlocked_slots", dict, what)
+        shop._unlocked_slots = build("unlocked slots", lambda: shop._validated_unlocked_slots(
+            {section_of(key): value for key, value in unlocked.items()}
+        ))
+        offers = required(data, "offers", dict, what)
+        shop._offers = {}
+        for section in FootballShopSection:
+            slots = items(required(offers, section.value, list, what), "Shop offers")
+            if len(slots) != shop._unlocked_slots[section]:
+                raise UnsupportedSave("Shop offers must fill each unlocked slot.")
+            shop._offers[section] = [
+                card(section, card_id) if card_id is not None else None
+                for card_id in slots
+            ]
+        return shop
 
     @property
     def remaining_ap(self) -> int:

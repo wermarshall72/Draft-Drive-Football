@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
+from typing import Any, Mapping
 
 from src.engine.football import (
     FootballCoach,
@@ -15,7 +15,23 @@ from src.engine.football import (
     FootballSpecialTeams,
 )
 from src.engine.football_coaches import COACH_PAIR_OFFERS, FootballCoachPair
-from src.engine.football_player_catalog import player_from_type, player_type_offer
+from src.engine.football_player_catalog import (
+    PLAYER_TYPES_BY_ID,
+    FootballPlayerType,
+    player_from_type,
+    player_type_offer,
+)
+from src.engine.save_data import (
+    UnsupportedSave,
+    build,
+    required,
+    items,
+    lookup,
+    optional,
+    optional_enum,
+    rng_from_data,
+    rng_to_data,
+)
 
 PLAYER_DRAFT_ORDER = (
     FootballPosition.QB,
@@ -160,16 +176,7 @@ class FootballTeamBuilder:
         if next_index == len(PLAYER_DRAFT_ORDER):
             self._required_position = None
             self._current_offer = ()
-            self._roster = FootballRoster(
-                team_name=self.team_name,
-                players=self._selected_players,
-                coach=FootballCoach(
-                    f"{self._selected_coach_pair.offense.name} / "
-                    f"{self._selected_coach_pair.defense.name}"
-                ),
-                special_teams=self._special_teams,
-                coach_assignment=self._selected_coach_pair.assignment,
-            )
+            self._roster = self._build_completed_roster()
         else:
             self._required_position = PLAYER_DRAFT_ORDER[next_index]
             self._current_offer = self._player_offer(self._required_position)
@@ -184,19 +191,97 @@ class FootballTeamBuilder:
         self, position: FootballPosition
     ) -> tuple[FootballPlayerCandidate, ...]:
         return tuple(
-            FootballPlayerCandidate(
-                player=player_from_type(player_type),
-                description=(
-                    "No partner, partnership bonus, or perk."
-                    if player_type.partner_position is None
-                    else (
-                        f"Partners with {player_type.partner_position.value}; "
-                        f"+10% contribution when paired. Perk is planned and inactive."
-                    )
-                ),
-            )
+            _candidate_for_type(player_type)
             for player_type in player_type_offer(position, self._rng)
         )
+
+    def _build_completed_roster(self) -> FootballRoster:
+        assert self._selected_coach_pair is not None
+        return FootballRoster(
+            team_name=self.team_name,
+            players=self._selected_players,
+            coach=FootballCoach(
+                f"{self._selected_coach_pair.offense.name} / "
+                f"{self._selected_coach_pair.defense.name}"
+            ),
+            special_teams=self._special_teams,
+            coach_assignment=self._selected_coach_pair.assignment,
+        )
+
+    # -- save data -------------------------------------------------------------
+    # Saved: team name, seed, special teams, the exact draft RNG state, the coach
+    # offer and chosen pair (by coach IDs), drafted players, the required
+    # position, and the current offer (player candidates by player type ID).
+    # Rebuilt: the completed roster, which is derived from the saved picks the
+    # same way ``choose_player`` builds it.
+
+    def to_save_data(self) -> dict[str, Any]:
+        if self._current_offer is self._coach_offer:
+            current_offer: str | list[str] = "coach_offer"
+        else:
+            current_offer = [
+                candidate.player.player_type_id for candidate in self._current_offer
+            ]
+        return {
+            "team_name": self.team_name,
+            "seed": self.seed,
+            "special_teams": self._special_teams.name,
+            "rng": rng_to_data(self._rng),
+            "coach_offer": [_coach_pair_to_save_data(pair) for pair in self._coach_offer],
+            "selected_coach_pair": (
+                _coach_pair_to_save_data(self._selected_coach_pair)
+                if self._selected_coach_pair is not None else None
+            ),
+            "selected_players": [
+                player.to_save_data() for player in self._selected_players.values()
+            ],
+            "required_position": (
+                self._required_position.value
+                if self._required_position is not None else None
+            ),
+            "current_offer": current_offer,
+        }
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballTeamBuilder":
+        what = "Team builder"
+        builder = build("team builder", lambda: cls(
+            required(data, "team_name", str, what),
+            required(data, "seed", int, what),
+            FootballSpecialTeams(required(data, "special_teams", str, what)),
+        ))
+        builder._rng = rng_from_data(required(data, "rng", list, what), "draft RNG")
+        builder._coach_offer = tuple(
+            _coach_pair_from_save_data(item)
+            for item in items(required(data, "coach_offer", list, what), "Coach offer")
+        )
+        selected = optional(data, "selected_coach_pair", list, what)
+        builder._selected_coach_pair = (
+            _coach_pair_from_save_data(selected) if selected is not None else None
+        )
+        players = [
+            FootballPlayer.from_save_data(item)
+            for item in items(required(data, "selected_players", list, what), "Drafted players")
+        ]
+        builder._selected_players = {player.position: player for player in players}
+        builder._required_position = optional_enum(
+            FootballPosition, optional(data, "required_position", str, what), "position"
+        )
+        offer = required(data, "current_offer", (str, list), what)
+        if offer == "coach_offer":
+            builder._current_offer = builder._coach_offer
+        elif isinstance(offer, list):
+            builder._current_offer = tuple(
+                _candidate_for_type(lookup(PLAYER_TYPES_BY_ID, type_id, "player type"))
+                for type_id in offer
+            )
+        else:
+            raise UnsupportedSave(f"Unknown draft offer: {offer!r}.")
+        if len(builder._selected_players) == len(PLAYER_DRAFT_ORDER):
+            if builder._selected_coach_pair is None:
+                raise UnsupportedSave("A completed draft must have a coach pair.")
+            builder._roster = build("drafted roster", builder._build_completed_roster)
+        return builder
 
     @staticmethod
     def _offered_choice(
@@ -223,3 +308,31 @@ class FootballTeamBuilder:
     def _require_active(self) -> None:
         if self.completed:
             raise ValueError("The team-building flow is already complete.")
+
+
+def _candidate_for_type(player_type: FootballPlayerType) -> FootballPlayerCandidate:
+    return FootballPlayerCandidate(
+        player=player_from_type(player_type),
+        description=(
+            "No partner, partnership bonus, or perk."
+            if player_type.partner_position is None
+            else (
+                f"Partners with {player_type.partner_position.value}; "
+                f"+10% contribution when paired. Perk is planned and inactive."
+            )
+        ),
+    )
+
+
+def _coach_pair_to_save_data(pair: FootballCoachPair) -> list[str]:
+    return [pair.offense.coach_id, pair.defense.coach_id]
+
+
+def _coach_pair_from_save_data(data: Any) -> FootballCoachPair:
+    """Resolve a saved [offense_id, defense_id] to the catalog's pair object."""
+    if not isinstance(data, list) or len(data) != 2:
+        raise UnsupportedSave("A coach pair must list two coach IDs.")
+    for pair in COACH_PAIR_OFFERS:
+        if [pair.offense.coach_id, pair.defense.coach_id] == data:
+            return pair
+    raise UnsupportedSave(f"Unknown coach pair: {data!r}.")

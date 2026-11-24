@@ -16,7 +16,7 @@ from src.engine.units import (
     random_coach_options,
 )
 from src.profile import (
-    PROFILE_PATH,
+    default_profile_path,
     TeamProfile,
     load_profile,
     new_team_profile,
@@ -120,10 +120,12 @@ class ApplicationController:
 
     def __init__(
         self,
-        profile_path: str | PathLike[str] = PROFILE_PATH,
+        profile_path: str | PathLike[str] | None = None,
         db_path: DatabasePath = DB_PATH,
     ) -> None:
-        self.profile_path = profile_path
+        self.profile_path = (
+            profile_path if profile_path is not None else default_profile_path()
+        )
         self.db_path = db_path
         self._profile: TeamProfile | None = None
         self._coach_choices: tuple[Coach, ...] = ()

@@ -1,6 +1,7 @@
 """The desktop season menu and its profile-aware controls."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import pygame
 
@@ -21,6 +22,20 @@ START_RUN = "START RUN"
 START_NEW_RUN = "START NEW RUN"
 CANCEL = "CANCEL"
 REPLACE_TITLE = "START A NEW RUN?"
+ABANDON_SAVE = "ABANDON SAVE"
+
+
+@dataclass(frozen=True)
+class MenuSaveNotice:
+    """A short message about the saved run (restored, damaged, or unloadable).
+
+    ``abandonable`` notices describe a save that is kept on disk but can't be
+    continued; the menu then offers ABANDON SAVE and confirms START RUN.
+    """
+
+    title: str
+    message: str
+    abandonable: bool = False
 
 
 def _marquee(surface: pygame.Surface, text: str, rect: pygame.Rect,
@@ -61,6 +76,8 @@ class FootballMainMenuScreen(Screen):
         *,
         on_continue_run: Callable[[], None] = lambda: None,
         run_summary: Callable[[], tuple[str, str] | None] = lambda: None,
+        save_notice: Callable[[], MenuSaveNotice | None] = lambda: None,
+        on_abandon_save: Callable[[], None] = lambda: None,
     ) -> None:
         super().__init__(theme, navigate, quit_application)
         self.menu_state = menu_state
@@ -69,6 +86,8 @@ class FootballMainMenuScreen(Screen):
         self.on_continue_run = on_continue_run
         # (menu summary, replace-warning summary) for a remembered run, else None.
         self.run_summary = run_summary
+        self.save_notice = save_notice
+        self.on_abandon_save = on_abandon_save
         self.confirm_replace = False
         self.difficulty = FootballAIDifficulty.STANDARD
         self.title_font = staff_font(48, semibold=True)
@@ -111,8 +130,16 @@ class FootballMainMenuScreen(Screen):
             return
         super().handle_event(event)
 
+    def _blocked_save(self) -> bool:
+        notice = self.save_notice()
+        return notice is not None and notice.abandonable
+
+    def _abandon_save(self) -> None:
+        self.on_abandon_save()
+        self._reset_focus()
+
     def _start_run_pressed(self) -> None:
-        if self.run_summary() is not None:
+        if self.run_summary() is not None or self._blocked_save():
             self.confirm_replace = True
             self._reset_focus()
             return
@@ -158,7 +185,7 @@ class FootballMainMenuScreen(Screen):
 
         summary = self.run_summary() if self.menu_state is not None else None
         continuing = summary is not None
-        if not continuing:
+        if not continuing and not self._blocked_save():
             self.confirm_replace = False
         # With a remembered run, CONTINUE RUN leads and the rest compress to fit.
         start_rect, panel_rect, difficulty_y, settings_rect, quit_rect, warning_y = (
@@ -189,6 +216,15 @@ class FootballMainMenuScreen(Screen):
                    enabled=self.profile_error is None),
             Button("QUIT", self.quit_application, quit_rect),
         ))
+        notice = self.save_notice() if self.menu_state is not None else None
+        show_notice = notice is not None and not self.profile_error
+        notice_rect = pygame.Rect(40, warning_y, 650, 96 if continuing else 105)
+        if show_notice and notice.abandonable:
+            buttons.append(Button(
+                ABANDON_SAVE, self._abandon_save,
+                pygame.Rect(notice_rect.right - 196, notice_rect.top + 12, 182, 40),
+                variant="abandon",
+            ))
         if self.focus_index == 0 and self.menu_state is None:
             self.focus_index = 4 if self.profile_error is None else 5
         if not self.confirm_replace:
@@ -205,8 +241,12 @@ class FootballMainMenuScreen(Screen):
             CONTINUE_RUN: summary[0] if summary else "",
             START_RUN: (
                 "Abandon the current run and draft a new team."
-                if continuing else "Draft your team and begin a new run."
+                if continuing
+                else "Set the saved run aside and draft a new team."
+                if self._blocked_save()
+                else "Draft your team and begin a new run."
             ),
+            ABANDON_SAVE: "Set the saved run aside (its file is kept) and start fresh.",
             "SETTINGS": "Edit your team name and colors.",
             "CREATE PROFILE": "Create a team before starting a run.",
             "QUIT": "Exit the game.",
@@ -223,10 +263,18 @@ class FootballMainMenuScreen(Screen):
                 self._draw_difficulty(surface, button, active, pressed)
             elif button.variant == "continue":
                 self._draw_continue_button(surface, button, details[CONTINUE_RUN], active, pressed)
+            elif button.variant == "abandon":
+                continue  # drawn on its notice panel below
             else:
                 self._draw_menu_button(surface, button, details[button.label], active, pressed)
 
-        if self.profile_error or (self.theme.warning and self.menu_state):
+        if show_notice:
+            self._draw_save_notice(
+                surface, notice_rect, notice,
+                next((b for b in buttons if b.variant == "abandon"), None),
+                menu_active, buttons,
+            )
+        elif self.profile_error or (self.theme.warning and self.menu_state):
             warning = pygame.Rect(40, warning_y, 650, 96 if continuing else 105)
             pygame.draw.rect(surface, "#182c40", warning, border_radius=6)
             pygame.draw.rect(surface, "#e29c82", warning, 2, border_radius=6)
@@ -261,15 +309,50 @@ class FootballMainMenuScreen(Screen):
             message = "Choose a difficulty, then start a new run."
         _marquee(surface, message, pygame.Rect(80, 650, 1128, 32), self.detail_font, _TEXT)
         if self.confirm_replace and summary is not None:
-            self._draw_replace_confirmation(surface, summary[1])
+            self._draw_replace_confirmation(
+                surface, f"Your current run ({summary[1]}) will be lost."
+            )
+        elif self.confirm_replace and self._blocked_save():
+            self._draw_replace_confirmation(
+                surface, "The saved run will be set aside; its file is kept."
+            )
+        else:
+            self.confirm_replace = False
 
-    def _draw_replace_confirmation(self, surface: pygame.Surface, run_label: str) -> None:
+    def _draw_save_notice(
+        self, surface: pygame.Surface, rect: pygame.Rect, notice: MenuSaveNotice,
+        abandon: Button | None, menu_active: bool, buttons: list[Button],
+    ) -> None:
+        pygame.draw.rect(surface, "#182c40", rect, border_radius=6)
+        pygame.draw.rect(surface, "#e29c82", rect, 2, border_radius=6)
+        text_width = rect.width - 28 - (abandon.rect.width + 14 if abandon else 0)
+        draw_text(surface, notice.title, (rect.left + 14, rect.top + 9),
+                  self.small_font, pygame.Color("#ffb4a3"))
+        lines = _wrap(notice.message, self.detail_font, text_width)[:3]
+        for index, line in enumerate(lines):
+            draw_text(surface, line, (rect.left + 14, rect.top + 31 + index * 21),
+                      self.detail_font, _TEXT)
+        if abandon is None:
+            return
+        index = buttons.index(abandon)
+        active = menu_active and (
+            (self.keyboard_focus and abandon.focused)
+            or self.hover_index == index or self.pressed_index == index
+        )
+        button_rect = abandon.rect.move(0, 2 if menu_active and self.pressed_index == index else 0)
+        fill = pygame.Color("#c2412d") if active else pygame.Color("#3a2430")
+        pygame.draw.rect(surface, fill, button_rect, border_radius=5)
+        pygame.draw.rect(surface, "#e29c82", button_rect, 2, border_radius=5)
+        label = self.small_font.render(ABANDON_SAVE, True, _TEXT)
+        surface.blit(label, label.get_rect(center=button_rect.center))
+
+    def _draw_replace_confirmation(self, surface: pygame.Surface, message: str) -> None:
         entries = (
             MenuEntry(CANCEL, self._cancel_replace, "popup-primary"),
             MenuEntry(START_NEW_RUN, self._confirm_replace, "popup-danger"),
         )
         buttons = draw_menu_panel(
-            surface, REPLACE_TITLE, f"Your current run ({run_label}) will be lost.", entries,
+            surface, REPLACE_TITLE, message, entries,
             focus_index=self.focus_index if self.focus_index < len(entries) else 0,
             hover_index=self.hover_index, pressed_index=self.pressed_index,
             width=460, button_width=380,
@@ -339,3 +422,18 @@ class FootballMainMenuScreen(Screen):
 
     def _select_difficulty(self, difficulty: FootballAIDifficulty) -> None:
         self.difficulty = difficulty
+
+
+def _wrap(text: str, font: pygame.font.Font, width: int) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if current and font.size(candidate)[0] > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines

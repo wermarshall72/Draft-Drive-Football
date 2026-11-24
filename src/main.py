@@ -24,7 +24,6 @@ from src.engine.units import (
 )
 from src.profile import (
     COLOR_CHOICES,
-    PROFILE_PATH,
     ProfileError,
     TeamColor,
     TeamProfile,
@@ -125,7 +124,7 @@ def _choose_color(
 
 
 def _load_or_create_profile(
-    profile_path: str | PathLike[str] = PROFILE_PATH,
+    profile_path: str | PathLike[str] | None = None,
     *,
     application: ApplicationController | None = None,
     reader: InputReader | None = None,
@@ -164,7 +163,7 @@ def _load_or_create_profile(
 
 def _edit_settings(
     profile: TeamProfile,
-    profile_path: str | PathLike[str] = PROFILE_PATH,
+    profile_path: str | PathLike[str] | None = None,
     *,
     application: ApplicationController | None = None,
     reader: InputReader | None = None,
@@ -583,7 +582,7 @@ def _start_run(
 
 def main(
     db_path: DatabasePath = DB_PATH,
-    profile_path: str | PathLike[str] = PROFILE_PATH,
+    profile_path: str | PathLike[str] | None = None,
 ) -> None:
     application = ApplicationController(profile_path, db_path)
     profile = _load_or_create_profile(

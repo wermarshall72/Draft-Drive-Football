@@ -1,15 +1,49 @@
 import json
+import logging
 import os
 import re
 import sys
-import tempfile
 import unicodedata
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, TextIO
 
-PROFILE_PATH = Path.home() / ".cfb-auto-battler" / "profile.json"
+from src.persistence.atomic_io import atomic_write_bytes, atomic_write_text
+from src.persistence.paths import app_data_dir
+
+LOGGER = logging.getLogger(__name__)
+PROFILE_FILE_NAME = "profile.json"
+
+
+def legacy_profile_path() -> Path:
+    """Where builds before the app-data folder kept the profile."""
+    return Path.home() / ".cfb-auto-battler" / PROFILE_FILE_NAME
+
+
+def default_profile_path(data_dir: str | os.PathLike[str] | None = None) -> Path:
+    """The profile in the game's data folder, copied once from the legacy spot."""
+    path = app_data_dir(data_dir) / PROFILE_FILE_NAME
+    migrate_legacy_profile(path, legacy_profile_path())
+    return path
+
+
+def migrate_legacy_profile(
+    profile_path: str | os.PathLike[str], legacy_path: str | os.PathLike[str]
+) -> bool:
+    """Copy a legacy profile to ``profile_path`` if none exists there yet.
+
+    The old file is left in place as a backup. Returns True when it copied.
+    """
+    target, source = Path(profile_path), Path(legacy_path)
+    if target.exists() or not source.is_file():
+        return False
+    try:
+        atomic_write_bytes(target, source.read_bytes())
+    except OSError as error:
+        LOGGER.warning("Could not copy the profile from %s: %s", source, error)
+        return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -127,9 +161,9 @@ def new_team_profile(
 
 
 def load_profile(
-    profile_path: str | os.PathLike[str] = PROFILE_PATH,
+    profile_path: str | os.PathLike[str] | None = None,
 ) -> TeamProfile | None:
-    path = Path(profile_path)
+    path = Path(profile_path) if profile_path is not None else default_profile_path()
     if not path.exists():
         return None
     try:
@@ -149,32 +183,19 @@ def load_profile(
 
 
 def save_profile(
-    profile: TeamProfile, profile_path: str | os.PathLike[str] = PROFILE_PATH
+    profile: TeamProfile, profile_path: str | os.PathLike[str] | None = None
 ) -> None:
-    path = Path(profile_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent,
-            prefix=f".{path.name}.", suffix=".tmp", delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            json.dump(
-                {
-                    "profile_id": profile.profile_id,
-                    "team_name": profile.team_name,
-                    "primary_color_id": profile.primary_color_id,
-                    "secondary_color_id": profile.secondary_color_id,
-                },
-                temporary,
-                indent=2,
-            )
-            temporary.write("\n")
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    path = Path(profile_path) if profile_path is not None else default_profile_path()
+    text = json.dumps(
+        {
+            "profile_id": profile.profile_id,
+            "team_name": profile.team_name,
+            "primary_color_id": profile.primary_color_id,
+            "secondary_color_id": profile.secondary_color_id,
+        },
+        indent=2,
+    )
+    atomic_write_text(path, text + "\n")
 
 
 def supports_ansi_color(

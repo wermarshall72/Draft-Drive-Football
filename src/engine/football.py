@@ -10,7 +10,18 @@ from enum import Enum
 from math import isfinite
 from numbers import Real
 from types import MappingProxyType
-from typing import Mapping
+from typing import Any, Mapping
+
+from src.engine.save_data import (
+    UnsupportedSave,
+    build,
+    enum_value,
+    required,
+    items,
+    lookup,
+    optional,
+    optional_enum,
+)
 
 
 class FootballPosition(str, Enum):
@@ -135,6 +146,21 @@ class FootballCoachUpgradeEffect:
             )
         if self.family is not None and not isinstance(self.family, FootballCardFamily):
             raise ValueError("Coach upgrade family must be a FootballCardFamily.")
+
+    def to_save_data(self) -> str:
+        """Saved by its stable upgrade ID; magnitudes come from the current catalog."""
+        return self.upgrade_id
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballCoachUpgradeEffect":
+        from src.engine.football_shop import COACH_UPGRADE_CATALOG
+
+        effects = {
+            card.coach_upgrade_effect.upgrade_id: card.coach_upgrade_effect
+            for card in COACH_UPGRADE_CATALOG
+            if card.coach_upgrade_effect is not None
+        }
+        return lookup(effects, data, "coach upgrade")
 
 
 class OffensivePlayAction(str, Enum):
@@ -370,6 +396,43 @@ class FootballCardCopy:
         _validate_name(self.copy_id, "Card copy identifier")
         _validate_name(self.card_id, "Card identifier")
 
+    def to_save_data(self) -> list[str]:
+        return [self.copy_id, self.card_id]
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballCardCopy":
+        from src.engine.football_decks import (
+            BONUS_CARD_CATALOG,
+            DEFENSIVE_SCHEME_CATALOG,
+            OFFENSIVE_PLAY_CATALOG,
+        )
+
+        if (
+            not isinstance(data, list)
+            or len(data) != 2
+            or not all(isinstance(value, str) for value in data)
+        ):
+            raise UnsupportedSave("A card copy must be [copy_id, card_id].")
+        copy_id, card_id = data
+        if not any(
+            card_id in catalog
+            for catalog in (
+                OFFENSIVE_PLAY_CATALOG,
+                DEFENSIVE_SCHEME_CATALOG,
+                BONUS_CARD_CATALOG,
+            )
+        ):
+            raise UnsupportedSave(f"Unknown card: {card_id!r}.")
+        return build("card copy", lambda: cls(copy_id, card_id))
+
+
+def card_copies_to_save_data(cards: tuple[FootballCardCopy, ...]) -> list[list[str]]:
+    return [card.to_save_data() for card in cards]
+
+
+def card_copies_from_save_data(data: Any, what: str) -> tuple[FootballCardCopy, ...]:
+    return tuple(FootballCardCopy.from_save_data(item) for item in items(data, what))
+
 
 @dataclass(frozen=True)
 class FootballDeckState:
@@ -397,6 +460,31 @@ class FootballDeckState:
             raise ValueError("A card copy cannot be in more than one deck zone.")
         if zone_ids and set(zone_ids) != set(owned_ids):
             raise ValueError("Every owned card copy must be in exactly one deck zone.")
+
+    def to_save_data(self) -> dict[str, Any]:
+        """Owned copies in order; each zone lists copy IDs in its exact order."""
+        return {
+            "owned": card_copies_to_save_data(self.owned),
+            "draw_pile": [card.copy_id for card in self.draw_pile],
+            "hand": [card.copy_id for card in self.hand],
+            "discard_pile": [card.copy_id for card in self.discard_pile],
+        }
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballDeckState":
+        owned = card_copies_from_save_data(required(data, "owned", list, "Deck"), "Deck cards")
+        by_copy_id = {card.copy_id: card for card in owned}
+
+        def zone(name: str) -> tuple[FootballCardCopy, ...]:
+            return tuple(
+                lookup(by_copy_id, copy_id, f"card copy in the {name}")
+                for copy_id in items(required(data, name, list, "Deck"), f"Deck {name}")
+            )
+
+        return build(
+            "deck",
+            lambda: cls(owned, zone("draw_pile"), zone("hand"), zone("discard_pile")),
+        )
 
 
 def _validate_name(value: str, field_name: str) -> None:
@@ -449,6 +537,40 @@ class FootballPlayer:
             player_type = player_type_for_id(self.player_type_id)
             if player_type.position is not self.position:
                 raise ValueError("Player type position must match the player's position.")
+
+    def to_save_data(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "name": self.name,
+            "position": self.position.value,
+            "power": self.power,
+            "volatility": self.volatility,
+            "stamina": self.stamina,
+        }
+        if self.player_type_id is not None:
+            data["player_type_id"] = self.player_type_id
+        return data
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballPlayer":
+        from src.engine.football_player_catalog import PLAYER_TYPES_BY_ID
+
+        what = "Player"
+        type_id = optional(data, "player_type_id", str, what)
+        if type_id is not None:
+            lookup(PLAYER_TYPES_BY_ID, type_id, "player type")
+        return build(
+            "player",
+            lambda: cls(
+                name=required(data, "name", str, what),
+                position=enum_value(
+                    FootballPosition, required(data, "position", str, what), "position"
+                ),
+                power=required(data, "power", float, what),
+                volatility=required(data, "volatility", float, what),
+                stamina=required(data, "stamina", float, what),
+                player_type_id=type_id,
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -519,6 +641,49 @@ class FootballRoster:
         ):
             raise ValueError("Coach assignment must be a FootballCoachAssignment or None.")
         object.__setattr__(self, "players", MappingProxyType(dict(self.players)))
+
+    def to_save_data(self) -> dict[str, Any]:
+        """Players in roster order; the coach assignment by its two coach IDs."""
+        data: dict[str, Any] = {
+            "team_name": self.team_name,
+            "players": [player.to_save_data() for player in self.players.values()],
+            "coach": self.coach.name,
+            "special_teams": self.special_teams.name,
+        }
+        if self.coach_assignment is not None:
+            data["coach_assignment"] = [
+                self.coach_assignment.offensive_coach_id,
+                self.coach_assignment.defensive_coach_id,
+            ]
+        return data
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballRoster":
+        from src.engine.football_coaches import COACHES_BY_ID
+
+        what = "Roster"
+        players = [
+            FootballPlayer.from_save_data(item)
+            for item in items(required(data, "players", list, what), "Roster players")
+        ]
+        assignment_data = optional(data, "coach_assignment", list, what)
+        assignment = None
+        if assignment_data is not None:
+            if len(assignment_data) != 2:
+                raise UnsupportedSave("A coach assignment must list two coach IDs.")
+            for coach_id in assignment_data:
+                lookup(COACHES_BY_ID, coach_id, "coach")
+            assignment = FootballCoachAssignment(*assignment_data)
+        return build(
+            "roster",
+            lambda: cls(
+                team_name=required(data, "team_name", str, what),
+                players={player.position: player for player in players},
+                coach=FootballCoach(required(data, "coach", str, what)),
+                special_teams=FootballSpecialTeams(required(data, "special_teams", str, what)),
+                coach_assignment=assignment,
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -926,3 +1091,325 @@ class FootballMatchState:
             and self.down != 4
         ):
             raise ValueError("A fourth-down decision must be awaited on fourth down.")
+
+
+# -- save data for match history and match state ---------------------------------
+#
+# Match events and play results are the bulk of a mid-match save, so fields
+# that hold their default value are omitted and an event's sequence number is
+# implied by its position in the history.
+
+_EVENT_ACTION_TYPES: Mapping[str, type[Enum]] = MappingProxyType({
+    "play": OffensivePlayAction,
+    "bonus": FootballBonusCardAction,
+    "scheme": DefensiveSchemeAction,
+    "fourth_down": FootballFourthDownAction,
+    "conversion": FootballConversionAction,
+    "automatic": FootballAutomaticAction,
+})
+
+
+def _action_to_save_data(action: Enum) -> list[str]:
+    # Several action enums share values (e.g. "rb_run"), so each is tagged.
+    for tag, enum_type in _EVENT_ACTION_TYPES.items():
+        if type(action) is enum_type:
+            return [tag, action.value]
+    raise ValueError(f"Unsupported event action: {action!r}.")
+
+
+def _action_from_save_data(data: Any) -> Enum:
+    if not isinstance(data, list) or len(data) != 2:
+        raise UnsupportedSave("An event action must be [kind, value].")
+    tag, value = data
+    enum_type = lookup(_EVENT_ACTION_TYPES, tag, "event action kind")
+    return enum_value(enum_type, value, "event action")
+
+
+def _without_defaults(data: dict[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in data.items()
+        if key not in defaults or value != defaults[key]
+    }
+
+
+_PLAY_RESULT_DEFAULTS = MappingProxyType({
+    "points_scored": 0, "turnover": False, "possession_changed": False,
+    "defensive_scheme": None, "incomplete": False, "offense_power": 0.0,
+    "defense_power": 0.0, "perk_effects": [], "turnover_on_downs": False,
+    "turnover_type": None, "conversion_attempt": False,
+})
+
+
+def play_result_to_save_data(result: FootballPlayResult) -> dict[str, Any]:
+    return _without_defaults({
+        "offensive_play": result.offensive_play.value,
+        "yards_gained": result.yards_gained,
+        "clock_seconds_used": result.clock_seconds_used,
+        "points_scored": result.points_scored,
+        "turnover": result.turnover,
+        "possession_changed": result.possession_changed,
+        "defensive_scheme": (
+            result.defensive_scheme.value if result.defensive_scheme is not None else None
+        ),
+        "incomplete": result.incomplete,
+        "offense_power": result.offense_power,
+        "defense_power": result.defense_power,
+        "perk_effects": list(result.perk_effects),
+        "turnover_on_downs": result.turnover_on_downs,
+        "turnover_type": (
+            result.turnover_type.value if result.turnover_type is not None else None
+        ),
+        "conversion_attempt": result.conversion_attempt,
+    }, _PLAY_RESULT_DEFAULTS)
+
+
+def play_result_from_save_data(data: Any) -> FootballPlayResult:
+    what = "Play result"
+    return build("play result", lambda: FootballPlayResult(
+        offensive_play=enum_value(
+            OffensivePlayAction, required(data, "offensive_play", str, what), "play"
+        ),
+        yards_gained=required(data, "yards_gained", float, what),
+        clock_seconds_used=required(data, "clock_seconds_used", int, what),
+        points_scored=optional(data, "points_scored", int, what, 0),
+        turnover=optional(data, "turnover", bool, what, False),
+        possession_changed=optional(data, "possession_changed", bool, what, False),
+        defensive_scheme=optional_enum(
+            DefensiveSchemeAction, optional(data, "defensive_scheme", str, what), "scheme"
+        ),
+        incomplete=optional(data, "incomplete", bool, what, False),
+        offense_power=optional(data, "offense_power", float, what, 0.0),
+        defense_power=optional(data, "defense_power", float, what, 0.0),
+        perk_effects=tuple(optional(data, "perk_effects", list, what, [])),
+        turnover_on_downs=optional(data, "turnover_on_downs", bool, what, False),
+        turnover_type=optional_enum(
+            FootballTurnoverType, optional(data, "turnover_type", str, what), "turnover type"
+        ),
+        conversion_attempt=optional(data, "conversion_attempt", bool, what, False),
+    ))
+
+
+_EVENT_DEFAULTS = MappingProxyType({
+    "clock_seconds_used": 0, "play_result": None, "points_scored": 0,
+    "scoring_team": None, "field_goal_distance": None, "perk_effects": [],
+    "description": None, "gross_yards": None, "return_yards": None,
+    "blocked": False, "card_id": None, "card_copy_id": None,
+    "reverses_event_sequences": [],
+})
+
+
+def match_event_to_save_data(event: FootballMatchEvent) -> dict[str, Any]:
+    """One event; its ``sequence`` is its 1-based position in the saved history."""
+    return _without_defaults({
+        "action": _action_to_save_data(event.action),
+        "team_a_score": event.team_a_score,
+        "team_b_score": event.team_b_score,
+        "possession": event.possession.value,
+        "offense_field_position": event.offense_field_position,
+        "down": event.down,
+        "yards_to_go": event.yards_to_go,
+        "game_clock_seconds": event.game_clock_seconds,
+        "period": event.period,
+        "status": event.status.value,
+        "clock_seconds_used": event.clock_seconds_used,
+        "play_result": (
+            play_result_to_save_data(event.play_result)
+            if event.play_result is not None else None
+        ),
+        "points_scored": event.points_scored,
+        "scoring_team": event.scoring_team.value if event.scoring_team is not None else None,
+        "field_goal_distance": event.field_goal_distance,
+        "perk_effects": list(event.perk_effects),
+        "description": event.description,
+        "gross_yards": event.gross_yards,
+        "return_yards": event.return_yards,
+        "blocked": event.blocked,
+        "card_id": event.card_id,
+        "card_copy_id": event.card_copy_id,
+        "reverses_event_sequences": list(event.reverses_event_sequences),
+    }, _EVENT_DEFAULTS)
+
+
+def match_event_from_save_data(data: Any, sequence: int) -> FootballMatchEvent:
+    what = f"Match event {sequence}"
+    play_data = optional(data, "play_result", dict, what)
+    return build(what.lower(), lambda: FootballMatchEvent(
+        sequence=sequence,
+        action=_action_from_save_data(required(data, "action", list, what)),
+        team_a_score=required(data, "team_a_score", int, what),
+        team_b_score=required(data, "team_b_score", int, what),
+        possession=enum_value(FootballTeamSide, required(data, "possession", str, what), "team"),
+        offense_field_position=required(data, "offense_field_position", float, what),
+        down=required(data, "down", int, what),
+        yards_to_go=required(data, "yards_to_go", float, what),
+        game_clock_seconds=required(data, "game_clock_seconds", int, what),
+        period=required(data, "period", int, what),
+        status=enum_value(FootballMatchStatus, required(data, "status", str, what), "status"),
+        clock_seconds_used=optional(data, "clock_seconds_used", int, what, 0),
+        play_result=(
+            play_result_from_save_data(play_data) if play_data is not None else None
+        ),
+        points_scored=optional(data, "points_scored", int, what, 0),
+        scoring_team=optional_enum(
+            FootballTeamSide, optional(data, "scoring_team", str, what), "team"
+        ),
+        field_goal_distance=optional(data, "field_goal_distance", float, what),
+        perk_effects=tuple(optional(data, "perk_effects", list, what, [])),
+        description=optional(data, "description", str, what),
+        gross_yards=optional(data, "gross_yards", float, what),
+        return_yards=optional(data, "return_yards", float, what),
+        blocked=optional(data, "blocked", bool, what, False),
+        card_id=optional(data, "card_id", str, what),
+        card_copy_id=optional(data, "card_copy_id", str, what),
+        reverses_event_sequences=tuple(
+            optional(data, "reverses_event_sequences", list, what, [])
+        ),
+    ))
+
+
+def match_result_to_save_data(result: FootballMatchResult) -> dict[str, Any]:
+    return {
+        "team_a_score": result.team_a_score,
+        "team_b_score": result.team_b_score,
+        "winner": result.winner.value if result.winner is not None else None,
+        "completed": result.completed,
+    }
+
+
+def match_result_from_save_data(data: Any) -> FootballMatchResult:
+    what = "Match result"
+    return build("match result", lambda: FootballMatchResult(
+        team_a_score=required(data, "team_a_score", int, what),
+        team_b_score=required(data, "team_b_score", int, what),
+        winner=optional_enum(FootballTeamSide, optional(data, "winner", str, what), "team"),
+        completed=required(data, "completed", bool, what),
+    ))
+
+
+_MATCH_DECK_FIELDS = (
+    "team_a_offense_deck", "team_a_defense_deck",
+    "team_b_offense_deck", "team_b_defense_deck",
+)
+
+
+def match_state_to_save_data(
+    state: FootballMatchState, *, events_prefix_of: FootballMatchState | None = None,
+) -> dict[str, Any]:
+    """The full match snapshot.
+
+    With ``events_prefix_of``, a history that is a prefix of that state's
+    history is stored as its length (``match_events_prefix``) instead of a copy;
+    the simulator uses this for its Challenge rollback snapshot.
+    """
+    data: dict[str, Any] = {
+        "team_a": state.team_a.to_save_data(),
+        "team_b": state.team_b.to_save_data(),
+        "random_seed": state.random_seed,
+        "team_a_score": state.team_a_score,
+        "team_b_score": state.team_b_score,
+        "possession": state.possession.value,
+        "down": state.down,
+        "yards_to_go": state.yards_to_go,
+        "offense_field_position": state.offense_field_position,
+        "game_clock_seconds": state.game_clock_seconds,
+        "period": state.period,
+        "status": state.status.value,
+        "awaited_action": (
+            state.awaited_action.value if state.awaited_action is not None else None
+        ),
+        "current_drive_defensive_scheme": (
+            state.current_drive_defensive_scheme.value
+            if state.current_drive_defensive_scheme is not None else None
+        ),
+        "final_result": (
+            match_result_to_save_data(state.final_result)
+            if state.final_result is not None else None
+        ),
+        "conversion_team": (
+            state.conversion_team.value if state.conversion_team is not None else None
+        ),
+        "team_a_coach_upgrades": [
+            effect.to_save_data() for effect in state.team_a_coach_upgrades
+        ],
+        "team_b_coach_upgrades": [
+            effect.to_save_data() for effect in state.team_b_coach_upgrades
+        ],
+    }
+    for name in _MATCH_DECK_FIELDS:
+        deck = getattr(state, name)
+        data[name] = deck.to_save_data() if deck is not None else None
+    events = state.match_events
+    if (
+        events_prefix_of is not None
+        and len(events) <= len(events_prefix_of.match_events)
+        and events_prefix_of.match_events[: len(events)] == events
+    ):
+        data["match_events_prefix"] = len(events)
+    else:
+        data["match_events"] = [match_event_to_save_data(event) for event in events]
+    return data
+
+
+def match_state_from_save_data(
+    data: Any, *, events_prefix_of: FootballMatchState | None = None,
+) -> FootballMatchState:
+    what = "Match state"
+    if isinstance(data, Mapping) and "match_events_prefix" in data:
+        length = required(data, "match_events_prefix", int, what)
+        if events_prefix_of is None or not 0 <= length <= len(events_prefix_of.match_events):
+            raise UnsupportedSave("A match-history prefix has no matching history.")
+        events = events_prefix_of.match_events[:length]
+    else:
+        events = tuple(
+            match_event_from_save_data(item, index)
+            for index, item in enumerate(
+                items(required(data, "match_events", list, what), "Match events"), 1
+            )
+        )
+    decks = {
+        name: (
+            FootballDeckState.from_save_data(data[name])
+            if optional(data, name, dict, what) is not None else None
+        )
+        for name in _MATCH_DECK_FIELDS
+    }
+    final_result = optional(data, "final_result", dict, what)
+    return build("match state", lambda: FootballMatchState(
+        team_a=FootballRoster.from_save_data(required(data, "team_a", dict, what)),
+        team_b=FootballRoster.from_save_data(required(data, "team_b", dict, what)),
+        random_seed=required(data, "random_seed", int, what),
+        team_a_score=required(data, "team_a_score", int, what),
+        team_b_score=required(data, "team_b_score", int, what),
+        possession=enum_value(FootballTeamSide, required(data, "possession", str, what), "team"),
+        down=required(data, "down", int, what),
+        yards_to_go=required(data, "yards_to_go", float, what),
+        offense_field_position=required(data, "offense_field_position", float, what),
+        game_clock_seconds=required(data, "game_clock_seconds", int, what),
+        period=required(data, "period", int, what),
+        status=enum_value(FootballMatchStatus, required(data, "status", str, what), "status"),
+        awaited_action=optional_enum(
+            FootballAwaitedAction, optional(data, "awaited_action", str, what),
+            "awaited action",
+        ),
+        current_drive_defensive_scheme=optional_enum(
+            DefensiveSchemeAction,
+            optional(data, "current_drive_defensive_scheme", str, what), "scheme",
+        ),
+        final_result=(
+            match_result_from_save_data(final_result) if final_result is not None else None
+        ),
+        match_events=events,
+        conversion_team=optional_enum(
+            FootballTeamSide, optional(data, "conversion_team", str, what), "team"
+        ),
+        team_a_coach_upgrades=tuple(
+            FootballCoachUpgradeEffect.from_save_data(item)
+            for item in items(required(data, "team_a_coach_upgrades", list, what), "Upgrades")
+        ),
+        team_b_coach_upgrades=tuple(
+            FootballCoachUpgradeEffect.from_save_data(item)
+            for item in items(required(data, "team_b_coach_upgrades", list, what), "Upgrades")
+        ),
+        **decks,
+    ))

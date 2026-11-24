@@ -1,6 +1,7 @@
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
+import logging
 import secrets
 
 import pygame
@@ -9,12 +10,13 @@ from src.application import ApplicationController
 from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_controller import FootballGameController, FootballRunPhase
 from src.engine.football_appearance import FootballPlayerAppearance
+from src.persistence.run_save import LoadResult, LoadStatus, RunSaveStore, SaveBlocked
 from src.profile import ProfileError, TeamProfile, validate_team_name
-from src.ui.football_run_screen import FootballRunScreen
+from src.ui.football_run_screen import ENDED_PHASES, FootballRunScreen
 from src.ui.football_ui_kit import match_font, plain_font
 from src.ui.football_run_summary import replace_run_summary, run_summary
 from src.ui.layout import LOGICAL_SIZE
-from src.ui.main_menu import FootballMainMenuScreen
+from src.ui.main_menu import FootballMainMenuScreen, MenuSaveNotice
 from src.ui.main_menu_art import draw_menu_stadium
 from src.ui.navigation import ScreenManager
 from src.ui.profile_screen import ProfileScreen
@@ -22,6 +24,22 @@ from src.ui.player_art import draw_draft_player
 from src.ui.theme import Theme
 
 EventSource = Callable[[], Iterable[pygame.event.Event]]
+LOGGER = logging.getLogger(__name__)
+
+SAVE_FAILED_NOTICE = "Couldn't save your run. Play on; the game will try again."
+RESTORED_NOTICE = MenuSaveNotice(
+    "SAVE RESTORED",
+    "Your latest save was damaged, so the previous save was restored.",
+)
+DAMAGED_NOTICE = MenuSaveNotice(
+    "SAVED RUN DAMAGED",
+    "Your saved run was damaged and could not be loaded. The files were set aside.",
+)
+NEWER_VERSION_NOTICE = MenuSaveNotice(
+    "SAVED BY A NEWER VERSION",
+    "Update the game to continue this run, or abandon it to start over.",
+    abandonable=True,
+)
 
 
 class DesktopApplication:
@@ -34,8 +52,14 @@ class DesktopApplication:
         *,
         window_size: tuple[int, int] = LOGICAL_SIZE,
         seed_factory: Callable[[], int] | None = None,
+        run_store: RunSaveStore | None = None,
     ) -> None:
         self.controller = controller or ApplicationController()
+        # The single saved run, kept beside the profile (both in the app-data
+        # folder by default); the disk copy is the source of truth across launches.
+        self.run_store = run_store or RunSaveStore(Path(self.controller.profile_path).parent)
+        self.save_notice: MenuSaveNotice | None = None
+        self._save_failure_shown = False
         self.window_size = window_size
         self.seed_factory = seed_factory or (lambda: secrets.randbits(64))
         self.football_controller: FootballGameController | None = None
@@ -64,6 +88,8 @@ class DesktopApplication:
             self.start_new_run,
             on_continue_run=self.continue_run,
             run_summary=self.remembered_run_summary,
+            save_notice=lambda: self.save_notice,
+            on_abandon_save=self.abandon_saved_run,
         )
         self.router.register("main_menu", self.menu_screen)
         self.profile_screen = ProfileScreen(
@@ -76,12 +102,83 @@ class DesktopApplication:
             navigate,
             self.quit,
             on_run_discarded=self._forget_run,
+            on_save_point=self.save_run,
         )
         self.router.register("football_run", self.run_screen)
+        if self.profile is not None:
+            self._load_saved_run()
         self.router.show("main_menu")
 
     def quit(self) -> None:
+        """Window close or QUIT: save the run first so it resumes on this decision."""
+        self.save_run()
         self.running = False
+
+    # -- the saved run ---------------------------------------------------------------
+
+    def _load_saved_run(self) -> None:
+        try:
+            result = self.run_store.load()
+        except OSError as error:  # e.g. the data folder itself is unreadable
+            LOGGER.warning("Could not check for a saved run: %s", error)
+            return
+        self._apply_load_result(result)
+
+    def _apply_load_result(self, result: LoadResult) -> None:
+        if result.status in (LoadStatus.OK, LoadStatus.RESTORED_FROM_BACKUP):
+            controller = result.controller
+            assert controller is not None
+            if controller.state.phase in ENDED_PHASES:
+                self._delete_saved_run()
+                return
+            self.football_controller = controller
+            self.run_screen.team_name = controller.team_name
+            self.run_screen.restore(controller)
+            if result.status is LoadStatus.RESTORED_FROM_BACKUP:
+                self.save_notice = RESTORED_NOTICE
+        elif result.status is LoadStatus.DAMAGED:
+            self.save_notice = DAMAGED_NOTICE
+        elif result.status is LoadStatus.UNSUPPORTED_VERSION:
+            self.save_notice = NEWER_VERSION_NOTICE
+        elif result.status is LoadStatus.UNSUPPORTED:
+            self.save_notice = MenuSaveNotice(
+                "SAVED RUN CAN'T BE LOADED",
+                f"This version can't continue it ({result.message}). Abandon it to start over.",
+                abandonable=True,
+            )
+
+    def save_run(self) -> None:
+        """Save the current run (or forget it once it has ended); never raises."""
+        controller = self.run_screen.controller
+        if controller is None:
+            return
+        if controller.state.phase in ENDED_PHASES:
+            self._delete_saved_run()
+            return
+        try:
+            self.run_store.save(controller)
+        except (OSError, SaveBlocked, ValueError, TypeError) as error:
+            LOGGER.error("Could not save the run: %s", error)
+            if not self._save_failure_shown:
+                self._save_failure_shown = True
+                self.run_screen.show_save_notice(SAVE_FAILED_NOTICE)
+            return
+        self._save_failure_shown = False
+
+    def _delete_saved_run(self) -> None:
+        try:
+            self.run_store.delete()
+        except OSError as error:
+            LOGGER.error("Could not delete the saved run: %s", error)
+
+    def abandon_saved_run(self) -> None:
+        """Set an unloadable save aside (the files are kept) so a new run can save."""
+        try:
+            self.run_store.abandon()
+        except OSError as error:
+            LOGGER.error("Could not set the saved run aside: %s", error)
+            return
+        self.save_notice = None
 
     def navigate(self, screen_id: str) -> None:
         if screen_id == self.router.current_id:
@@ -136,9 +233,14 @@ class DesktopApplication:
             ai_seed=ai_seed,
             match_seed=match_seed,
         )
+        if self.run_store.blocked:
+            # The replace-run confirmation covered the unloadable save.
+            self.abandon_saved_run()
         self.football_controller = football_controller
+        self.save_notice = None
         self.run_screen.team_name = self.menu_state.profile.team_name
         self.run_screen.begin(football_controller)
+        self.save_run()  # the new run replaces the saved one
         self.navigate("football_run")
 
     def remembered_run_summary(self) -> tuple[str, str] | None:
@@ -155,7 +257,9 @@ class DesktopApplication:
         self.navigate("football_run")
 
     def _forget_run(self) -> None:
+        """QUIT RUN or leaving an ended run: it is gone from memory and disk."""
         self.football_controller = None
+        self._delete_saved_run()
 
     def run(self, event_source: EventSource | None = None) -> None:
         pygame.init()

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import random
+from typing import Any
 from enum import Enum
 
+from src.engine.save_data import build, enum_value, required, rng_from_data, rng_to_data
 from src.engine.football import (
     DEFENSIVE_SCHEME_FAMILIES,
     DefensiveSchemeAction,
@@ -92,6 +94,30 @@ class FootballAI:
         self.seed = seed
         self.team_name = team_name
         self._rng = random.Random(seed)
+
+    def to_save_data(self) -> dict[str, Any]:
+        """Identity plus the exact state of the AI's persistent random stream."""
+        return {
+            "team_side": self.team_side.value,
+            "difficulty": self.difficulty.value,
+            "seed": self.seed,
+            "team_name": self.team_name,
+            "rng": rng_to_data(self._rng),
+        }
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballAI":
+        what = "AI"
+        ai = build("AI", lambda: cls(
+            enum_value(FootballTeamSide, required(data, "team_side", str, what), "team"),
+            enum_value(
+                FootballAIDifficulty, required(data, "difficulty", str, what), "difficulty"
+            ),
+            required(data, "seed", int, what),
+            required(data, "team_name", str, what),
+        ))
+        ai._rng = rng_from_data(required(data, "rng", list, what), "AI RNG")
+        return ai
 
     def generate_opponent_roster(self) -> FootballRoster:
         """Create a catalog-based roster with the existing difficulty offset.

@@ -44,6 +44,9 @@ RUN_PAUSE_VARIANT = "run-pause"
 # Coach selection and the player draft show choice errors in the header, between the
 # title and PAUSE.
 COACH_ERROR_RECT = pygame.Rect(640, 18, 484, 52)
+# A failed save shows this small banner at the top of the run for a few seconds.
+SAVE_NOTICE_RECT = pygame.Rect(430, 4, 480, 30)
+SAVE_NOTICE_MS = 6000
 
 
 class FootballRunScreen(Screen):
@@ -58,6 +61,7 @@ class FootballRunScreen(Screen):
         *,
         clock: Callable[[], int] = pygame.time.get_ticks,
         on_run_discarded: Callable[[], None] = lambda: None,
+        on_save_point: Callable[[], None] = lambda: None,
     ) -> None:
         super().__init__(theme, navigate, quit_application)
         self.team_name = team_name
@@ -65,6 +69,10 @@ class FootballRunScreen(Screen):
         self.state: FootballGameControllerState | None = None
         self.last_error: str | None = None
         self.on_run_discarded = on_run_discarded
+        # Called after every successful decision and when leaving for the menu.
+        self.on_save_point = on_save_point
+        self.save_notice: str | None = None
+        self._save_notice_until = 0
         self.pause = PauseMenu(clock)
         self._clock = clock
         self._resume_focus: int | None = None
@@ -94,6 +102,24 @@ class FootballRunScreen(Screen):
         self.pressed_index = None
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance = None
+
+    def restore(self, controller: FootballGameController) -> None:
+        """Start the UI on a run loaded from disk, settled on its saved decision."""
+        self.begin(controller)
+        shop = self.state.shop if self.state is not None else None
+        if (
+            self.state is not None
+            and self.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and shop is not None
+            and shop.pending_removal is not None
+        ):
+            # A pending removal is chosen in the Playbook, as when it was bought.
+            self.shop_review.open_playbook()
+
+    def show_save_notice(self, message: str) -> None:
+        """Show a short, non-blocking banner (e.g. a save that failed)."""
+        self.save_notice = message
+        self._save_notice_until = self._clock() + SAVE_NOTICE_MS
 
     def resume(self) -> None:
         """Return to a remembered run exactly where it was left; never resets it."""
@@ -245,6 +271,14 @@ class FootballRunScreen(Screen):
         super().handle_event(event)
 
     def draw(self, surface: pygame.Surface) -> None:
+        self._draw_run(surface)
+        if self.save_notice is not None:
+            if self._clock() >= self._save_notice_until:
+                self.save_notice = None
+            else:
+                draw_message_banner(surface, SAVE_NOTICE_RECT, self.save_notice, danger=True)
+
+    def _draw_run(self, surface: pygame.Surface) -> None:
         if not self.pause.is_open:
             self._draw_screen(surface)
             return
@@ -593,8 +627,10 @@ class FootballRunScreen(Screen):
     def _submit(self, action: Callable[[], object]) -> None:
         self.last_error = None
         old_state = self._current_state()
+        succeeded = False
         try:
             action()
+            succeeded = True
         except ValueError as error:
             self.last_error = str(error)
         finally:
@@ -612,6 +648,8 @@ class FootballRunScreen(Screen):
                 self.buttons = []
                 self.hover_index = None
                 self.pressed_index = None
+        if succeeded:
+            self.on_save_point()
 
     def _open_next_shop(self) -> None:
         self._submit(self._require_controller().enter_next_shop)
@@ -657,6 +695,7 @@ class FootballRunScreen(Screen):
         self.match_screen.settle()
         self.state = self._require_controller().state
         self.pause.saved_focus = focus
+        self.on_save_point()
         self.navigate("main_menu")
 
     def _quit_run(self) -> None:

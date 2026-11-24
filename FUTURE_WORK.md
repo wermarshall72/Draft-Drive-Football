@@ -98,15 +98,23 @@ or the design changes.
   each position's coach bonus, coached power, and partner links, candidate
   cards showing base and coached power plus a callout for an already-drafted
   partner, and display names such as "Basic O-Line" for basic players.
-- [ ] Save the single active run to disk so it survives closing and reopening
-  the game. Only one saved run ever exists, and starting a new run replaces it
-  after the existing confirmation. Save at safe points (after each shop action,
-  at match decisions, and on Return to Menu or app quit). Restore every piece
-  of run, shop, deck, match, and random-number state exactly, and handle
-  missing or corrupt saves safely. The in-memory resume (the run is kept only
-  for the current app session) is the interim behavior.
+- [x] Save the single active run to disk so it survives closing and reopening
+  the game: a versioned, checksummed JSON save in the OS app-data folder,
+  written atomically after every decision and on Return to Menu or quit, with
+  a rotated backup, step-by-step schema migrations, exact random-number state,
+  and safe handling of missing, damaged, newer-version, and unloadable saves.
+  The team profile moved to the same folder.
+- [ ] Move or retire the legacy SQLite snapshot database (`src/db/schema.py`,
+  `DB_PATH` under the repo's `data/` folder). It writes inside the install
+  folder, which Steam and Mac App Store installs do not allow.
+- [ ] Steam Cloud: configure Steamworks Auto-Cloud for the app-data folder's
+  `profile.json`, `run.json`, and `run.backup.json` on each OS, and decide on
+  cloud-conflict UI. Multiple save slots are out of scope for now.
+- [ ] Player-draft prospect skin tones are cosmetic UI picks, not saved; a run
+  restored mid-draft re-rolls them for the current offer (drafted players keep
+  their saved appearance).
 - [ ] Drafted players keep the jersey colors chosen at draft time; a profile
-  color edit while a run is remembered recolors the UI theme on resume but not
+  color edit while a run is saved recolors the UI theme on resume but not
   those saved appearances. Decide whether saved runs should follow the profile.
 - [ ] Give local AI opponents their own names and team colors; the result
   screen and match scoreboard currently show a neutral grey helmet.

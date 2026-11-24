@@ -8,10 +8,11 @@ auto-battler is a separate legacy reference.
 ## Launch, navigate, or change profile setup
 
 - [src/desktop.py](src/desktop.py) is the `python -m src.desktop` entry
-  point; [src/ui/__main__.py](src/ui/__main__.py) also calls it.
-  [DesktopApplication](src/ui/application.py) loads the profile, constructs
-  screens, starts runs with independent seeds, and handles the event loop,
-  scaling, and transitions. [navigation.py](src/ui/navigation.py) switches
+  point (`--data-dir`, `--profile-path`); [src/ui/__main__.py](src/ui/__main__.py) also calls it.
+  [DesktopApplication](src/ui/application.py) loads the profile and any saved
+  run, constructs screens, starts runs with independent seeds, saves and
+  deletes the run (`save_run`, `_forget_run`, `abandon_saved_run`), and
+  handles the event loop, scaling, and transitions. [navigation.py](src/ui/navigation.py) switches
   screens; [screens.py](src/ui/screens.py), [layout.py](src/ui/layout.py),
   [widgets.py](src/ui/widgets.py), and [theme.py](src/ui/theme.py) provide
   shared screen, layout, input, and visual components.
@@ -20,8 +21,11 @@ auto-battler is a separate legacy reference.
   run it leads with a focused CONTINUE RUN button whose summary comes from
   [football_run_summary.py](src/ui/football_run_summary.py), and START RUN
   opens a replace-run confirmation drawn with the shared pause-menu panel.
-  The run is kept in memory only (`continue_run`, `remembered_run_summary`,
-  `_forget_run`); it is not saved to disk; [main_menu_art.py](src/ui/main_menu_art.py)
+  The remembered run is the in-memory fast path within a session; the disk
+  save (see Persistence below) restores it at startup (`continue_run`,
+  `remembered_run_summary`, `_load_saved_run`). A `MenuSaveNotice` reports a
+  restored backup, damaged save, or unloadable save; unloadable ones add
+  ABANDON SAVE and make START RUN confirm first. [main_menu_art.py](src/ui/main_menu_art.py)
   draws its procedural stadium and tints the user-supplied helmet layers in
   `src/ui/assets/menu_helmet_*.png` to the team's primary color.
   [profile_screen.py](src/ui/profile_screen.py) creates or edits the profile.
@@ -40,9 +44,13 @@ auto-battler is a separate legacy reference.
 phases, buttons, input, the pause menu, view callbacks, and error display.
 It renders controller state and submits actions; football rules and progression
 belong in [football_controller.py](src/engine/football_controller.py) and the
-engine, not Pygame. `begin` resets transient UI state for a new run; `resume`
-returns to a remembered run without resetting it (draft step, shop sub-screen
-and pending removal, match with any replay settled, regular result, and focus).
+engine, not Pygame. `begin` resets transient UI state for a new run; `restore`
+starts on a run loaded from disk (settled, reopening a pending removal's
+Playbook); `resume` returns to a remembered run without resetting it (draft
+step, shop sub-screen and pending removal, match with any replay settled,
+regular result, and focus). `_submit` calls `on_save_point` after every
+successful decision, as does Return to Menu; `show_save_notice` draws the
+transient save-failure banner.
 [football_pause_menu.py](src/ui/football_pause_menu.py) owns `PauseMenu`
 (open state, saved focus, and the 3-second two-step QUIT RUN on an injectable
 clock), the shared veil/panel/button drawing, and the PAUSE [ESC] button look.
@@ -287,8 +295,27 @@ covers extracted interaction state.
 
 ## Persistence, legacy, and tooling
 
-The desktop saves the shared profile JSON via [profile.py](src/profile.py);
-the interactive run itself is in memory and does not use the snapshot database.
+[src/persistence/](src/persistence/__init__.py) does all save-file I/O and
+imports no Pygame. [paths.py](src/persistence/paths.py) resolves the per-OS
+app-data folder (`APP_DATA_NAME`, `DDF_DATA_DIR`, `app_data_dir`);
+[atomic_io.py](src/persistence/atomic_io.py) writes temp-fsync-replace files
+(also used by [profile.py](src/profile.py), whose `default_profile_path`
+copies a legacy `~/.cfb-auto-battler` profile once);
+[run_save.py](src/persistence/run_save.py) owns `RunSaveStore`, the
+checksummed envelope, `run.json`/`run.backup.json` rotation, load fallbacks
+(`LoadResult`/`LoadStatus`), moving damaged or abandoned files aside, and the
+`save_run`/`load_run`/`delete_run` helpers; [migrations.py](src/persistence/migrations.py)
+holds `CURRENT_SCHEMA_VERSION` and the `N -> N+1` registry. The engine owns
+the payload: `to_save_data`/`from_save_data` on the controller, team builder,
+shop, AI, simulator, and match models in [football.py](src/engine/football.py),
+with shared helpers and `UnsupportedSave` in [save_data.py](src/engine/save_data.py).
+See [test_run_save.py](tests/test_run_save.py) (round trips, determinism,
+envelope, atomic writes, migrations), [test_run_save_desktop.py](tests/test_run_save_desktop.py)
+(restart, Continue Run, replace, quit, failures, notices),
+[test_persistence_paths.py](tests/test_persistence_paths.py), the seeded
+driver [football_run_driver.py](tests/football_run_driver.py), and
+[conftest.py](tests/conftest.py), which isolates every test's folders.
+The interactive run does not use the snapshot database.
 The still-reachable terminal entry point [src/main.py](src/main.py) uses the
 legacy run methods in [src/application.py](src/application.py), legacy
 [game_run.py](src/engine/game_run.py), [shop.py](src/engine/shop.py),
@@ -319,3 +346,7 @@ are in [README.md](README.md).
 - **Adjust profile setup:** start in [profile_screen.py](src/ui/profile_screen.py),
   then follow save and validation through `DesktopApplication`,
   `ApplicationController`, and [profile.py](src/profile.py).
+- **Add run state or change the save format:** add the field to the owning
+  engine object's `to_save_data`/`from_save_data`, bump the schema version and
+  add a migration in [migrations.py](src/persistence/migrations.py), then
+  extend [test_run_save.py](tests/test_run_save.py).

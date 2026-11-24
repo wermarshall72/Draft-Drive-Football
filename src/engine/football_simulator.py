@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from math import floor, isfinite
 from numbers import Real
+from typing import Any
 
 from src.engine.football import (
     FootballBonusCardAction,
@@ -40,7 +41,15 @@ from src.engine.football import (
     FootballTurnoverType,
     OFFENSIVE_PLAY_FAMILIES,
     OffensivePlayAction,
+    match_state_from_save_data,
+    match_state_to_save_data,
     matchup_for_scheme,
+)
+from src.engine.save_data import (
+    required,
+    optional,
+    rng_from_data,
+    rng_to_data,
 )
 from src.engine.football_coaches import (
     FootballCoachPerkKind,
@@ -1140,6 +1149,50 @@ class FootballMatchSimulator:
         self._challenge_snapshot: FootballMatchState | None = None
         self._challenge_play_copy_id: str | None = None
         self._initialize_decks()
+
+    # -- save data -------------------------------------------------------------
+    # Every attribute set in ``__init__`` is saved: the match state, the play
+    # RNG, all four deck RNGs (exact states, so shuffles continue identically),
+    # and the pending Challenge rollback snapshot and its played card copy.
+
+    _DECK_RNG_KEYS = ("team_a_offense", "team_a_defense", "team_b_offense", "team_b_defense")
+
+    def to_save_data(self) -> dict[str, Any]:
+        return {
+            "state": match_state_to_save_data(self.state),
+            "rng": rng_to_data(self.rng),
+            "deck_rngs": {key: rng_to_data(self._deck_rngs[key]) for key in self._DECK_RNG_KEYS},
+            "challenge_snapshot": (
+                match_state_to_save_data(
+                    self._challenge_snapshot, events_prefix_of=self.state
+                )
+                if self._challenge_snapshot is not None else None
+            ),
+            "challenge_play_copy_id": self._challenge_play_copy_id,
+        }
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballMatchSimulator":
+        """Restore a simulator mid-match without re-dealing or re-seeding anything."""
+        what = "Match simulator"
+        state = match_state_from_save_data(required(data, "state", dict, what))
+        deck_rngs = required(data, "deck_rngs", dict, what)
+        snapshot = optional(data, "challenge_snapshot", dict, what)
+        simulator = cls.__new__(cls)
+        simulator.state = state
+        simulator.rng = rng_from_data(required(data, "rng", list, what), "match RNG")
+        simulator._deck_rngs = {
+            key: rng_from_data(required(deck_rngs, key, list, what), f"{key} deck RNG")
+            for key in cls._DECK_RNG_KEYS
+        }
+        simulator._challenge_snapshot = (
+            match_state_from_save_data(snapshot, events_prefix_of=state)
+            if snapshot is not None else None
+        )
+        simulator._challenge_play_copy_id = optional(
+            data, "challenge_play_copy_id", str, what
+        )
+        return simulator
 
     def _initialize_decks(self) -> None:
         changes: dict[str, FootballDeckState] = {}

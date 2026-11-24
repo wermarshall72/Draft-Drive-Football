@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
+from typing import Any
 
 from src.engine.football import (
     DefensiveSchemeAction,
@@ -35,6 +36,16 @@ from src.engine.football_shop import (
 from src.engine.football_simulator import (
     FootballMatchSimulator,
     REGULATION_PERIOD_SECONDS,
+)
+from src.engine.save_data import (
+    UnsupportedSave,
+    build,
+    enum_value,
+    required,
+    items,
+    optional,
+    rng_from_data,
+    rng_to_data,
 )
 from src.engine.football_team_builder import (
     FootballPlayerCandidate,
@@ -184,6 +195,129 @@ class FootballGameController:
         self._challenge_prompt = False
         self._player_appearances: dict[FootballPosition, FootballPlayerAppearance] = {}
         self._drafted_players: dict[FootballPosition, FootballPlayer] = {}
+
+    # -- save data -------------------------------------------------------------
+    # Saved: every attribute set in ``__init__`` and the shop and simulator once
+    # they exist, including all random streams (builder, shared shop RNG, AI,
+    # match-seed stream, and the simulator's play and deck RNGs), so a restored
+    # run continues exactly like an uninterrupted one. Rebuilt: the shop
+    # catalogs, which come from the current game (or ``shop_catalogs``). The
+    # team name is the builder's; difficulty and opponent name are the AI's.
+
+    def to_save_data(self) -> dict[str, Any]:
+        return {
+            "builder": self._builder.to_save_data(),
+            "shop_rng": rng_to_data(self._shop_rng),
+            "ai": self._ai.to_save_data(),
+            "match_seed_rng": rng_to_data(self._match_seed_rng),
+            "difficulty": self._difficulty.value,
+            "opponent_name": self._opponent_name,
+            "shop": (
+                self._shop.to_save_data(include_rng=False)
+                if self._shop is not None else None
+            ),
+            "simulator": (
+                self._simulator.to_save_data() if self._simulator is not None else None
+            ),
+            "phase": self._phase.value,
+            "game_number": self._game_number,
+            "wins": self._wins,
+            "losses": self._losses,
+            "games_played": self._games_played,
+            "skipped_games": list(self._skipped_games),
+            "season_history": [
+                _season_game_to_save_data(game) for game in self._season_history
+            ],
+            "transition_message": self._transition_message,
+            "challenge_prompt": self._challenge_prompt,
+            "player_appearances": [
+                _appearance_to_save_data(position, appearance)
+                for position, appearance in self._player_appearances.items()
+            ],
+            "drafted_players": [
+                player.to_save_data() for player in self._drafted_players.values()
+            ],
+        }
+
+    @classmethod
+    def from_save_data(
+        cls,
+        data: Any,
+        *,
+        shop_catalogs: Mapping[
+            FootballShopSection, tuple[FootballShopCard, ...]
+        ] | None = None,
+    ) -> "FootballGameController":
+        """Rebuild a run from ``to_save_data``; raises ``UnsupportedSave`` if it can't."""
+        what = "Run"
+        controller = cls.__new__(cls)
+        controller._builder = FootballTeamBuilder.from_save_data(
+            required(data, "builder", dict, what)
+        )
+        controller._shop_rng = rng_from_data(required(data, "shop_rng", list, what), "shop RNG")
+        controller._shop_catalogs = (
+            {section: tuple(cards) for section, cards in shop_catalogs.items()}
+            if shop_catalogs is not None
+            else None
+        )
+        controller._ai = FootballAI.from_save_data(required(data, "ai", dict, what))
+        controller._match_seed_rng = rng_from_data(
+            required(data, "match_seed_rng", list, what), "match-seed RNG"
+        )
+        controller._difficulty = enum_value(
+            FootballAIDifficulty, required(data, "difficulty", str, what), "difficulty"
+        )
+        controller._opponent_name = required(data, "opponent_name", str, what)
+        shop = optional(data, "shop", dict, what)
+        controller._shop = (
+            FootballShop.from_save_data(
+                shop, rng=controller._shop_rng, catalogs=controller._shop_catalogs
+            )
+            if shop is not None else None
+        )
+        simulator = optional(data, "simulator", dict, what)
+        controller._simulator = (
+            FootballMatchSimulator.from_save_data(simulator) if simulator is not None else None
+        )
+        controller._phase = enum_value(
+            FootballRunPhase, required(data, "phase", str, what), "run phase"
+        )
+        controller._game_number = required(data, "game_number", int, what)
+        controller._wins = required(data, "wins", int, what)
+        controller._losses = required(data, "losses", int, what)
+        controller._games_played = required(data, "games_played", int, what)
+        skipped = items(required(data, "skipped_games", list, what), "Skipped games")
+        if any(isinstance(game, bool) or not isinstance(game, int) for game in skipped):
+            raise UnsupportedSave("Skipped games must be game numbers.")
+        controller._skipped_games = list(skipped)
+        controller._season_history = [
+            _season_game_from_save_data(item)
+            for item in items(required(data, "season_history", list, what), "Season history")
+        ]
+        controller._transition_message = optional(data, "transition_message", str, what)
+        controller._challenge_prompt = required(data, "challenge_prompt", bool, what)
+        controller._player_appearances = dict(
+            _appearance_from_save_data(item)
+            for item in items(
+                required(data, "player_appearances", list, what), "Player appearances"
+            )
+        )
+        drafted = [
+            FootballPlayer.from_save_data(item)
+            for item in items(required(data, "drafted_players", list, what), "Drafted players")
+        ]
+        controller._drafted_players = {player.position: player for player in drafted}
+        if controller._phase in (
+            FootballRunPhase.PRE_MATCH_SHOP, FootballRunPhase.READY_FOR_NEXT_GAME,
+        ) and controller._shop is None:
+            raise UnsupportedSave("A run past the draft must have a shop.")
+        if controller._phase is FootballRunPhase.MATCH and controller._simulator is None:
+            raise UnsupportedSave("A run in a match must have a match.")
+        return controller
+
+    @property
+    def team_name(self) -> str:
+        return self._builder.team_name
 
     @property
     def state(self) -> FootballGameControllerState:
@@ -602,3 +736,59 @@ class FootballGameController:
         if self._simulator is None:
             raise RuntimeError("The match simulator is unavailable.")
         return self._simulator
+
+
+def _season_game_to_save_data(game: FootballSeasonGame) -> dict[str, Any]:
+    data: dict[str, Any] = {"game_number": game.game_number, "outcome": game.outcome.value}
+    if game.outcome is not FootballSeasonOutcome.BYE:
+        data.update(
+            team_score=game.team_score,
+            opponent_score=game.opponent_score,
+            overtime=game.overtime,
+        )
+    return data
+
+
+def _season_game_from_save_data(data: Any) -> FootballSeasonGame:
+    what = "Season game"
+    return FootballSeasonGame(
+        game_number=required(data, "game_number", int, what),
+        outcome=enum_value(
+            FootballSeasonOutcome, required(data, "outcome", str, what), "season outcome"
+        ),
+        team_score=optional(data, "team_score", int, what),
+        opponent_score=optional(data, "opponent_score", int, what),
+        overtime=optional(data, "overtime", bool, what, False),
+    )
+
+
+def _appearance_to_save_data(
+    position: FootballPosition, appearance: FootballPlayerAppearance
+) -> dict[str, Any]:
+    return {
+        "position": position.value,
+        "asset_key": appearance.asset_key,
+        "skin": list(appearance.skin),
+        "primary": list(appearance.primary),
+        "secondary": list(appearance.secondary),
+    }
+
+
+def _appearance_from_save_data(
+    data: Any,
+) -> tuple[FootballPosition, FootballPlayerAppearance]:
+    what = "Player appearance"
+    position = enum_value(FootballPosition, required(data, "position", str, what), "position")
+
+    def color(key: str) -> tuple[int, ...]:
+        return tuple(items(required(data, key, list, what), f"Appearance {key}"))
+
+    appearance = build("player appearance", lambda: FootballPlayerAppearance(
+        asset_key=required(data, "asset_key", str, what),
+        skin=color("skin"),
+        primary=color("primary"),
+        secondary=color("secondary"),
+    ))
+    if appearance.asset_key != POSITION_ART[position]:
+        raise UnsupportedSave("Appearance artwork must match its position.")
+    return position, appearance

@@ -36,9 +36,27 @@ under the SIL Open Font License 1.1; remaining UI text uses a system font.
 Its full license is in `src/ui/assets/fonts/`; if the font is missing, the
 desktop falls back to its system UI font and logs a warning.
 
-Desktop run state is in memory only. The desktop gameplay flow uses
-`FootballGameController` and does not initialize or write to the legacy game
-database.
+The active run is saved after every decision (and on Return to Menu or
+quitting), so closing the game resumes on the same decision. The desktop
+gameplay flow uses `FootballGameController` and does not initialize or write
+to the legacy game database.
+
+## Save files
+
+The team profile (`profile.json`) and the single saved run (`run.json`, plus
+the previous good save in `run.backup.json`) live in the per-user app-data
+folder:
+
+- macOS: `~/Library/Application Support/Draft Drive Football/`
+- Windows: `%APPDATA%\Draft Drive Football\`
+- Linux: `$XDG_DATA_HOME/draft-drive-football/`, or
+  `~/.local/share/draft-drive-football/` when `XDG_DATA_HOME` is unset
+
+Set `DDF_DATA_DIR` (or pass `--data-dir` to `python -m src.desktop`) to use
+another folder, e.g. for debugging. On first launch a profile from the old
+`~/.cfb-auto-battler/profile.json` is copied over; the old file is kept.
+Saves are readable JSON with a checksum; damaged or set-aside saves are kept
+beside them with a timestamped name.
 
 For code paths, feature ownership, and relevant tests, see the
 [system map](SYSTEM_MAP.md).
@@ -52,10 +70,10 @@ python -m src.main
 ```
 
 The first launch asks for a team name and two different colors. The saved
-profile is stored outside the project in
-`~/.cfb-auto-battler/profile.json` (under the current user's home directory),
-so it is not tied to the current working directory or the game's SQLite
-snapshot database. Profiles can also be created or edited in the desktop app.
+profile is stored outside the project in the app-data folder listed under
+[Save files](#save-files), so it is not tied to the current working directory
+or the game's SQLite snapshot database. Profiles can also be created or
+edited in the desktop app.
 
 ## Application boundary
 
