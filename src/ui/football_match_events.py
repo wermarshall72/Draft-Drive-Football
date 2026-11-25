@@ -23,10 +23,12 @@ from src.engine.football import (
     FootballMatchEvent,
     FootballMatchState,
     FootballMatchStatus,
+    FootballPerkDecision,
     FootballTeamSide,
     FootballTurnoverType,
     OffensivePlayAction,
 )
+from src.ui.football_player_perks import activation_callout, activation_log_text
 from src.engine.football_decks import (
     BONUS_CARD_CATALOG,
     DEFENSIVE_SCHEME_CATALOG,
@@ -77,6 +79,7 @@ class Outcome:
     detail: str
     kind: PlayLineKind
     emphasis: OutcomeEmphasis = OutcomeEmphasis.NORMAL
+    callouts: tuple[str, ...] = ()  # player perks that fired, e.g. "PYLON REACH · Boundary Route · TD"
 
 
 def opponent(side: FootballTeamSide) -> FootballTeamSide:
@@ -138,7 +141,10 @@ def play_line(
     action = event.action
     if isinstance(action, FootballBonusCardAction):
         return CLEAR_LINE if event.reverses_event_sequences else None
-    if isinstance(action, DefensiveSchemeAction) or action is FootballFourthDownAction.GO_FOR_IT:
+    if (
+        isinstance(action, (DefensiveSchemeAction, FootballPerkDecision))
+        or action is FootballFourthDownAction.GO_FOR_IT
+    ):
         return None
     if action is FootballAutomaticAction.KICKOFF:
         return _kickoff_line(event)
@@ -297,10 +303,11 @@ def team_name(side: FootballTeamSide | None, team_a: str, team_b: str) -> str:
     return team_a if side is FootballTeamSide.TEAM_A else team_b
 
 
-def format_yards(yards: float) -> str:
+def format_yards(yards: float, *, precise: bool = False) -> str:
+    """'+7 YARDS'; ``precise`` keeps one decimal (a gain just short of the line)."""
     if abs(yards) < 0.05:
         return "NO GAIN"
-    if abs(yards) < 0.5:
+    if abs(yards) < 0.5 or (precise and abs(yards - round(yards)) >= 0.05):
         value = f"{yards:+.1f}"
     else:
         value = f"{round(yards):+d}"
@@ -335,8 +342,42 @@ def outcome(
     team_a: str,
     team_b: str,
 ) -> Outcome:
-    """Outcome-strip headline and detail for one recorded event."""
+    """Outcome-strip headline, detail, and perk callouts for one recorded event."""
+    base = _base_outcome(event, previous, team_a, team_b)
+    callouts = perk_callouts(event)
+    return replace(base, callouts=callouts) if callouts else base
+
+
+def perk_callouts(event: FootballMatchEvent) -> tuple[str, ...]:
+    """Triggered perks first, then standing effects that applied (both teams)."""
+    ordered = sorted(event.perk_activations, key=lambda activation: activation.applied)
+    return tuple(activation_callout(activation) for activation in ordered)
+
+
+def perk_log_text(event: FootballMatchEvent) -> str:
+    """'Perks: Pylon Reach (td), Last Line (stopped at the 1)' or ''."""
+    if not event.perk_activations:
+        return ""
+    return "Perks: " + ", ".join(activation_log_text(activation) for activation in event.perk_activations)
+
+
+def _base_outcome(
+    event: FootballMatchEvent,
+    previous: FootballMatchEvent | None,
+    team_a: str,
+    team_b: str,
+) -> Outcome:
     action = event.action
+    if isinstance(action, FootballPerkDecision):
+        defense = team_name(opponent(event.possession), team_a, team_b).upper()
+        if action is FootballPerkDecision.GREEN_DOG_SWAP and event.card_id in DEFENSIVE_SCHEME_CATALOG:
+            scheme = DEFENSIVE_SCHEME_CATALOG[event.card_id]
+            return Outcome(
+                f"GREEN DOG · {scheme.name.upper()}",
+                f"{defense} · NOW COUNTERS {scheme.family.label.upper()}",
+                PlayLineKind.OTHER,
+            )
+        return Outcome("GREEN DOG · SCHEME KEPT", f"{defense} · NO SWAP", PlayLineKind.OTHER)
     if isinstance(action, OffensivePlayAction):
         return _offensive_outcome(event, previous, team_a, team_b)
     if isinstance(action, DefensiveSchemeAction):
@@ -469,15 +510,20 @@ def _offensive_outcome(
         if result.turnover_on_downs:
             return Outcome("INCOMPLETE · TURNOVER ON DOWNS", detail, kind, OutcomeEmphasis.TURNOVER)
         return Outcome("INCOMPLETE", detail, kind)
-    yards = format_yards(result.yards_gained)
-    if result.turnover_on_downs:
-        return Outcome(f"{yards} · TURNOVER ON DOWNS", detail, kind, OutcomeEmphasis.TURNOVER)
     first_down = (
         previous is not None
         and event.possession is side
         and event.down == 1
         and event.period == previous.period
     )
+    # A gain that rounds up to the line but fell short (Hold the Line) keeps its decimal.
+    short_of_line = (
+        previous is not None and not first_down
+        and round(result.yards_gained) >= previous.yards_to_go > result.yards_gained
+    )
+    yards = format_yards(result.yards_gained, precise=short_of_line)
+    if result.turnover_on_downs:
+        return Outcome(f"{yards} · TURNOVER ON DOWNS", detail, kind, OutcomeEmphasis.TURNOVER)
     return Outcome(f"{yards} · FIRST DOWN" if first_down else yards, detail, kind)
 
 
@@ -576,6 +622,9 @@ def active_scheme(
     for index, event in enumerate(events):
         if isinstance(event.action, DefensiveSchemeAction):
             scheme = event.action
+            continue
+        if event.action is FootballPerkDecision.GREEN_DOG_SWAP and event.card_id:
+            scheme = DefensiveSchemeAction(event.card_id)
             continue
         previous = events[index - 1] if index else None
         if (

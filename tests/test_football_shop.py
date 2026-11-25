@@ -540,7 +540,7 @@ def test_roster_updates_are_immutable_valid_and_seeded_outcomes_match() -> None:
     )
 
 
-def test_shop_upgrade_preserves_specialist_identity_and_inactive_perk_text() -> None:
+def test_shop_upgrade_preserves_specialist_identity_and_perk() -> None:
     original_roster = _drafted_roster()
     shop = FootballShop(original_roster, 19)
     card = next(card for card in _player_upgrade_catalog()
@@ -561,13 +561,7 @@ def test_shop_upgrade_preserves_specialist_identity_and_inactive_perk_text() -> 
     updated_type = player_type_for_id(updated_player.player_type_id)
     assert updated_type is original_type
     assert updated_type.partner_position is original_type.partner_position
-    assert (
-        updated_type.perk.display_text
-        if updated_type.perk is not None
-        else None
-    ) == (
-        original_type.perk.display_text if original_type.perk is not None else None
-    )
+    assert updated_type.perk == original_type.perk
 
 
 def test_builder_shop_roster_initializes_match_with_local_ai_opponent() -> None:

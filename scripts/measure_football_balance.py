@@ -1,7 +1,10 @@
 """Reproducible seeded matchup and full-game balance measurements.
 
 Single-play samples cover every named offensive card; full-game samples cover
-Easy, Standard, and Hard local AI opponents.
+Easy, Standard, and Hard local AI opponents. ``--perks off`` disables every
+player perk (rosters, drafting, and decks are unchanged) so the two runs can be
+compared; with perks on, the report adds how often each perk fires per team
+per game for the teams that carry it, against its intended tier.
 """
 
 from __future__ import annotations
@@ -10,8 +13,12 @@ import argparse
 from dataclasses import dataclass
 from math import sqrt
 
+from collections import Counter
+
+from src.engine import football_perk_context
 from src.engine.football import (
     DefensiveSchemeAction,
+    FootballPlayerPerkKind,
     FootballAwaitedAction,
     FootballCardFamily,
     FootballCardCopy,
@@ -321,6 +328,11 @@ def _full_game(seed: int, difficulty: FootballAIDifficulty) -> tuple[object, tup
             actor = 1 if current.possession is FootballTeamSide.TEAM_A else 0
         else:
             actor = 0 if current.possession is FootballTeamSide.TEAM_A else 1
+        if current.awaited_action is FootballAwaitedAction.GREEN_DOG_DECISION:
+            defender = 1 if current.possession is FootballTeamSide.TEAM_A else 0
+            simulator.resolve_green_dog(ais[defender].choose_green_dog(current))
+            actions += 1
+            continue
         action = ais[actor].choose_action(current)
         if current.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME:
             simulator.select_defensive_scheme(action)
@@ -343,15 +355,44 @@ def _full_game(seed: int, difficulty: FootballAIDifficulty) -> tuple[object, tup
     return simulator.state, (ais[0], ais[1])
 
 
-def measure_games(games: int, seed: int) -> None:
-    print("\nSEEDED FULL-GAME AI SAMPLES")
+_K = FootballPlayerPerkKind
+# Intended tiers (docs/player-perks-proposal.md §3): fires per team per game.
+INTENDED_TIERS = {
+    **{kind: "frequent" for kind in (
+        _K.HURRY_UP_CAPTAIN, _K.POCKET_PRESENCE, _K.CHECKDOWN, _K.OUTLET_REPEAT, _K.DOWNHILL,
+        _K.HOT_ROUTE, _K.MOTION_JUMP, _K.TEMPO_READ, _K.PULL_LEAD, _K.SCREEN_WALL, _K.EDGE_SET,
+        _K.COLLAPSE, _K.FIT_AND_SHED, _K.CAPTAINS_ADJUSTMENT, _K.READ_KEYS, _K.KEEP_IT_INBOUNDS,
+        _K.NICKEL_LOCK, _K.DEEP_LOCK, _K.SAFETY_BLITZ, _K.DOWNHILL_FILL,
+    )},
+    **{kind: "moderate" for kind in (
+        _K.MESH_READ, _K.SHOT_SETUP, _K.RELEASE_READ, _K.FOUR_MINUTE_DRILL, _K.CONTAIN,
+        _K.STUNT_SACK, _K.SHORT_FIELD, _K.FORCE_AND_FOLD, _K.SUDDEN_CHANGE,
+    )},
+    **{kind: "rare" for kind in (
+        _K.OPTION_LEDGER, _K.SILENT_COUNT, _K.KEEP_READ, _K.ORBIT_BREAKAWAY, _K.FALL_FORWARD,
+        _K.CONTESTED_CATCH, _K.MOVE_THE_STICKS, _K.PYLON_REACH, _K.PASS_PRO, _K.BREATHING_ROOM,
+        _K.HOLD_THE_FRONT, _K.KICK_RUSH, _K.HOLD_THE_LINE, _K.GREEN_DOG, _K.BRACKET,
+        _K.BAIT_AND_JUMP, _K.LAST_LINE, _K.TIP_DRILL, _K.RANGE_DENIAL,
+    )},
+}
+# A rate is "far outside" its tier when it leaves these generous bands.
+FAR_OUTSIDE = {"frequent": (1.0, 99.0), "moderate": (0.4, 4.0), "rare": (0.0, 2.0)}
+
+
+def measure_games(games: int, seed: int, *, perks: bool = True) -> None:
+    print(f"\nSEEDED FULL-GAME AI SAMPLES (player perks {'ON' if perks else 'OFF'})")
     print(
-        "opponent difficulty | games | combined points/game (mean; median; "
-        "10th-90th pct) | offensive snaps/game | total drives/game | "
+        "Team A is Standard; Team B is the listed difficulty.\n"
+        "opponent difficulty | games | Team A win rate | points/game A; B | combined points/game "
+        "(mean; median; 10th-90th pct) | offensive snaps/game | total drives/game | "
         "2-point attempts/game | overtime games"
     )
+    fires: Counter = Counter()
+    carriers: Counter = Counter()
     for difficulty in FootballAIDifficulty:
         combined_points: list[float] = []
+        points_a = points_b = 0
+        wins_a = 0
         plays: list[float] = []
         two_point_attempts = 0
         overtime_games = 0
@@ -366,6 +407,9 @@ def measure_games(games: int, seed: int) -> None:
             if result is None:
                 raise RuntimeError("A sampled game has no final result.")
             combined_points.append(float(result.team_a_score + result.team_b_score))
+            points_a += result.team_a_score
+            points_b += result.team_b_score
+            wins_a += result.winner is FootballTeamSide.TEAM_A
             plays.append(float(sum(event.play_result is not None for event in state.match_events)))
             drive_count += sum(
                 isinstance(event.action, DefensiveSchemeAction)
@@ -376,16 +420,39 @@ def measure_games(games: int, seed: int) -> None:
                 for event in state.match_events
             )
             overtime_games += any(event.period >= 3 for event in state.match_events)
+            if perks:
+                for side in FootballTeamSide:
+                    for kind in football_perk_context.team_perks(state, side):
+                        carriers[kind] += 1
+                for event in state.match_events:
+                    for activation in event.perk_activations:
+                        if not activation.applied:
+                            fires[activation.kind] += 1
         ordered_points = sorted(combined_points)
         median = ordered_points[len(ordered_points) // 2]
         p10 = ordered_points[int((len(ordered_points) - 1) * 0.10)]
         p90 = ordered_points[int((len(ordered_points) - 1) * 0.90)]
         print(
-            f"{difficulty.value} | {games} | "
+            f"{difficulty.value} | {games} | {wins_a / games:.3f} | "
+            f"{points_a / games:.2f}; {points_b / games:.2f} | "
             f"{sum(combined_points) / games:.2f}; {median:.0f}; {p10:.0f}-{p90:.0f} | "
             f"{sum(plays) / games:.1f} | {drive_count / games:.2f} | "
             f"{two_point_attempts / games:.2f} | {overtime_games}"
         )
+    if perks:
+        print("\nPERK FIRES PER CARRYING TEAM PER GAME (all difficulties; * = far outside its tier)")
+        print("perk | intended tier | carrier games | fires/game")
+        for kind in sorted(INTENDED_TIERS, key=lambda item: -fires[item] / max(1, carriers[item])):
+            tier = INTENDED_TIERS[kind]
+            rate = fires[kind] / max(1, carriers[kind])
+            low, high = FAR_OUTSIDE[tier]
+            flag = " *" if not low <= rate <= high else ""
+            print(f"{kind.value} | {tier} | {carriers[kind]} | {rate:.2f}{flag}")
+
+
+def disable_player_perks() -> None:
+    """Every roster reports no perks, so no perk can fire anywhere."""
+    football_perk_context._roster_perks = lambda slots: ()
 
 
 def main() -> None:
@@ -393,11 +460,16 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=5_000)
     parser.add_argument("--games", type=int, default=300)
     parser.add_argument("--seed", type=int, default=20261114)
+    parser.add_argument("--perks", choices=("on", "off"), default="on")
+    parser.add_argument("--skip-plays", action="store_true", help="Only run the full-game samples.")
     args = parser.parse_args()
     if args.samples < 1 or args.games < 1:
         parser.error("--samples and --games must be positive.")
-    measure_plays(args.samples, args.seed)
-    measure_games(args.games, args.seed)
+    if args.perks == "off":
+        disable_player_perks()
+    if not args.skip_plays:
+        measure_plays(args.samples, args.seed)
+    measure_games(args.games, args.seed, perks=args.perks == "on")
 
 
 if __name__ == "__main__":

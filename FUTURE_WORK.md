@@ -15,14 +15,24 @@ or the design changes.
   AI roster generation, and player-selection UI.
 - [x] Review and approve the proposed player perks. Initially, show them as
   text only; their effects do not execute in matches.
-- [ ] Make future player perks more creative and meaningfully interact with
-  future game actions. The current perk proposals are intentionally basic and
-  remain informational until perk execution is designed.
-- [x] Make planned player perk descriptions fully readable in prospect
-  inspection; keep the exact condition, effect, duration, reset, and inactive
-  status out of the default card comparison.
-- [ ] Implement approved player perk effects later, when their supporting game
-  systems and trigger/reset rules are defined.
+- [x] Redesign the specialist perks so each one meaningfully interacts with
+  play calling, cards, yards, clock, or turnovers
+  ([docs/player-perks-proposal.md](docs/player-perks-proposal.md)).
+- [x] Make player perk descriptions fully readable: a card line on draft cards
+  and Depth Chart fronts, the full rules in the draft perk box and on card backs.
+- [x] Implement the approved player perk effects for both teams, with typed
+  activations on match events, outcome-strip callouts, Play Log entries,
+  preview notes, ready/used badges, Read Keys (L4), and Green Dog (L6).
+- [x] Bring Bait & Jump (C6) and Keep Read (R2) back into their Rare tier: both
+  are now once per half (C6 4.7 → 1.9, R2 2.8 → 1.8 fires per game; proposal §8).
+- [ ] Balance follow-up for the least frequent rare perks (proposal §8): Kick
+  Rush (D5), Range Denial (S6), Pass Pro (O1), Fall Forward (R6), and Hold the
+  Front (D1). Revisit after human playtesting; values are unchanged.
+- [ ] Playtest the end-of-drive hand reset with Draw bonus cards, Hold the
+  Front, Outlet Repeat, and Fit & Shed, whose extra cards now last one drive.
+- [ ] Decide whether the AI should read Read Keys during a Green Dog swap too
+  (the human's Green Dog panel already shows the revealed hand) and whether the
+  Easy AI should keep using the estimate rule for Green Dog.
 - [x] Define and implement the approved Option / Spread fourth-down perk:
   +1 yard on a non-turnover run or completed pass when going for it. This value
   is provisional and should be revisited during balance work.
@@ -51,8 +61,12 @@ or the design changes.
   period-boundary resets, a shared active-hand UI, and hand-limited AI choices.
 - [x] Make offensive and defensive hands independent: every played card replaces
   itself, Draw bonus cards add one extra card with no hand-size cap, and
-  halftime/overtime redeal to three and two. Balance of enlarged hands is
-  untested in playtesting.
+  halftime/overtime redeal to three and two.
+- [x] Reset hands at the end of each drive: the offense's offensive hand returns
+  to three and the defense's defensive hand to two (random trim with the deck's
+  own RNG, or a refill), after any two-point try.
+- [x] End the drive at halftime and open period 2 with a kickoff by the team
+  that received the opening kickoff.
 - [x] Resolve "Go For It" through a normal offensive card play using the active
   defensive scheme; failed fourth-down plays turn the ball over at the play
   spot, while punts and field goals remain separate special-teams actions.

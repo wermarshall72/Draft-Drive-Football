@@ -4,7 +4,7 @@ The header matches coach selection. The sidebar lists every pick in draft order 
 that position's coach bonus, and drafted rows show coached power and the partner link.
 Each candidate card shows a portrait (Heisman pose while active), base and coached
 power, the partnership with a callout for an already-drafted partner, and the
-planned (inactive) perk details.
+perk: its name with partner and limit tags, its card line, and its full rules.
 """
 
 from collections.abc import Callable
@@ -36,7 +36,6 @@ from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button
 
 SIDEBAR_TITLE = "BUILD YOUR ROSTER"
-PLANNED_LABEL = "PLANNED / INACTIVE"
 NO_PARTNER = "No partner"
 PARTNER_EXPLANATION = "+10% when both contribute to a play"
 
@@ -227,7 +226,7 @@ class FootballPlayerDraftView:
         self._draw_sidebar(surface, builder)
 
         # One perk text size for all three cards, so the row reads evenly.
-        self._perk_size = min((_perk_size(_player_type(c.player), _perk_text_rect(rect)) for c, rect
+        self._perk_size = min((_perk_size(_player_type(c.player), _perk_text_rect(rect, _player_type(c.player).perk)) for c, rect
                                in zip(offers, cards)), default=_PERK_SIZES[0])
         buttons: list[Button] = []
         self.player_inspection.portraits = []
@@ -435,24 +434,27 @@ class FootballPlayerDraftView:
     def _draw_perk(self, surface: pygame.Surface, box: pygame.Rect, player_type) -> None:
         pygame.draw.rect(surface, MATCH_PANEL_DEEP, box, border_radius=8)
         pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, box, 1, border_radius=8)
-        inner = _perk_text_rect_in(box)
-        planned, paragraphs = _perk_paragraphs(player_type)
-        if planned:
-            tag_font = plain_font(10)
-            tag = pygame.Rect(inner.left, inner.top - _PERK_TAG_SPACE, tag_font.size(PLANNED_LABEL)[0] + 14, 18)
-            pygame.draw.rect(surface, MATCH_PANEL, tag, border_radius=9)
-            pygame.draw.rect(surface, MATCH_DIM, tag, 1, border_radius=9)
-            blit_text(surface, tag_font, PLANNED_LABEL, MATCH_MUTED, tag, center=tag.center)
+        perk = player_type.perk
+        inner = _perk_text_rect_in(box, perk)
+        paragraphs = _perk_paragraphs(player_type)
+        if perk is not None:
+            heading_top = box.inflate(-20, -14).top
+            draw_perk_heading(surface, pygame.Rect(inner.left, heading_top, inner.width, 18), perk)
         else:
             inner.top -= _PERK_TAG_SPACE
         # The shared size fits every card; a card whose text alone runs longer shrinks itself.
-        size = min(self._perk_size, _perk_size(player_type, _perk_text_rect_in(box)))
+        size = min(self._perk_size, _perk_size(player_type, _perk_text_rect_in(box, perk)))
         y = inner.top
-        for text in paragraphs:
-            font, lines = fit_wrapped(text, inner.width, (size,), 99)
+        for index, text in enumerate(paragraphs):
+            # The card line is prominent; the full rules follow in a muted color.
+            emphasis = perk is not None and index == 0
+            font, lines = fit_wrapped(text, inner.width, (size + 1 if emphasis else size,), 99)
             for line in lines:
-                blit_text(surface, font, line, MATCH_TEXT, box, topleft=(inner.left, y))
+                blit_text(surface, font, line, MATCH_TEXT if emphasis else MATCH_MUTED, box,
+                          topleft=(inner.left, y))
                 y += font.get_height()
+            if emphasis:
+                y += 4
 
     # -- buttons -----------------------------------------------------------------
 
@@ -483,29 +485,123 @@ def _perk_box(card: pygame.Rect) -> pygame.Rect:
     return pygame.Rect(inner.left, top, inner.width, draft_button_rect(card).top - 8 - top)
 
 
-def _perk_text_rect_in(box: pygame.Rect) -> pygame.Rect:
-    """The perk text area below the PLANNED / INACTIVE tag."""
+_HEADING_NAME_SIZES = (14, 13, 12, 11)
+_HEADING_TAG_ROW = 14  # height of the stacked tag row
+_HEADING_STACK_GAP = 2
+
+
+def _perk_heading_tags(perk, status: str | None) -> list[str]:
+    from src.ui.football_player_perks import limit_label, partner_tag
+
+    limit = limit_label(perk)
+    if limit and status:
+        limit = f"{limit} {status}"
+    return [text for text in (partner_tag(perk), limit) if text]
+
+
+def perk_heading_layout(perk, status: str | None, width: int) -> tuple[int, bool]:
+    """The perk name size and whether its tags stack on a second row.
+
+    The name and tags share one row at the largest size that fits; otherwise
+    the name takes its own row (at the largest size that fits the width) and
+    the tags sit on a small row under it. The name is never shortened.
+    """
+    tag_font = plain_font(10)
+    tags = _perk_heading_tags(perk, status)
+    tags_width = sum(tag_font.size(text)[0] + 12 + 4 for text in tags)
+    name = perk.name.upper()
+    for size in _HEADING_NAME_SIZES:
+        if plain_font(size).size(name)[0] + 4 + tags_width <= width:
+            return size, False
+    if not tags:
+        return _HEADING_NAME_SIZES[-1], False
+    size = next(
+        (size for size in _HEADING_NAME_SIZES if plain_font(size).size(name)[0] <= width),
+        _HEADING_NAME_SIZES[-1],
+    )
+    return size, True
+
+
+def perk_heading_extra(perk, status: str | None, width: int) -> int:
+    """Extra height a stacked heading needs below its one-row height."""
+    _size, stacked = perk_heading_layout(perk, status, width)
+    return _HEADING_TAG_ROW + _HEADING_STACK_GAP if stacked else 0
+
+
+def draw_perk_heading(surface: pygame.Surface, row: pygame.Rect, perk, status: str | None = None) -> int:
+    """The perk name with its partner ('WITH WR') and limit ('1/DRIVE') tags.
+
+    In a match, ``status`` (READY, USED, ARMED, or IDLE) joins the limit tag.
+    Returns the bottom of the heading, which is below ``row`` when the tags
+    stack under a long name (see ``perk_heading_extra``).
+    """
+    size, stacked = perk_heading_layout(perk, status, row.width)
+    tags = _perk_heading_tags(perk, status)
+    tag_font = plain_font(10)
+    name_font = plain_font(size)
+    if stacked:
+        tag_row = pygame.Rect(row.left, row.bottom + _HEADING_STACK_GAP, row.width, _HEADING_TAG_ROW)
+        x = row.left
+        for text in tags:
+            tag = pygame.Rect(x, tag_row.top, tag_font.size(text)[0] + 12, tag_row.height)
+            _draw_perk_tag(surface, tag, text, tag_font)
+            x = tag.right + 4
+        name_right = row.right
+        bottom = tag_row.bottom
+    else:
+        x = row.right
+        for text in reversed(tags):
+            tag = pygame.Rect(0, 0, tag_font.size(text)[0] + 12, row.height)
+            tag.midright = (x, row.centery)
+            _draw_perk_tag(surface, tag, text, tag_font)
+            x = tag.left - 4
+        name_right = x - 4 if tags else row.right
+        bottom = row.bottom
+    name_box = pygame.Rect(row.left, row.top - 2, max(20, name_right - row.left), row.height + 4)
+    blit_text(surface, name_font, fit_text(perk.name.upper(), name_font, name_box.width),
+              MATCH_TEXT, name_box, midleft=(row.left, row.centery))
+    return bottom
+
+
+def _draw_perk_tag(surface: pygame.Surface, tag: pygame.Rect, text: str, font) -> None:
+    partner = text.startswith("WITH ")
+    ready = text.endswith(("READY", "ARMED"))
+    color = MATCH_GOOD if partner or ready else MATCH_DIM
+    pygame.draw.rect(surface, MATCH_PANEL, tag, border_radius=9)
+    pygame.draw.rect(surface, color, tag, 1, border_radius=9)
+    blit_text(surface, font, text, MATCH_GOOD if partner or ready else MATCH_MUTED, tag,
+              center=tag.center)
+
+
+def _perk_text_rect_in(box: pygame.Rect, perk=None) -> pygame.Rect:
+    """The perk text area below the perk name and its tags (stacked when long)."""
     inner = box.inflate(-20, -14)
-    return pygame.Rect(inner.left, inner.top + _PERK_TAG_SPACE, inner.width, inner.height - _PERK_TAG_SPACE)
+    space = _PERK_TAG_SPACE + (perk_heading_extra(perk, None, inner.width) if perk is not None else 0)
+    return pygame.Rect(inner.left, inner.top + space, inner.width, inner.height - space)
 
 
-def _perk_text_rect(card: pygame.Rect) -> pygame.Rect:
-    return _perk_text_rect_in(_perk_box(card))
+def _perk_text_rect(card: pygame.Rect, perk=None) -> pygame.Rect:
+    return _perk_text_rect_in(_perk_box(card), perk)
 
 
-def _perk_paragraphs(player_type) -> tuple[bool, list[str]]:
+def _perk_paragraphs(player_type) -> list[str]:
+    """The card line and the full rules; the perk name is drawn in the heading row."""
     paragraphs = player_perk_text(player_type).split("\n")
-    if paragraphs[0] == PLANNED_LABEL:
-        return True, paragraphs[1:]
-    return False, paragraphs
+    if player_type.perk is not None:
+        return paragraphs[1:]
+    return paragraphs
 
 
 def _perk_size(player_type, rect: pygame.Rect) -> int:
     """The largest perk text size whose wrapped lines fit ``rect``."""
-    _planned, paragraphs = _perk_paragraphs(player_type)
+    paragraphs = _perk_paragraphs(player_type)
     for size in _PERK_SIZES:
-        lines = sum(len(fit_wrapped(text, rect.width, (size,), 99)[1]) for text in paragraphs)
-        if lines * plain_font(size).get_height() <= rect.height:
+        height = 0
+        for index, text in enumerate(paragraphs):
+            emphasis = player_type.perk is not None and index == 0
+            font, lines = fit_wrapped(text, rect.width, (size + 1 if emphasis else size,), 99)
+            height += len(lines) * font.get_height() + (4 if emphasis else 0)
+        if height <= rect.height:
             return size
     return _PERK_SIZES[-1]
 

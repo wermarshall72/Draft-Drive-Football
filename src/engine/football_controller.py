@@ -74,6 +74,7 @@ class FootballHumanDecision(str, Enum):
     FOURTH_DOWN = "fourth_down"
     CONVERSION = "conversion"
     CHALLENGE = "challenge"
+    GREEN_DOG = "green_dog"
 
 
 class FootballSeasonOutcome(str, Enum):
@@ -517,6 +518,21 @@ class FootballGameController:
         self._advance_match()
         return self.state
 
+    def respond_to_green_dog(
+        self, selection: str | DefensiveSchemeAction | None
+    ) -> FootballGameControllerState:
+        """Swap the active scheme for a hand scheme (copy id or scheme), or decline (None)."""
+        if (
+            selection is not None
+            and not isinstance(selection, DefensiveSchemeAction)
+            and type(selection) is not str
+        ):
+            raise ValueError("Green Dog selection must be a scheme card copy id, scheme, or None.")
+        self._require_decision(FootballHumanDecision.GREEN_DOG)
+        self._require_simulator().resolve_green_dog(selection)
+        self._advance_match()
+        return self.state
+
     def choose_fourth_down(
         self, action: FootballFourthDownAction
     ) -> FootballGameControllerState:
@@ -571,6 +587,7 @@ class FootballGameController:
             game_clock_seconds=REGULATION_PERIOD_SECONDS,
             period=1,
             awaited_action=FootballAwaitedAction.DEFENSIVE_SCHEME,
+            opening_possession=self.OPENING_POSSESSION,
             team_a_offense_deck=FootballDeckState(self._require_shop().offensive_deck),
             team_a_defense_deck=FootballDeckState(self._require_shop().defensive_deck),
             team_b_offense_deck=FootballDeckState(opponent_offense),
@@ -592,8 +609,11 @@ class FootballGameController:
             if self._human_decision(simulator.state) is not None:
                 return
 
-            action = self._ai.choose_action(simulator.state)
             awaited = simulator.state.awaited_action
+            if awaited is FootballAwaitedAction.GREEN_DOG_DECISION:
+                simulator.resolve_green_dog(self._ai.choose_green_dog(simulator.state))
+                continue
+            action = self._ai.choose_action(simulator.state)
             if awaited is FootballAwaitedAction.DEFENSIVE_SCHEME:
                 if not isinstance(action, DefensiveSchemeAction):
                     raise RuntimeError("AI returned an invalid defensive-scheme action.")
@@ -710,6 +730,9 @@ class FootballGameController:
         elif match.awaited_action is FootballAwaitedAction.CONVERSION:
             if match.possession is FootballTeamSide.TEAM_A:
                 return FootballHumanDecision.CONVERSION
+        elif match.awaited_action is FootballAwaitedAction.GREEN_DOG_DECISION:
+            if match.possession is FootballTeamSide.TEAM_B:
+                return FootballHumanDecision.GREEN_DOG
         return None
 
     def _require_phase(self, expected: FootballRunPhase) -> None:

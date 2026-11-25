@@ -708,7 +708,8 @@ def test_flip_arrow_rotates_cards_to_their_backs_and_back(tmp_path: Path) -> Non
         _draw(desktop)
     _assert_text_fits(records)
     texts = [text for text, _r, _c in records]
-    assert "UPGRADES" in texts and "PARTNER" in texts and "PERK · PLANNED / INACTIVE" in texts
+    assert "UPGRADES" in texts and "PARTNER" in texts and "PERK" in texts
+    assert not any("PLANNED" in text or "INACTIVE" in text for text in texts)
     # Keyboard: Enter on the focused arrow turns it back to the front.
     screen = desktop.run_screen
     flip = next(b for b in screen.buttons if b.label == "FLIP QB")
@@ -803,10 +804,10 @@ def test_worst_case_backs_show_every_upgrade_partner_and_full_perk(tmp_path: Pat
     qb_rows = depth_module.player_back_rows(state, FootballPosition.QB, False)
     assert sum(row[0] == "stat" for row in qb_rows) == 6
     perk = next(row[1] for row in qb_rows if row[0] == "name")
-    assert any(row[0] == "text" and row[1].startswith("Dependency: ") for row in qb_rows)
+    assert any(row[0] == "small" and row[1].endswith(".") for row in qb_rows)
     _assert_back_complete(desktop, interaction, ("player", "QB"), qb_rows)
     seen, _pairs = _scroll_through_back(desktop, interaction, ("player", "QB"))
-    assert {"PARTNER", "PERK · PLANNED / INACTIVE", perk} <= seen
+    assert {"PARTNER", "PERK", perk} <= seen
 
     coach = depth_module.coaches_for_assignment(state.shop.roster.coach_assignment)[0]
     coach_rows = depth_module.coach_back_rows("OFFENSE", coach, state.shop)
@@ -931,7 +932,7 @@ def test_card_back_rows_cover_upgrades_partner_perk_and_coach_split(tmp_path: Pa
     smalls = [row[1] for row in rows if row[0] == "small"]
     assert "Run 85% -> 100% · coached 95% -> 100% · max 100%" in smalls
     assert any(row == ("head", "PARTNER") for row in rows)
-    assert any(row[0] == "text" and row[1].startswith("Trigger: ") for row in rows)
+    assert any(row[0] == "small" and row[1].endswith(".") for row in rows)
     in_match = depth_module.player_back_rows(candidate, FootballPosition.QB, True)
     assert any(row[0] == "stat" and row[3] == "THIS MATCH x2" for row in in_match)
     coaches = depth_module.coaches_for_assignment(shop.roster.coach_assignment)

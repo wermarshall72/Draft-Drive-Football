@@ -36,7 +36,7 @@ def test_catalog_has_six_specialists_and_one_basic_per_position() -> None:
         assert basics[0].perk is None
 
 
-def test_perks_are_distinct_within_each_side_and_informational_only() -> None:
+def test_perks_are_distinct_within_each_side_and_typed() -> None:
     for positions in (OFFENSIVE_POSITIONS, DEFENSIVE_POSITIONS):
         perks = [
             item.perk
@@ -45,15 +45,9 @@ def test_perks_are_distinct_within_each_side_and_informational_only() -> None:
         ]
         assert len(perks) == 24
         assert len({perk.name for perk in perks}) == 24
-        assert all(
-            isinstance(perk, FootballPlayerPerk)
-            and perk.trigger
-            and perk.effect
-            and perk.duration
-            and perk.reset
-            and "future" in perk.dependency.lower()
-            for perk in perks
-        )
+        assert all(isinstance(perk, FootballPlayerPerk) for perk in perks)
+    kinds = [item.perk.kind for item in PLAYER_TYPES if item.perk is not None]
+    assert len(kinds) == len(set(kinds)) == 48
 
 
 def test_player_type_validation_rejects_unknown_and_wrong_position_ids() -> None:

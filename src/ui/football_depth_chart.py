@@ -6,7 +6,7 @@ from functools import lru_cache
 
 import pygame
 
-from src.engine.football import FootballPlayer, FootballPosition
+from src.engine.football import FootballPlayer, FootballPosition, FootballTeamSide
 from src.engine.football_coaches import coaches_for_assignment
 from src.engine.football_controller import FootballGameControllerState
 from src.engine.football_player_catalog import player_type_for_id
@@ -20,7 +20,9 @@ from src.ui.football_coach_upgrade_details import (
 )
 from src.ui.football_coach_perks import coach_perk_short, modifier_text
 from src.ui.football_display import _POSITION_LABELS, player_partnership_text, player_perk_text
-from src.ui.football_player_draft_view import _draft_percentage
+from src.ui.football_player_draft_view import _draft_percentage, draw_perk_heading, perk_heading_extra
+from src.ui.football_player_perks import limit_label, partner_tag, perk_card_line, perk_rules
+from src.ui.football_match_perks import perk_status_for
 from src.ui.football_player_upgrade_details import stat_value
 from src.ui.football_shop_review import ShopReviewInteraction
 from src.ui.player_art import draw_draft_player
@@ -162,16 +164,50 @@ def _pending_badges(shop, position: FootballPosition) -> list[tuple[str, str]]:
     return badges
 
 
+def _fit_card_line(text: str, width: int, height: int) -> tuple[pygame.font.Font, tuple[str, ...]]:
+    """The largest size whose wrapped card line (at most two lines) fits ``height``."""
+    for size in (11, 10, 9):
+        max_lines = min(2, height // plain_font(size).get_height())
+        if max_lines >= 1:
+            font, lines = fit_wrapped(text, width, (size,), max_lines)
+            if len(wrap_text_lines(text, font, width)) <= max_lines:
+                return font, lines
+    return fit_wrapped(text, width, (9,), max(1, min(2, height // plain_font(9).get_height())))
+
+
+def _perk_status(state: FootballGameControllerState, perk, in_match: bool) -> str | None:
+    if perk is None or not in_match or state.match is None:
+        return None
+    return perk_status_for(state.match, FootballTeamSide.TEAM_A, perk.kind)
+
+
+def _heading_extra(state: FootballGameControllerState, position: FootballPosition, in_match: bool,
+                   width: int) -> int:
+    """Extra height the position's perk heading needs when its tags stack."""
+    player = state.shop.roster.players[position]
+    perk = player_type_for_id(player.player_type_id).perk if player.player_type_id else None
+    if perk is None:
+        return 0
+    return perk_heading_extra(perk, _perk_status(state, perk, in_match), width)
+
+
 def _roster_card(surface: pygame.Surface, card: pygame.Rect, position: FootballPosition,
                  state: FootballGameControllerState, interaction: ShopReviewInteraction,
-                 theme: Theme | None) -> None:
+                 theme: Theme | None, in_match: bool = False, heading_extra: int | None = None) -> None:
     shop = state.shop
     player = shop.roster.players[position]
     pygame.draw.rect(surface, MATCH_INK, card.move(0, 3), border_radius=9)
     pygame.draw.rect(surface, MATCH_PANEL_HIGH, card, border_radius=9)
     pygame.draw.rect(surface, MATCH_PANEL_EDGE, card, 2, border_radius=9)
     inner = card.inflate(-16, -16)
-    tile_height = max(60, min(100, card.height - 186))
+    player_type = player_type_for_id(player.player_type_id) if player.player_type_id else None
+    perk = player_type.perk if player_type is not None else None
+    status = _perk_status(state, perk, in_match)
+    if heading_extra is None:
+        heading_extra = _heading_extra(state, position, in_match, inner.width)
+    # A long perk name stacks its tags on a second row; the artwork gives up that room
+    # (down to the flip button's height) so the card line keeps its two lines.
+    tile_height = max(28 if heading_extra else 40, min(100, card.height - 210) - heading_extra)
     tile = pygame.Rect(inner.left, inner.top, inner.width, tile_height)
     pygame.draw.rect(surface, MATCH_PANEL_DEEP, tile, border_radius=7)
     if theme is not None:
@@ -207,7 +243,6 @@ def _roster_card(surface: pygame.Surface, card: pygame.Rect, position: FootballP
                                        percentage=percentage)
             blit_text(surface, plain_font(15), f"-> {shown}", color, row, midright=row.midright)
     y = stats.bottom + 6
-    player_type = player_type_for_id(player.player_type_id) if player.player_type_id else None
     partner, _explanation = player_partnership_text(player_type)
     partner_label = partner.removeprefix("Partner: ").upper()
     chip_font = plain_font(11)
@@ -216,19 +251,16 @@ def _roster_card(surface: pygame.Surface, card: pygame.Rect, position: FootballP
     pygame.draw.rect(surface, MATCH_PANEL_DEEP, chip, border_radius=10)
     blit_text(surface, chip_font, fit_text(chip_text, chip_font, chip.width - 10), MATCH_TEXT, chip,
               center=chip.center)
-    perk = player_type.perk if player_type is not None else None
-    perk_text = f"PERK  {perk.name.upper()}" if perk is not None else "NO PERK"
-    perk_box = pygame.Rect(inner.left, chip.bottom + 4, inner.width, 20)
-    tag = "PLANNED" if perk is not None else ""
-    tag_width = chip_font.size(tag)[0] + 12 if tag else 0
-    blit_text(surface, chip_font, fit_text(perk_text, chip_font, perk_box.width - tag_width - 4), MATCH_MUTED,
-              perk_box, midleft=(perk_box.left + 2, perk_box.centery))
-    if tag:
-        tag_rect = pygame.Rect(0, 0, tag_width, 16)
-        tag_rect.midright = perk_box.midright
-        pygame.draw.rect(surface, MATCH_PANEL_DEEP, tag_rect, border_radius=8)
-        pygame.draw.rect(surface, MATCH_DIM, tag_rect, 1, border_radius=8)
-        blit_text(surface, plain_font(9), tag, MATCH_DIM, tag_rect.inflate(2, 2), center=tag_rect.center)
+    perk_row = pygame.Rect(inner.left, chip.bottom + 5, inner.width, 16)
+    if perk is None:
+        blit_text(surface, chip_font, "NO PERK", MATCH_MUTED, perk_row, midleft=(perk_row.left + 2, perk_row.centery))
+        return
+    heading_bottom = draw_perk_heading(surface, perk_row, perk, status)
+    line_box = pygame.Rect(inner.left, heading_bottom + 2, inner.width, max(10, card.bottom - 6 - heading_bottom - 2))
+    font, lines = _fit_card_line(perk_card_line(perk), line_box.width - 4, line_box.height)
+    for index, line in enumerate(lines):
+        blit_text(surface, font, line, MATCH_TEXT, line_box,
+                  topleft=(line_box.left + 2, line_box.top + index * font.get_height()))
 
 
 def pending_chip_layout(widths: list[int], available: int, plus_width: Callable[[int], int],
@@ -288,16 +320,19 @@ def _draw_roster(surface: pygame.Surface, rect: pygame.Rect, state: FootballGame
     grid = pygame.Rect(rect.left + 10, rect.top + 36, rect.width - 20, rect.height - 46)
     width = (grid.width - gap * (columns - 1)) // columns
     height = max(250, (grid.height - gap * (rows - 1)) // rows)
+    # Every card trims its artwork by the same amount, so the rows stay aligned.
+    heading_extra = max(_heading_extra(state, position, in_match, width - 16) for position in PLAYER_DRAFT_ORDER)
     for index, position in enumerate(PLAYER_DRAFT_ORDER):
         card = pygame.Rect(grid.left + (index % columns) * (width + gap),
                            grid.top + (index // columns) * (height + gap), width, height)
         key = ("player", position.value)
         _flippable(
             surface, card, key, interaction,
-            lambda target, r, position=position: _roster_card(target, r, position, state, interaction, theme),
+            lambda target, r, position=position: _roster_card(
+                target, r, position, state, interaction, theme, in_match, heading_extra),
             lambda target, r, live=True, position=position: _roster_back(
                 target, r, position, state, in_match, interaction if live else None),
-            (id(state), in_match),
+            (id(state), in_match, len(state.match.match_events) if state.match is not None else 0),
         )
         if flips is not None:
             flips.append(_flip_button(f"FLIP {_POSITION_LABELS[position]}", key, card, interaction))
@@ -480,7 +515,7 @@ _CAPS = {FootballUpgradeStat.STAMINA: " · max 100%", FootballUpgradeStat.VOLATI
 
 def player_back_rows(state: FootballGameControllerState, position: FootballPosition,
                      in_match: bool) -> list[tuple]:
-    """Rows on the back of a roster card: upgrades, partnership, and the planned perk."""
+    """Rows on the back of a roster card: upgrades, partnership, and the perk's full rules."""
     shop = state.shop
     player = shop.roster.players[position]
     rows: list[tuple] = [("head", "UPGRADES")]
@@ -521,14 +556,14 @@ def player_back_rows(state: FootballGameControllerState, position: FootballPosit
     label = partner.removeprefix("Partner: ")
     rows.append(("text", f"{label}: {explanation}" if explanation else label))
     perk = player_type.perk if player_type is not None else None
-    rows.append(("head", "PERK · PLANNED / INACTIVE" if perk is not None else "PERK"))
+    rows.append(("head", "PERK"))
     if perk is None:
         rows.append(("text", "None"))
     else:
-        rows.append(("name", perk.name))
-        for label, text in (("Trigger", perk.trigger), ("Effect", perk.effect), ("Duration", perk.duration),
-                            ("Reset", perk.reset), ("Dependency", perk.dependency)):
-            rows.append(("text", f"{label}: {text}"))
+        tags = " · ".join(text for text in (partner_tag(perk), limit_label(perk)) if text)
+        rows.append(("name", f"{perk.name} · {tags}" if tags else perk.name))
+        rows.append(("text", perk_card_line(perk)))
+        rows.append(("small", perk_rules(perk)))
     return rows
 
 

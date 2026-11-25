@@ -10,6 +10,7 @@ import pytest
 
 from src.application import ApplicationController
 from src.engine.football import (
+    FootballPerkDecision,
     FootballAutomaticAction,
     FootballCardFamily,
     DefensiveSchemeAction,
@@ -76,6 +77,7 @@ from src.ui.football_match_hand import HandView, layout_groups
 from src.ui.football_match_outcome import draw_outcome_strip
 from src.ui.football_match_playback import EVENT_DURATION_MS
 from src.ui.football_match_palette import match_font, plain_font, text_audit
+from src.ui.football_player_perks import partner_tag, perk_card_line, perk_rules
 from src.ui.football_match_piles import pile_cards, pile_counts
 from src.ui.football_match_events import is_real_play, kickoff_pending, replay_label, snapshot_state
 from src.ui.football_match_field import FieldOverlay, draw_match_field
@@ -376,11 +378,14 @@ def test_draft_cards_show_complete_actual_catalog_data(tmp_path: Path) -> None:
                 if player_type.perk is None:
                     assert "Perk: None" in joined
                 else:
-                    assert "PLANNED / INACTIVE" in joined
-                    for part in (player_type.perk.name, player_type.perk.trigger,
-                                 player_type.perk.effect, player_type.perk.duration,
-                                 player_type.perk.reset, player_type.perk.dependency):
-                        assert part in joined
+                    assert "PLANNED" not in joined and "INACTIVE" not in joined
+                    assert player_type.perk.name.upper() in joined
+                    rules = " ".join(perk_rules(player_type.perk).split())
+                    assert perk_card_line(player_type.perk) in joined
+                    words = joined.split()
+                    assert " ".join(words[-len(rules.split()):]) == rules
+                    tag = partner_tag(player_type.perk)
+                    assert (tag in joined) if tag else "WITH " not in joined
 
 
 def test_draft_card_stats_and_partners_are_visible_without_interaction(tmp_path: Path) -> None:
@@ -1633,6 +1638,18 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
             else:
                 expected = FootballConversionAction.EXTRA_POINT
                 strip["EXTRA POINT"].action()
+        elif state.human_decision is FootballHumanDecision.GREEN_DOG:
+            # Keep is the first strip button; every hand scheme is also selectable.
+            deck = state.match.team_a_defense_deck
+            assert list(strip)[0].startswith("KEEP ")
+            assert len(hand_buttons) == len(deck.hand)
+            if hand_buttons:
+                expected_copy_id = deck.hand[0].copy_id
+                expected = FootballPerkDecision.GREEN_DOG_SWAP
+                hand_buttons[0].action()
+            else:
+                expected = FootballPerkDecision.GREEN_DOG_DECLINE
+                list(strip.values())[0].action()
         else:
             pytest.fail(f"Unexpected match decision: {state.human_decision}")
 

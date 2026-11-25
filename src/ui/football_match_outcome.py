@@ -13,7 +13,7 @@ from src.engine.football import (
     FootballFourthDownAction,
 )
 from src.engine.football_controller import FootballGameControllerState, FootballHumanDecision
-from src.engine.football_decks import OFFENSIVE_PLAY_CATALOG
+from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG
 from src.engine.football_simulator import field_goal_distance_for_position
 from src.ui.football_card_art import bonus_card_art, draw_card_art
 from src.ui.football_match_events import Outcome, OutcomeEmphasis, PlayLineKind
@@ -52,6 +52,7 @@ class StripCallbacks:
     conversion: Callable[[FootballConversionAction, str | None], None]
     challenge: Callable[[bool], None]
     challenge_touchdown: Callable[[], None]
+    green_dog: Callable[[str | None], None] = lambda _copy_id: None
 
 
 def decision_actions(
@@ -107,7 +108,35 @@ def decision_actions(
             StripAction("CHALLENGE", lambda: callbacks.challenge(True), "strip-challenge"),
             StripAction("DECLINE", lambda: callbacks.challenge(False)),
         ]
+    if decision is FootballHumanDecision.GREEN_DOG:
+        return green_dog_actions(match, callbacks)
     return "", []
+
+
+GREEN_DOG_PROMPT = "GREEN DOG · SWAP?"
+GREEN_DOG_KEEP = "KEEP"
+
+
+def green_dog_actions(match, callbacks: StripCallbacks) -> tuple[str, list[StripAction]]:
+    """Keep the active scheme (primary) or swap in a hand scheme.
+
+    Two swap buttons at most keep the strip readable; every hand scheme is also
+    clickable in the hand and reachable with the number keys.
+    """
+    active = match.current_drive_defensive_scheme
+    deck = match.team_a_defense_deck
+    keep = f"{GREEN_DOG_KEEP} {DEFENSIVE_SCHEME_CATALOG[active.value].name.upper()}" if active else GREEN_DOG_KEEP
+    actions = [StripAction(keep, lambda: callbacks.green_dog(None), "strip-primary")]
+    seen: set[str] = set()
+    for card in deck.hand if deck is not None else ():
+        if card.card_id in seen or len(actions) >= 3:
+            continue
+        seen.add(card.card_id)
+        name = DEFENSIVE_SCHEME_CATALOG[card.card_id].name.upper()
+        actions.append(StripAction(
+            f"SWAP · {name}", lambda copy_id=card.copy_id: callbacks.green_dog(copy_id),
+        ))
+    return GREEN_DOG_PROMPT, actions
 
 
 def status_prompt(state: FootballGameControllerState) -> str:
@@ -117,6 +146,18 @@ def status_prompt(state: FootballGameControllerState) -> str:
     if decision is FootballHumanDecision.DEFENSIVE_SCHEME:
         return "SET YOUR DEFENSE FOR THIS DRIVE"
     return ""
+
+
+CALLOUT_CYCLE_MS = 1400
+
+
+def callout_text(callouts: tuple[str, ...], elapsed_ms: int) -> str | None:
+    """The callout shown now: several perks on one play take turns, numbered."""
+    if not callouts:
+        return None
+    index = (max(0, elapsed_ms) // CALLOUT_CYCLE_MS) % len(callouts)
+    text = callouts[index]
+    return f"{text}  {index + 1}/{len(callouts)}" if len(callouts) > 1 else text
 
 
 def draw_outcome_strip(
@@ -194,9 +235,27 @@ def draw_outcome_strip(
         surface.blit(headline_font.render(headline, True, MATCH_INK), (left + 2, rect.top + 6))
     blit_text(surface, headline_font, headline, color, headline_box, topleft=(left, rect.top + 4))
     detail_font = plain_font(14)
-    detail = fit_text(outcome.detail, detail_font, headline_width)
-    blit_text(surface, detail_font, detail, MATCH_MUTED, headline_box,
-              topleft=(left + 1, rect.bottom - 23))
+    detail_width = headline_width
+    callout = callout_text(outcome.callouts, elapsed_ms)
+    if callout is not None:
+        # Perk callout: a gold pill at the right of the detail row; it takes the whole
+        # row when the detail would be squeezed below ~160px.
+        callout_font = plain_font(12)
+        pill_width = min(callout_font.size(callout)[0] + 18, headline_width)
+        if headline_width - pill_width - 12 < 160:
+            pill_width, detail_width = headline_width, 0
+        else:
+            detail_width = headline_width - pill_width - 12
+        pill = pygame.Rect(0, 0, pill_width, 20)
+        pill.bottomright = (left + headline_width, rect.bottom - 6)
+        pygame.draw.rect(surface, mix(MATCH_PANEL_DEEP, MATCH_GOLD, 0.18), pill, border_radius=10)
+        pygame.draw.rect(surface, MATCH_GOLD, pill, 1, border_radius=10)
+        blit_text(surface, callout_font, fit_text(callout, callout_font, pill.width - 14), MATCH_GOLD,
+                  pill, center=pill.center)
+    if detail_width:
+        detail = fit_text(outcome.detail, detail_font, detail_width)
+        blit_text(surface, detail_font, detail, MATCH_MUTED, headline_box,
+                  topleft=(left + 1, rect.bottom - 23))
     return button_rects
 
 

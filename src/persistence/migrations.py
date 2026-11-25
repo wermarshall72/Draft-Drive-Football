@@ -22,12 +22,47 @@ from typing import Any
 
 from src.engine.save_data import UnsupportedSave
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
 
+
+def _opening_possession(match: dict[str, Any]) -> str:
+    """The opening receiver: the first event's possession (the opening drive's offense)."""
+    events = match.get("match_events")
+    if isinstance(events, list) and events and isinstance(events[0], dict):
+        possession = events[0].get("possession")
+        if isinstance(possession, str):
+            return possession
+    possession = match.get("possession")
+    return possession if isinstance(possession, str) else "team_a"
+
+
+def _migrate_1_to_2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Player perks became active (version 2).
+
+    Match states gain ``opening_possession`` (the team that received the opening
+    kickoff and so kicks to start period 2). Events and play results gain
+    ``perk_activations``, which is omitted while empty, so old histories need no
+    change: they simply recorded no activations.
+    """
+    run = payload.get("run")
+    simulator = run.get("simulator") if isinstance(run, dict) else None
+    if not isinstance(simulator, dict):
+        return payload
+    state = simulator.get("state")
+    if isinstance(state, dict):
+        state.setdefault("opening_possession", _opening_possession(state))
+        snapshot = simulator.get("challenge_snapshot")
+        if isinstance(snapshot, dict):
+            # A snapshot may store only its history length; its opening receiver
+            # is the live match's.
+            snapshot.setdefault("opening_possession", state["opening_possession"])
+    return payload
+
+
 # schema_version N -> function returning the payload at N + 1.
-MIGRATIONS: MutableMapping[int, Migration] = {}
+MIGRATIONS: MutableMapping[int, Migration] = {1: _migrate_1_to_2}
 
 
 class NewerSaveVersion(UnsupportedSave):

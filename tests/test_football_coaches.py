@@ -785,17 +785,29 @@ def test_ai_generates_a_reproducible_coach_pair_used_by_the_roster() -> None:
     simulator = FootballMatchSimulator(state)
     simulator.rng = FixedRNG()
     simulator.select_defensive_scheme(DefensiveSchemeAction.RB_RUN)
+    from src.engine.football_perk_context import estimate_perk_inputs
+    from src.engine.football_player_catalog import player_contribution_modifier
+
+    perks = estimate_perk_inputs(
+        simulator.state, FootballTeamSide.TEAM_B, OffensivePlayAction.RB_RUN, DefensiveSchemeAction.RB_RUN,
+    )
     result = simulator.resolve_offensive_play(OffensivePlayAction.RB_RUN)
     play_result = result.match_events[-1].play_result
     offense_profile = COACHES_BY_ID[offense_id]
+    contributors = tuple(
+        first_roster.players[position] for position in (FootballPosition.O_LINE, FootballPosition.RB)
+    )
     assert play_result is not None
+    # The roster's coach modifiers (plus any partnership and flat perk power) set the power.
     assert play_result.offense_power == pytest.approx(
         sum(
-            first_roster.players[position].power
-            * (1.0 + offense_profile.position_modifiers[position])
-            for position in (FootballPosition.O_LINE, FootballPosition.RB)
+            (player.power + perks.power_delta("offense", player.position))
+            * player_contribution_modifier(
+                player, contributors, offense_profile.position_modifiers[player.position]
+            )
+            for player in contributors
         )
-        * 0.96
+        * (0.96 if perks.counter is None else 1.0)
     )
 
 

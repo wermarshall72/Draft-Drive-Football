@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from math import isfinite
 from types import MappingProxyType
 from typing import Mapping
 
-from src.engine.football import FootballPlayer, FootballPosition
+from src.engine.football import FootballPlayer, FootballPlayerPerkKind, FootballPosition
 
 PLAYER_BASE_POWER = 50.0
 PLAYER_BASE_VOLATILITY = 0.10
@@ -31,40 +32,61 @@ DEFENSIVE_POSITIONS = (
 _POSITIONS_BY_SIDE = (OFFENSIVE_POSITIONS, DEFENSIVE_POSITIONS)
 
 
+class FootballPerkLimit(str, Enum):
+    """How often a perk may fire for its team."""
+
+    EVERY = "every"  # every qualifying snap, attempt, or drive
+    DRIVE = "drive"  # once per drive (yours or the rival's)
+    HALF = "half"  # once per half; overtime is one half
+    GAME = "game"
+    CHARGE = "charge"  # one stored effect waiting for a later play
+
+
+class FootballPerkEffectType(str, Enum):
+    STATS = "stats"
+    CARDS = "cards"
+    YARDS = "yards"  # yards, clock, field position, and kick range
+    TURNOVERS = "turnovers"  # incompletion/INT odds, rerolls, big plays, blocks
+
+
 @dataclass(frozen=True)
 class FootballPlayerPerk:
-    """Descriptive future perk; it has no executable gameplay behavior."""
+    """A specialist's executable perk: a typed kind plus its tuning values.
 
+    The simulator reads ``values`` by name; all wording is generated from the
+    same values in ``src/ui/football_player_perks.py``.
+    """
+
+    kind: FootballPlayerPerkKind
     name: str
-    trigger: str
-    effect: str
-    duration: str
-    reset: str
-    dependency: str = (
-        "Requires future player-perk execution and temporary-effect tracking."
-    )
+    limit: FootballPerkLimit
+    effect_type: FootballPerkEffectType
+    partner_required: bool = False
+    values: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (
-                self.name,
-                self.trigger,
-                self.effect,
-                self.duration,
-                self.reset,
-                self.dependency,
-            )
+        if not isinstance(self.kind, FootballPlayerPerkKind):
+            raise ValueError("Player perk kind must be a FootballPlayerPerkKind.")
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("Player perk names must be non-empty.")
+        if not isinstance(self.limit, FootballPerkLimit):
+            raise ValueError("Player perk limit must be a FootballPerkLimit.")
+        if not isinstance(self.effect_type, FootballPerkEffectType):
+            raise ValueError("Player perk effect type must be a FootballPerkEffectType.")
+        if not isinstance(self.partner_required, bool):
+            raise ValueError("Player perk partner requirement must be a boolean.")
+        if not isinstance(self.values, Mapping) or any(
+            not isinstance(key, str)
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            for key, value in self.values.items()
         ):
-            raise ValueError("Player perk descriptions must be non-empty.")
+            raise ValueError("Player perk values must map names to finite numbers.")
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
 
-    @property
-    def display_text(self) -> str:
-        return (
-            f"{self.name}. Trigger: {self.trigger} Effect: {self.effect} "
-            f"Duration: {self.duration} Reset: {self.reset} "
-            f"Dependency: {self.dependency}"
-        )
+    def value(self, key: str) -> float:
+        return self.values[key]
 
 
 @dataclass(frozen=True)
@@ -98,7 +120,7 @@ class FootballPlayerType:
             if self.perk is not None:
                 raise ValueError("Basic player types cannot have perks.")
         elif not isinstance(self.perk, FootballPlayerPerk):
-            raise ValueError("Specialist player types require a descriptive perk.")
+            raise ValueError("Specialist player types require a typed perk.")
 
 
 def _specialist(
@@ -106,70 +128,89 @@ def _specialist(
     position: FootballPosition,
     partner: FootballPosition,
     name: str,
+    kind: FootballPlayerPerkKind,
     perk_name: str,
-    trigger: str,
-    effect: str,
-    duration: str,
-    reset: str,
+    limit: FootballPerkLimit,
+    effect_type: FootballPerkEffectType,
+    partner_required: bool = False,
+    **values: float,
 ) -> FootballPlayerType:
     return FootballPlayerType(
         type_id,
         position,
         name,
         partner,
-        FootballPlayerPerk(perk_name, trigger, effect, duration, reset),
+        FootballPlayerPerk(kind, perk_name, limit, effect_type, partner_required, values),
     )
 
 
+_QB, _RB, _WR, _OL = (
+    FootballPosition.QB, FootballPosition.RB, FootballPosition.WR, FootballPosition.O_LINE,
+)
+_DL, _LB, _CB, _S = (
+    FootballPosition.D_LINE, FootballPosition.LINEBACKERS,
+    FootballPosition.CORNERBACKS, FootballPosition.SAFETIES,
+)
+_K = FootballPlayerPerkKind
+_EVERY, _DRIVE, _HALF, _GAME, _CHARGE = (
+    FootballPerkLimit.EVERY, FootballPerkLimit.DRIVE, FootballPerkLimit.HALF,
+    FootballPerkLimit.GAME, FootballPerkLimit.CHARGE,
+)
+_STATS, _CARDS, _YARDS, _TURNOVERS = (
+    FootballPerkEffectType.STATS, FootballPerkEffectType.CARDS,
+    FootballPerkEffectType.YARDS, FootballPerkEffectType.TURNOVERS,
+)
+
+# Values are the approved starting numbers (docs/player-perks-proposal.md §3).
 _SPECIALISTS = (
-    _specialist("qb_rb_mesh_reader", FootballPosition.QB, FootballPosition.RB, "Mesh Reader", "Mesh Reclaim", "a QB+RB PA Pass is completed", "the next play featuring that RB gets +2 power", "one play", "each offensive drive"),
-    _specialist("qb_rb_option_ledger", FootballPosition.QB, FootballPosition.RB, "Option Ledger", "Option Ledger", "the QB participates in three different play types in a drive", "+1 QB power per different play type on the team's next drive", "one drive", "each game"),
-    _specialist("qb_wr_boundary_captain", FootballPosition.QB, FootballPosition.WR, "Boundary Captain", "Boundary Hold", "a QB+WR play gains at least 15 yards", "reduce the WR's volatility by 0.05", "rest of game", "once per game"),
-    _specialist("qb_wr_vertical_architect", FootballPosition.QB, FootballPosition.WR, "Vertical Architect", "Route Map", "a QB+WR play converts on third down", "+2 QB power on the next play featuring the QB", "one play", "each half"),
-    _specialist("qb_oline_pocket_anchor", FootballPosition.QB, FootballPosition.O_LINE, "Pocket Anchor", "Pocket Archive", "the QB participates in four plays in one drive without a turnover", "+3 QB power on the next drive", "one drive", "each game"),
-    _specialist("qb_oline_silent_count", FootballPosition.QB, FootballPosition.O_LINE, "Silent-Count Caller", "Silent Count", "a QB+O-line play is used on fourth down", "the QB's stamina is treated as 0.1 higher for that play", "one play", "each game"),
-    _specialist("rb_qb_checkdown_back", FootballPosition.RB, FootballPosition.QB, "Checkdown Back", "Checkdown Cache", "a QB+RB play gains at least 8 yards", "+2 RB power on the next play featuring the RB", "one play", "each drive"),
-    _specialist("rb_qb_option_keeper", FootballPosition.RB, FootballPosition.QB, "Option Keeper", "Keep Read", "the offense completes a drive with at least two QB+RB plays", "+0.05 RB stamina", "rest of game", "once per game"),
-    _specialist("rb_wr_orbit_runner", FootballPosition.RB, FootballPosition.WR, "Orbit Runner", "Orbit Return", "an RB+WR play converts on third down", "the next offensive drive starts with +1 yard of field position", "until next drive starts", "each half"),
-    _specialist("rb_wr_slot_outlet", FootballPosition.RB, FootballPosition.WR, "Slot Outlet", "Slot Leak", "an RB+WR play is called on second down", "+2 RB power on that play if the offense is behind", "one play", "each drive"),
-    _specialist("rb_oline_gap_runner", FootballPosition.RB, FootballPosition.O_LINE, "Gap Runner", "Cutback Draft", "the RB participates in three plays in one drive", "+2 RB power on the next drive", "one drive", "each game"),
-    _specialist("rb_oline_pull_guard_back", FootballPosition.RB, FootballPosition.O_LINE, "Pull-Guard Back", "Pull-Guard Reserve", "an RB Run gains positive yards after halftime", "+0.05 RB stamina", "rest of game", "once per game"),
-    _specialist("wr_qb_route_technician", FootballPosition.WR, FootballPosition.QB, "Route Technician", "Hot Route", "a QB+WR pass gains at least 10 yards", "+2 WR power on the next QB+WR play", "one play", "each drive"),
-    _specialist("wr_qb_vertical_threat", FootballPosition.WR, FootballPosition.QB, "Vertical Threat", "Back-Shoulder Recall", "the team completes a QB+WR pass in the opponent's half", "reduce the QB's volatility by 0.05", "rest of game", "once per game"),
-    _specialist("wr_rb_screen_outlet", FootballPosition.WR, FootballPosition.RB, "Screen Outlet", "Motion Swap", "an RB+WR play earns a first down", "+2 WR power on the next play featuring the WR", "one play", "each drive"),
-    _specialist("wr_rb_motion_receiver", FootballPosition.WR, FootballPosition.RB, "Motion Receiver", "Check Release", "the WR participates in plays on consecutive downs", "+0.05 WR stamina", "rest of game", "once per half"),
-    _specialist("wr_oline_boundary_route", FootballPosition.WR, FootballPosition.O_LINE, "Boundary Route", "Screen Set", "a QB+WR play is called immediately after an O-line+WR Screen Pass", "+3 WR power on that QB+WR play", "one play", "each drive"),
-    _specialist("wr_oline_release_specialist", FootballPosition.WR, FootballPosition.O_LINE, "Release Specialist", "Screen Scout", "the offense uses an O-line+WR Screen Pass on first down", "+2 WR power on the next play if it is also a pass", "one play", "each game"),
-    _specialist("oline_qb_pass_set_guard", FootballPosition.O_LINE, FootballPosition.QB, "Pass-Set Guard", "Pass-Set Reserve", "a QB+O-line play is called on third down", "reduce the QB's volatility by 0.05 for that play", "one play", "each drive"),
-    _specialist("oline_qb_pocket_tempo", FootballPosition.O_LINE, FootballPosition.QB, "Pocket Tempo", "Pocket Tempo", "the QB gains a first down on a play involving the O-line", "+2 O-line power on the next play featuring the O-line", "one play", "each half"),
-    _specialist("oline_rb_drive_blocker", FootballPosition.O_LINE, FootballPosition.RB, "Drive Blocker", "Double-Team Index", "the offense calls two RB Runs in a row", "+2 O-line power on the next play involving the O-line", "one play", "each drive"),
-    _specialist("oline_rb_pull_guard", FootballPosition.O_LINE, FootballPosition.RB, "Pull Guard", "Pull-Guard Pivot", "an RB Run gains at least 5 yards", "+0.05 RB stamina", "rest of game", "once per game"),
-    _specialist("oline_wr_screen_setter", FootballPosition.O_LINE, FootballPosition.WR, "Screen Setter", "Screen Wall", "an O-line+WR Screen Pass gains positive yards", "+2 O-line power on the next offensive play", "one play", "each drive"),
-    _specialist("oline_wr_space_creator", FootballPosition.O_LINE, FootballPosition.WR, "Space Creator", "Wide-Lane Queue", "an O-line+WR play converts on third down", "add +1 yard to the next play's result", "one play", "each half"),
-    _specialist("dline_lb_a_gap_plug", FootballPosition.D_LINE, FootballPosition.LINEBACKERS, "A-Gap Plug", "Box Reset", "the opponent runs an RB Run against the RB Run scheme", "+2 D-line power on the defense's next snap", "one snap", "each drive"),
-    _specialist("dline_lb_edge_setter", FootballPosition.D_LINE, FootballPosition.LINEBACKERS, "Edge Setter", "Front Forecast", "the D-line contributes to two consecutive defensive snaps", "+0.05 D-line stamina", "rest of game", "once per half"),
-    _specialist("dline_cb_contain_end", FootballPosition.D_LINE, FootballPosition.CORNERBACKS, "Contain End", "Screen Exchange", "the opponent calls a Screen Pass against the Screen Pass scheme", "+2 D-line power on the next defensive snap", "one snap", "each drive"),
-    _specialist("dline_cb_rush_contain", FootballPosition.D_LINE, FootballPosition.CORNERBACKS, "Rush Contain", "Boundary Hold", "a D-line+cornerback scheme is selected on third down", "reduce the opponent's next-play volatility by 0.05", "one snap", "each game"),
-    _specialist("dline_s_interior_rusher", FootballPosition.D_LINE, FootballPosition.SAFETIES, "Interior Rusher", "Stunt Queue", "a Medium Pass scheme faces any pass play", "+2 D-line power on that snap", "one snap", "each drive"),
-    _specialist("dline_s_stunt_tackle", FootballPosition.D_LINE, FootballPosition.SAFETIES, "Stunt Tackle", "Twist Recall", "a D-line+Safety scheme faces a play that gains 0 yards or less", "+0.05 D-line stamina", "rest of game", "once per game"),
-    _specialist("lb_dline_front_fit_back", FootballPosition.LINEBACKERS, FootballPosition.D_LINE, "Front-Fit Back", "Front-Fit Shuffle", "a D-line+Linebacker scheme faces an RB Run", "+2 linebacker power on the next defensive snap", "one snap", "each drive"),
-    _specialist("lb_dline_run_fit_captain", FootballPosition.LINEBACKERS, FootballPosition.D_LINE, "Run-Fit Captain", "Run-Fit Recall", "the opponent earns a first down on a run", "+0.05 linebacker stamina", "rest of game", "once per half"),
-    _specialist("lb_cb_nickel_rover", FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS, "Nickel Rover", "Hook Exchange", "a Linebacker+Cornerback scheme faces a Short Pass", "+2 linebacker power on that snap", "one snap", "each drive"),
-    _specialist("lb_cb_hook_curl_reader", FootballPosition.LINEBACKERS, FootballPosition.CORNERBACKS, "Hook-Curl Reader", "Short-Route Cut", "the opponent completes a pass for fewer than 5 yards", "reduce the opponent's next-play power by 2", "one snap", "each game"),
-    _specialist("lb_s_robber_backer", FootballPosition.LINEBACKERS, FootballPosition.SAFETIES, "Robber Backer", "Robber Cache", "a Linebacker+Safety scheme faces a PA Pass", "+2 linebacker power on the next defensive snap", "one snap", "each drive"),
-    _specialist("lb_s_green_dog_blitzer", FootballPosition.LINEBACKERS, FootballPosition.SAFETIES, "Green-Dog Blitzer", "Delayed Rotation", "the opponent converts third down while a linebacker is among the selected defenders", "+0.05 linebacker stamina", "rest of game", "once per game"),
-    _specialist("cb_dline_edge_corner", FootballPosition.CORNERBACKS, FootballPosition.D_LINE, "Edge Corner", "Edge Rotation", "a D-line+Cornerback scheme faces a Screen Pass", "+2 cornerback power on that snap", "one snap", "each drive"),
-    _specialist("cb_dline_force_corner", FootballPosition.CORNERBACKS, FootballPosition.D_LINE, "Force Corner", "Contain Search", "the opponent runs against a D-line+Cornerback scheme", "reduce the opponent's next-play power by 2", "one snap", "each game"),
-    _specialist("cb_lb_nickel_matcher", FootballPosition.CORNERBACKS, FootballPosition.LINEBACKERS, "Nickel Matcher", "Nickel Cut", "a Linebacker+Cornerback scheme faces a Short Pass on third down", "+2 cornerback power on that snap", "one snap", "each drive"),
-    _specialist("cb_lb_underneath_bracket", FootballPosition.CORNERBACKS, FootballPosition.LINEBACKERS, "Underneath Bracket", "Zone Pivot", "the opponent completes a pass for at least 10 yards against a Linebacker+Cornerback scheme", "+0.05 cornerback stamina", "rest of game", "once per half"),
-    _specialist("cb_s_deep_half_corner", FootballPosition.CORNERBACKS, FootballPosition.SAFETIES, "Deep-Half Corner", "Deep Lock", "a Safety+Cornerback scheme faces a Deep Pass", "reduce the opponent's volatility by 0.05 on that snap", "one snap", "each drive"),
-    _specialist("cb_s_trail_corner", FootballPosition.CORNERBACKS, FootballPosition.SAFETIES, "Trail Corner", "Trail Filter", "the opponent completes a pass against a Safety+Cornerback scheme", "+2 cornerback power on the defense's next snap", "one snap", "each drive"),
-    _specialist("s_dline_post_safety", FootballPosition.SAFETIES, FootballPosition.D_LINE, "Post Safety", "Post Rotation", "a Safety+D-line scheme faces a Medium Pass", "+2 safety power on that snap", "one snap", "each drive"),
-    _specialist("s_dline_blitz_safety", FootballPosition.SAFETIES, FootballPosition.D_LINE, "Blitz Safety", "Tackle Box", "an RB Run gains positive yards against a Safety+D-line scheme", "+0.05 safety stamina", "rest of game", "once per half"),
-    _specialist("s_lb_box_safety", FootballPosition.SAFETIES, FootballPosition.LINEBACKERS, "Box Safety", "Box Signal", "a Safety+Linebacker scheme faces a PA Pass", "reduce the opponent's next-play power by 2", "one snap", "each drive"),
-    _specialist("s_lb_robber_safety", FootballPosition.SAFETIES, FootballPosition.LINEBACKERS, "Robber Safety", "Robber Exchange", "a PA Pass gains at least 10 yards against a Safety+Linebacker scheme", "+2 safety power on the next defensive snap", "one snap", "each drive"),
-    _specialist("s_cb_boundary_safety", FootballPosition.SAFETIES, FootballPosition.CORNERBACKS, "Boundary Safety", "Boundary Lock", "a Safety+Cornerback scheme faces a Deep Pass", "+2 safety power on that snap", "one snap", "each drive"),
-    _specialist("s_cb_range_safety", FootballPosition.SAFETIES, FootballPosition.CORNERBACKS, "Range Safety", "Range Recall", "a Safety+Cornerback scheme faces a Short Pass", "reduce the opponent's next-play volatility by 0.05", "one snap", "each game"),
+    _specialist("qb_rb_mesh_reader", _QB, _RB, "Mesh Reader", _K.MESH_READ, "Mesh Read", _DRIVE, _CARDS, True, cards=1),
+    _specialist("qb_rb_option_ledger", _QB, _RB, "Option Ledger", _K.OPTION_LEDGER, "Option Ledger", _GAME, _CARDS, families=4, cards=2),
+    _specialist("qb_wr_boundary_captain", _QB, _WR, "Boundary Captain", _K.HURRY_UP_CAPTAIN, "Hurry-Up Captain", _EVERY, _YARDS, window_seconds=180, seconds=8),
+    _specialist("qb_wr_vertical_architect", _QB, _WR, "Vertical Architect", _K.SHOT_SETUP, "Shot Setup", _CHARGE, _TURNOVERS, True, incompletion=-0.12),
+    _specialist("qb_oline_pocket_anchor", _QB, _OL, "Pocket Anchor", _K.POCKET_PRESENCE, "Pocket Presence", _EVERY, _STATS, from_snap=5, power=5),
+    _specialist("qb_oline_silent_count", _QB, _OL, "Silent-Count Caller", _K.SILENT_COUNT, "Silent Count", _HALF, _STATS),
+    _specialist("rb_qb_checkdown_back", _RB, _QB, "Checkdown Back", _K.CHECKDOWN, "Checkdown", _EVERY, _YARDS, True, yards=2),
+    _specialist("rb_qb_option_keeper", _RB, _QB, "Option Keeper", _K.KEEP_READ, "Keep Read", _HALF, _TURNOVERS, True),
+    _specialist("rb_wr_orbit_runner", _RB, _WR, "Orbit Runner", _K.ORBIT_BREAKAWAY, "Orbit Breakaway", _HALF, _TURNOVERS, True, chance=0.25, yards=8),
+    _specialist("rb_wr_slot_outlet", _RB, _WR, "Slot Outlet", _K.OUTLET_REPEAT, "Outlet Repeat", _DRIVE, _CARDS, True),
+    _specialist("rb_oline_gap_runner", _RB, _OL, "Gap Runner", _K.DOWNHILL, "Downhill", _EVERY, _YARDS, True, yards=1, run_yards=2),
+    _specialist("rb_oline_pull_guard_back", _RB, _OL, "Pull-Guard Back", _K.FALL_FORWARD, "Fall Forward", _DRIVE, _YARDS, True, yards=1),
+    _specialist("wr_qb_route_technician", _WR, _QB, "Route Technician", _K.HOT_ROUTE, "Hot Route", _DRIVE, _CARDS),
+    _specialist("wr_qb_vertical_threat", _WR, _QB, "Field Stretcher", _K.CONTESTED_CATCH, "Contested Catch", _GAME, _TURNOVERS, True),
+    _specialist("wr_rb_screen_outlet", _WR, _RB, "Chain Mover", _K.MOVE_THE_STICKS, "Move the Sticks", _HALF, _YARDS, True, yards=2),
+    _specialist("wr_rb_motion_receiver", _WR, _RB, "Motion Receiver", _K.MOTION_JUMP, "Motion Jump", _DRIVE, _STATS, power=8),
+    _specialist("wr_oline_boundary_route", _WR, _OL, "Boundary Route", _K.PYLON_REACH, "Pylon Reach", _GAME, _YARDS, yards=5),
+    _specialist("wr_oline_release_specialist", _WR, _OL, "Release Specialist", _K.RELEASE_READ, "Release Read", _DRIVE, _CARDS, True, yards=8),
+    _specialist("oline_qb_pass_set_guard", _OL, _QB, "Pass-Set Guard", _K.PASS_PRO, "Pass Pro", _GAME, _TURNOVERS, True),
+    _specialist("oline_qb_pocket_tempo", _OL, _QB, "Pocket Tempo", _K.TEMPO_READ, "Tempo Read", _DRIVE, _CARDS, True, cards=1),
+    _specialist("oline_rb_drive_blocker", _OL, _RB, "Drive Blocker", _K.FOUR_MINUTE_DRILL, "Four-Minute Drill", _EVERY, _YARDS, True, seconds=10),
+    _specialist("oline_rb_pull_guard", _OL, _RB, "Pull Guard", _K.PULL_LEAD, "Pull Lead", _EVERY, _STATS, distance=3, power=10),
+    _specialist("oline_wr_screen_setter", _OL, _WR, "Screen Setter", _K.SCREEN_WALL, "Screen Wall", _DRIVE, _STATS, True, power=8),
+    _specialist("oline_wr_space_creator", _OL, _WR, "Space Creator", _K.BREATHING_ROOM, "Breathing Room", _EVERY, _YARDS, threshold=20, yards=5),
+    _specialist("dline_lb_a_gap_plug", _DL, _LB, "A-Gap Plug", _K.HOLD_THE_FRONT, "Hold the Front", _DRIVE, _CARDS, True),
+    _specialist("dline_lb_edge_setter", _DL, _LB, "Edge Setter", _K.EDGE_SET, "Edge Set", _DRIVE, _STATS, power=8),
+    _specialist("dline_cb_contain_end", _DL, _CB, "Contain End", _K.CONTAIN, "Contain", _EVERY, _YARDS, cap=6),
+    _specialist("dline_cb_rush_contain", _DL, _CB, "Rush Contain", _K.COLLAPSE, "Collapse", _DRIVE, _CARDS),
+    _specialist("dline_s_interior_rusher", _DL, _S, "Interior Rusher", _K.KICK_RUSH, "Kick Rush", _EVERY, _TURNOVERS, block=0.08),
+    _specialist("dline_s_stunt_tackle", _DL, _S, "Stunt Tackle", _K.STUNT_SACK, "Stunt Sack", _DRIVE, _YARDS, yards=5),
+    _specialist("lb_dline_front_fit_back", _LB, _DL, "Front-Fit Back", _K.FIT_AND_SHED, "Fit & Shed", _DRIVE, _CARDS, yards=2, cards=1),
+    _specialist("lb_dline_run_fit_captain", _LB, _DL, "Run-Fit Captain", _K.CAPTAINS_ADJUSTMENT, "Captain's Adjustment", _DRIVE, _STATS, power=8),
+    _specialist("lb_cb_nickel_rover", _LB, _CB, "Nickel Rover", _K.HOLD_THE_LINE, "Hold the Line", _HALF, _YARDS, margin=2, short=0.5),
+    _specialist("lb_cb_hook_curl_reader", _LB, _CB, "Hook-Curl Reader", _K.READ_KEYS, "Read Keys", _EVERY, _CARDS),
+    _specialist("lb_s_robber_backer", _LB, _S, "Robber Backer", _K.SHORT_FIELD, "Short Field", _EVERY, _YARDS, yards=5),
+    _specialist("lb_s_green_dog_blitzer", _LB, _S, "Green-Dog Blitzer", _K.GREEN_DOG, "Green Dog", _GAME, _CARDS),
+    _specialist("cb_dline_edge_corner", _CB, _DL, "Edge Corner", _K.KEEP_IT_INBOUNDS, "Keep It Inbounds", _EVERY, _YARDS, seconds=6),
+    _specialist("cb_dline_force_corner", _CB, _DL, "Force Corner", _K.FORCE_AND_FOLD, "Force & Fold", _EVERY, _STATS, True),
+    _specialist("cb_lb_nickel_matcher", _CB, _LB, "Nickel Matcher", _K.NICKEL_LOCK, "Nickel Lock", _EVERY, _STATS, power=8),
+    _specialist("cb_lb_underneath_bracket", _CB, _LB, "Underneath Bracket", _K.BRACKET, "Bracket", _GAME, _CARDS),
+    _specialist("cb_s_deep_half_corner", _CB, _S, "Deep-Half Corner", _K.DEEP_LOCK, "Deep Lock", _EVERY, _YARDS, True, cap=10),
+    _specialist("cb_s_trail_corner", _CB, _S, "Trail Corner", _K.BAIT_AND_JUMP, "Bait & Jump", _HALF, _TURNOVERS, interception=0.08),
+    _specialist("s_dline_post_safety", _S, _DL, "Post Safety", _K.LAST_LINE, "Last Line", _GAME, _YARDS, distance=5),
+    _specialist("s_dline_blitz_safety", _S, _DL, "Blitz Safety", _K.SAFETY_BLITZ, "Safety Blitz", _EVERY, _TURNOVERS, True, incompletion=0.10, yards=2),
+    _specialist("s_lb_box_safety", _S, _LB, "Box Safety", _K.DOWNHILL_FILL, "Downhill Fill", _EVERY, _STATS, power=10),
+    _specialist("s_lb_robber_safety", _S, _LB, "Robber Safety", _K.TIP_DRILL, "Tip Drill", _GAME, _TURNOVERS),
+    _specialist("s_cb_boundary_safety", _S, _CB, "Boundary Safety", _K.SUDDEN_CHANGE, "Sudden Change", _EVERY, _CARDS, cards=1),
+    _specialist("s_cb_range_safety", _S, _CB, "Range Safety", _K.RANGE_DENIAL, "Range Denial", _EVERY, _YARDS, yards=7),
 )
 
 _BASIC_DISPLAY_NAMES = {
@@ -235,11 +276,23 @@ def _validate_catalog() -> None:
         ]
         if len({perk.name for perk in perks}) != len(perks):
             raise RuntimeError("Specialist perk names must be unique within each side.")
-        if len({perk.display_text for perk in perks}) != len(perks):
-            raise RuntimeError("Specialist perk descriptions must be unique within each side.")
+    kinds = [item.perk.kind for item in _SPECIALISTS if item.perk is not None]
+    if len(set(kinds)) != len(kinds) or set(kinds) != set(FootballPlayerPerkKind):
+        raise RuntimeError("Every player perk kind must belong to exactly one specialist.")
 
 
 _validate_catalog()
+
+
+PLAYER_TYPES_BY_PERK: Mapping[FootballPlayerPerkKind, FootballPlayerType] = MappingProxyType(
+    {item.perk.kind: item for item in _SPECIALISTS if item.perk is not None}
+)
+
+
+def player_perk(kind: FootballPlayerPerkKind) -> FootballPlayerPerk:
+    perk = PLAYER_TYPES_BY_PERK[kind].perk
+    assert perk is not None
+    return perk
 
 
 def player_type_for_id(type_id: str) -> FootballPlayerType:

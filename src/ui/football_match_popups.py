@@ -18,13 +18,14 @@ from src.ui.football_match_events import (
     OutcomeEmphasis,
     outcome,
     overturned_sequences,
+    perk_log_text,
     period_label,
 )
 from src.ui.football_match_outcome import OUTCOME_COLORS
 from src.ui.football_match_palette import (
     MATCH_CANVAS, MATCH_DANGER, MATCH_DIM, MATCH_FOCUS, MATCH_GOLD, MATCH_INK,
     MATCH_MUTED, MATCH_PANEL, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT,
-    MATCH_PANEL_HIGH, MATCH_TEXT, match_font, plain_font,
+    MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, match_font, plain_font,
 )
 from src.ui.football_match_piles import card_label, pile_cards
 from src.ui.football_match_scoreboard import clock_text
@@ -40,6 +41,7 @@ LOG = "log"
 PILE = "pile"
 
 LOG_ROW_HEIGHT = 46
+LOG_PERK_LINE = 16  # extra height for a row whose play fired player perks
 
 
 @dataclass
@@ -143,9 +145,14 @@ def draw_log_popup(
             rows.append(("period", period))
             last_period = period
         rows.append(("event", (event, previous)))
+    def row_height(kind: str, payload) -> int:
+        if kind == "period":
+            return 30
+        return LOG_ROW_HEIGHT + (LOG_PERK_LINE if payload[0].perk_activations else 0)
+
     total_height = 0
-    for kind, _ in rows:
-        total_height += 30 if kind == "period" else LOG_ROW_HEIGHT
+    for kind, payload in rows:
+        total_height += row_height(kind, payload)
     popup.log_max_scroll = max(0, total_height - viewport.height)
     popup.log_scroll = max(0, min(popup.log_scroll, popup.log_max_scroll))
     popup.log_viewport = viewport
@@ -155,7 +162,7 @@ def draw_log_popup(
     headline_font = plain_font(17)
     detail_font = plain_font(13, False)
     for kind, payload in rows:
-        height = 30 if kind == "period" else LOG_ROW_HEIGHT
+        height = row_height(kind, payload)
         if y + height < viewport.top or y > viewport.bottom:
             y += height
             continue
@@ -168,7 +175,7 @@ def draw_log_popup(
             continue
         event, previous = payload
         result = outcome(event, previous, team_a, team_b)
-        row = pygame.Rect(viewport.left, y + 2, viewport.width - 12, LOG_ROW_HEIGHT - 4)
+        row = pygame.Rect(viewport.left, y + 2, viewport.width - 12, height - 4)
         pygame.draw.rect(surface, MATCH_PANEL, row, border_radius=7)
         struck = event.sequence in overturned
         color = OUTCOME_COLORS[result.kind]
@@ -202,6 +209,11 @@ def draw_log_popup(
             detail = f"{detail} · {'; '.join(event.perk_effects)}" if detail else "; ".join(event.perk_effects)
         detail_surface = detail_font.render(fit_text(detail, detail_font, text_width), True, MATCH_MUTED)
         surface.blit(detail_surface, (text_left, row.top + 23))
+        perks = perk_log_text(event)
+        if perks:
+            perk_box = pygame.Rect(text_left, row.top + 38, text_width, LOG_PERK_LINE)
+            blit_text(surface, detail_font, fit_text(perks, detail_font, text_width),
+                      MATCH_GOLD if not struck else MATCH_DIM, perk_box, topleft=perk_box.topleft)
         y += height
     surface.set_clip(clip)
     if popup.log_max_scroll:

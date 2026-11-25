@@ -31,6 +31,7 @@ from src.engine.football_simulator import (
     MAX_FATIGUE_POWER_REDUCTION,
     MIN_PLAY_YARDAGE_SPREAD,
     FootballMatchSimulator,
+    KICKOFF_CLOCK_SECONDS,
     REGULATION_PERIOD_SECONDS,
     calculate_play_estimate,
     field_goal_distance_for_position,
@@ -295,11 +296,14 @@ def _roster_with_mutual_partners(
     coach_assignment: FootballCoachAssignment,
 ) -> FootballRoster:
     players = dict(_roster(team_name, power=PLAYER_BASE_POWER, stamina=1.0).players)
+    # Specialists whose perks change a first-down, first-snap matchup are skipped so
+    # these tests measure only coach and partnership modifiers.
+    noisy = {"downhill_fill", "motion_jump", "edge_set", "force_and_fold", "hot_route"}
     for position, partner in (positions, positions[::-1]):
         player_type = next(
             item
             for item in player_types_for_position(position)
-            if item.partner_position is partner
+            if item.partner_position is partner and item.perk.kind.value not in noisy
         )
         players[position] = player_from_type(
             player_type,
@@ -732,9 +736,12 @@ def test_interceptions_near_goal_lines_are_not_safeties_and_cycle_cards(
     offense_side: FootballTeamSide,
 ) -> None:
     pass_card = FootballCardCopy("interception:deep-pass", "deep_pass")
+    # Enough cards that the end-of-drive refill to three never reshuffles the discard.
     other_cards = (
         FootballCardCopy("interception:rb-run", "rb_run"),
         FootballCardCopy("interception:short-pass", "short_pass"),
+        FootballCardCopy("interception:screen-pass", "screen_pass"),
+        FootballCardCopy("interception:medium-pass", "medium_pass"),
     )
     offense_deck = FootballDeckState(
         owned=(pass_card, *other_cards),
@@ -1098,10 +1105,12 @@ def test_go_for_it_play_respects_halftime_and_overtime_boundaries():
     halftime.rng = SequenceRNG((0.99,), (0.0,))
     halftime.resolve_fourth_down(FootballFourthDownAction.GO_FOR_IT)
     second_period = halftime.resolve_offensive_play(OffensivePlayAction.RB_RUN)
+    # Halftime ends the drive: hands are redealt and Team B receives the kickoff.
     assert second_period.period == 2
-    assert second_period.game_clock_seconds == REGULATION_PERIOD_SECONDS
-    assert second_period.possession is FootballTeamSide.TEAM_A
-    assert second_period.current_drive_defensive_scheme is DefensiveSchemeAction.RB_RUN
+    assert second_period.match_events[-1].action is FootballAutomaticAction.KICKOFF
+    assert second_period.game_clock_seconds == REGULATION_PERIOD_SECONDS - KICKOFF_CLOCK_SECONDS
+    assert second_period.possession is FootballTeamSide.TEAM_B
+    assert second_period.current_drive_defensive_scheme is None
     assert second_period.team_a_offense_deck is not None
     assert len(second_period.team_a_offense_deck.hand) == 3
 
@@ -1418,14 +1427,17 @@ def test_blocked_kicking_team_recovery_preserves_period_transitions_and_decks(
 
     assert result.period == expected_period
     assert result.status is expected_status
-    assert result.match_events[-1].clock_seconds_used == 1
+    kick_event = result.match_events[-2 if expected_period == 2 and period == 1 else -1]
+    assert kick_event.clock_seconds_used == 1
     if expected_status is FootballMatchStatus.COMPLETED:
         assert result.final_result is not None
         assert result.final_result.completed
     elif expected_period == 2:
-        assert result.game_clock_seconds == REGULATION_PERIOD_SECONDS
+        # The blocked kick ends the half; the second half opens with a kickoff to Team B.
+        assert kick_event.possession is FootballTeamSide.TEAM_B
+        assert result.match_events[-1].action is FootballAutomaticAction.KICKOFF
+        assert result.game_clock_seconds == REGULATION_PERIOD_SECONDS - KICKOFF_CLOCK_SECONDS
         assert result.possession is FootballTeamSide.TEAM_B
-        assert result.offense_field_position == 65.0
     elif expected_period == 3:
         assert result.game_clock_seconds == 300
         assert result.down == 1
@@ -1648,7 +1660,8 @@ def test_two_point_attempt_uses_basic_run_when_the_hand_is_empty() -> None:
 
     assert event.points_scored == 2
     assert "two-point rb run successful" in event.description.lower()
-    assert result.team_a_offense_deck == deck
+    # The try ends the scoring drive, so the empty hand refills from the discard.
+    assert result.team_a_offense_deck == FootballDeckState((basic_run,), hand=(basic_run,))
 
 
 def test_two_point_turnover_without_a_return_scores_no_points() -> None:
@@ -1844,20 +1857,24 @@ def test_scheme_is_fixed_for_drive_and_cleared_on_all_possession_changes():
     assert decision.current_drive_defensive_scheme is DefensiveSchemeAction.RB_RUN
 
 
-def test_clock_is_capped_and_first_period_expiry_preserves_drive_state():
+def test_clock_is_capped_and_first_period_expiry_ends_the_drive_with_a_kickoff():
     capped = _sim_with_scheme(
         rng=SequenceRNG((0.99,), (0.0,)),
         game_clock_seconds=4,
     )
     capped_state = capped.resolve_offensive_play(OffensivePlayAction.RB_RUN)
-    result = capped_state.match_events[-1].play_result
-    assert result.clock_seconds_used == 4
+    play_event, kickoff = capped_state.match_events[-2:]
+    assert play_event.play_result.clock_seconds_used == 4
+    # Halftime ends the drive; the opening receiver (Team A) kicks to Team B.
+    assert play_event.period == 2 and play_event.possession is FootballTeamSide.TEAM_B
+    assert kickoff.action is FootballAutomaticAction.KICKOFF
+    assert kickoff.possession is FootballTeamSide.TEAM_B
     assert capped_state.period == 2
-    assert capped_state.game_clock_seconds == REGULATION_PERIOD_SECONDS
-    assert capped_state.possession is FootballTeamSide.TEAM_A
-    assert capped_state.down == 2
-    assert capped_state.offense_field_position == 28.75
-    assert capped_state.current_drive_defensive_scheme is DefensiveSchemeAction.SHORT_PASS
+    assert capped_state.game_clock_seconds == REGULATION_PERIOD_SECONDS - KICKOFF_CLOCK_SECONDS
+    assert capped_state.possession is FootballTeamSide.TEAM_B
+    assert capped_state.down == 1
+    assert capped_state.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
+    assert capped_state.current_drive_defensive_scheme is None
 
 
 def test_special_teams_clock_is_capped_and_field_goal_at_expiry_completes():
@@ -1870,8 +1887,11 @@ def test_special_teams_clock_is_capped_and_field_goal_at_expiry_completes():
     )
     punt_state = punt.resolve_fourth_down(FootballFourthDownAction.PUNT)
     assert punt_state.period == 2
-    assert punt_state.game_clock_seconds == REGULATION_PERIOD_SECONDS
-    assert punt_state.match_events[-1].clock_seconds_used == 3
+    # The punt ends the half; the second half opens with Team A kicking off.
+    assert punt_state.match_events[-2].clock_seconds_used == 3
+    assert punt_state.match_events[-1].action is FootballAutomaticAction.KICKOFF
+    assert punt_state.game_clock_seconds == REGULATION_PERIOD_SECONDS - KICKOFF_CLOCK_SECONDS
+    assert punt_state.possession is FootballTeamSide.TEAM_B
 
     field_goal = FootballMatchSimulator(
         _match_state(

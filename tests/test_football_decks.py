@@ -199,7 +199,7 @@ def test_duplicate_copy_reshuffles_independently_and_fallback_still_draws() -> N
     assert fallback_state.team_a_offense_deck == empty
 
 
-def test_period_resets_follow_play_draw_and_preserve_halftime_scheme() -> None:
+def test_period_resets_follow_play_draw_and_halftime_ends_the_drive() -> None:
     offense = _copies("home", STARTING_OFFENSIVE_ACTIONS, group="offense")
     defense = _copies("away", STARTING_DEFENSIVE_ACTIONS, group="defense")
     offensive_deck = FootballDeckState(offense, hand=(offense[0],), draw_pile=offense[1:])
@@ -218,7 +218,9 @@ def test_period_resets_follow_play_draw_and_preserve_halftime_scheme() -> None:
 
     halftime = simulator.state
     assert halftime.period == 2
-    assert halftime.current_drive_defensive_scheme is DefensiveSchemeAction.DEEP_PASS
+    # Halftime ends the drive: no scheme carries over and period 2 opens with a kickoff.
+    assert halftime.current_drive_defensive_scheme is None
+    assert halftime.awaited_action is FootballAwaitedAction.DEFENSIVE_SCHEME
     reset_offense = halftime.team_a_offense_deck
     reset_defense = halftime.team_b_defense_deck
     assert reset_offense is not None and reset_defense is not None

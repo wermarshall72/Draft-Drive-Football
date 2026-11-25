@@ -473,6 +473,9 @@ class FootballRunScreen(Screen):
             challenge_touchdown=lambda: self._submit_match_action(
                 controller().challenge_touchdown
             ),
+            green_dog=lambda copy_id: self._submit_match_action(
+                lambda: controller().respond_to_green_dog(copy_id)
+            ),
             return_to_menu=self._return_to_menu,
             quit_run=self._quit_run,
         )
@@ -499,6 +502,10 @@ class FootballRunScreen(Screen):
                 lambda: self._require_controller().choose_conversion(
                     FootballConversionAction.TWO_POINT, copy_id
                 )
+            )
+        elif decision is FootballHumanDecision.GREEN_DOG:
+            self._submit_match_action(
+                lambda: self._require_controller().respond_to_green_dog(copy_id)
             )
         elif decision is FootballHumanDecision.CHALLENGE:
             raise RuntimeError("Challenge prompts use the explicit decision buttons.")

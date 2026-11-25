@@ -87,7 +87,8 @@ covers extracted interaction state.
   (`PlayerInspection.partner_row`). Cards show base and coached power
   (`draft_coached_power`, built on the engine's `coached_player_power`, which
   the Depth Chart's Modified Stats also use), a partner callout
-  (`partner_callout`), and complete inactive perk details without a popup. Six
+  (`partner_callout`), and the perk (name with WITH/limit tags, card line, full
+  rules; `draw_perk_heading`) without a popup. Six
   position-mapped, team-colored sprites and a shared Heisman hover/focus pose
   and their masks are in
   `assets/draft_players`; [process_player_art.py](scripts/process_player_art.py)
@@ -99,8 +100,11 @@ covers extracted interaction state.
   [football_player_catalog.py](src/engine/football_player_catalog.py).
   For artwork and fonts, see [coach_art.py](src/ui/coach_art.py),
   [player_art.py](src/ui/player_art.py), and
-  [coach_fonts.py](src/ui/coach_fonts.py). Player perks are displayed but not
-  executed. See
+  [coach_fonts.py](src/ui/coach_fonts.py). Player-perk wording has one source,
+  [football_player_perks.py](src/ui/football_player_perks.py) (card line,
+  full rules, partner and limit tags, callouts, preview notes). AI drafting is a
+  seeded weighted choice that favors partners and deck fit (`draft_weight` in
+  [football_ai.py](src/engine/football_ai.py)). See
   [test_football_team_builder.py](tests/test_football_team_builder.py),
   [test_football_coaches.py](tests/test_football_coaches.py), and
   [test_coach_draft_redesign.py](tests/test_coach_draft_redesign.py),
@@ -108,7 +112,8 @@ covers extracted interaction state.
   wording, text fit, Depth Chart wording, inspect panel),
   [test_player_draft_redesign.py](tests/test_player_draft_redesign.py)
   (coached power, tracker rows, partner links, text fit), and
-  [test_football_player_catalog.py](tests/test_football_player_catalog.py), and
+  [test_football_player_catalog.py](tests/test_football_player_catalog.py),
+  [test_football_player_perk_text.py](tests/test_football_player_perk_text.py), and
   [test_player_art.py](tests/test_player_art.py).
 - **Shop and review:** [football_shop_view.py](src/ui/football_shop_view.py)
   renders the shop landing (AP badge, PLAYER UPGRADES 4 slots, COACH UPGRADES
@@ -257,7 +262,11 @@ covers extracted interaction state.
   match hands (`_deal_deck`, `_cycle_played_card`, `_draw_one_into_hand`;
   bonus effects in `resolve_bonus_card`). Every card replaces itself in its own
   hand; Draw bonus cards add one extra offensive or defensive card with no
-  hand-size cap, and the hand UI shrinks then scrolls to fit; Challenge restores
+  hand-size cap, and the hand UI shrinks then scrolls to fit. Each drive's end
+  trims or refills the offense's offensive hand to three and the defense's
+  defensive hand to two (`_end_drive`, `_normalize_hand`); halftime and
+  overtime redeal instead (`_reset_for_period_boundary`, which also resolves the
+  second-half kickoff by `opening_possession`). Challenge restores
   football state while retaining the post-play clock, card cycling, and event
   history. AI decks remain limited to named plays and schemes. UI calls use
   copy IDs, including two-point selections. See
@@ -268,7 +277,28 @@ covers extracted interaction state.
 - **Resolution and AI:** [football_simulator.py](src/engine/football_simulator.py)
   owns matchup estimates, play resolution, tactical bonus effects, Challenge
   rollback, clock, scoring, deck cycling, and special-teams/conversion
-  outcomes. [football_ai.py](src/engine/football_ai.py) generates local
+  outcomes.
+- **Player perks:** the typed catalog (`FootballPlayerPerk`, kind, limit, values)
+  is in [football_player_catalog.py](src/engine/football_player_catalog.py);
+  `FootballPlayerPerkKind` and `FootballPerkActivation` (recorded on events and
+  play results) are in [football.py](src/engine/football.py).
+  [football_perk_context.py](src/engine/football_perk_context.py) rebuilds
+  per-team drive/half/game history from events (`perk_history`, `team_perks`)
+  and computes estimate perks (`estimate_perk_inputs`: power, counters, yards,
+  odds) that `calculate_match_play_estimate` applies, so resolution, Hard AI,
+  and previews agree. `resolve_offensive_play` applies resolution perks in the
+  proposal's order (reroll, swaps, yards, spot with the defense last, clock,
+  cards); drive-start perks run in `select_defensive_scheme`; kick perks use
+  `kick_rush_bonus` and `range_denial_yards`; Green Dog is
+  `FootballAwaitedAction.GREEN_DOG_DECISION` / `resolve_green_dog`. AI Read
+  Keys, Green Dog, and Keep Read logic are in [football_ai.py](src/engine/football_ai.py).
+  Match UI: callouts and Play Log text in
+  [football_match_events.py](src/ui/football_match_events.py), the tray, Read
+  Keys, and Green Dog panels in [football_match_perks.py](src/ui/football_match_perks.py),
+  preview notes in [football_match_hand.py](src/ui/football_match_hand.py).
+  See [test_football_player_perks.py](tests/test_football_player_perks.py)
+  (helpers in [perk_helpers.py](tests/perk_helpers.py)) and
+  [test_football_perk_ui.py](tests/test_football_perk_ui.py). [football_ai.py](src/engine/football_ai.py) generates local
   opponents and selects actions; AI uses the expanded named catalogs but never
   receives bonus cards. The controller advances AI turns until a human decision
   and pauses for an available turnover Challenge before continuing; it routes
@@ -288,8 +318,9 @@ covers extracted interaction state.
   cleared only when a match result is recorded, not on a Bye Week;
   [football_result.py](src/ui/football_result.py) renders the
   game-10 skip as a marker without a fabricated score. Coach upgrades are
-  implemented as an initial catalog; player perk effects and a playable
-  playoff bracket remain unfinished. See
+  implemented as an initial catalog; a playable playoff bracket remains
+  unfinished. The controller routes Green Dog offers (`respond_to_green_dog`,
+  `FootballHumanDecision.GREEN_DOG`). See
   [test_football_controller.py](tests/test_football_controller.py) and
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py).
 
@@ -305,7 +336,8 @@ copies a legacy `~/.cfb-auto-battler` profile once);
 checksummed envelope, `run.json`/`run.backup.json` rotation, load fallbacks
 (`LoadResult`/`LoadStatus`), moving damaged or abandoned files aside, and the
 `save_run`/`load_run`/`delete_run` helpers; [migrations.py](src/persistence/migrations.py)
-holds `CURRENT_SCHEMA_VERSION` and the `N -> N+1` registry. The engine owns
+holds `CURRENT_SCHEMA_VERSION` and the `N -> N+1` registry (version 2 added
+the match's `opening_possession` and per-event perk activations). The engine owns
 the payload: `to_save_data`/`from_save_data` on the controller, team builder,
 shop, AI, simulator, and match models in [football.py](src/engine/football.py),
 with shared helpers and `UnsupportedSave` in [save_data.py](src/engine/save_data.py).
@@ -328,7 +360,9 @@ and [test_snapshots.py](tests/test_snapshots.py).
 
 [backtest_football_models.py](scripts/backtest_football_models.py) runs model
 and full regression tests; [measure_football_balance.py](scripts/measure_football_balance.py)
-measures seeded interactive matchups and games. Test setup and launch commands
+measures seeded interactive matchups and games (`--perks on|off` compares
+player perks; with perks on it reports each perk's fire rate against its tier).
+Test setup and launch commands
 are in [README.md](README.md).
 
 ## Common starting points

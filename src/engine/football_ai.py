@@ -26,11 +26,18 @@ from src.engine.football import (
     OffensivePlayAction,
     matchup_for_scheme,
 )
-from src.engine.football_coaches import COACH_PAIR_OFFERS
+from src.engine.football import (
+    FOOTBALL_PLAY_MATCHUPS,
+    FOOTBALL_SCHEME_MATCHUPS,
+    FootballPlayerPerkKind,
+)
+from src.engine.football_coaches import COACH_PAIR_OFFERS, FootballCoachPair
+from src.engine.football_perk_context import perk_history, team_perks
 from src.engine.football_player_catalog import (
     PLAYER_BASE_POWER,
     PLAYER_BASE_STAMINA,
     PLAYER_BASE_VOLATILITY,
+    FootballPlayerType,
     player_from_type,
     player_type_offer,
 )
@@ -64,6 +71,15 @@ HARD_POWER_ADJUSTMENT = 0.5
 
 AI_MIN_FIELD_GOAL_SUCCESS_PROBABILITY = 0.5
 LATE_GAME_SECONDS = 120
+
+# Draft weights for one offered player (two specialists and a basic player).
+DRAFT_BASE_WEIGHT = 1.0
+DRAFT_BASIC_WEIGHT = 0.6
+DRAFT_PARTNER_WEIGHT = 1.5  # the candidate is the partner of an already-drafted player
+DRAFT_MUTUAL_WEIGHT = 0.5  # ...and that player is the candidate's own partner too
+DRAFT_DECK_FIT_WEIGHT = 1.0  # the perk's families are among the coach's three best
+# Read Keys: Standard's bonus per revealed rival card a scheme counters.
+READ_KEYS_COUNTER_BONUS = 1.2
 
 class FootballAI:
     """One local AI identity with a persistent, explicitly seeded random stream.
@@ -131,9 +147,12 @@ class FootballAI:
         }[self.difficulty]
         coach_pair = self._rng.choice(COACH_PAIR_OFFERS)
         players = {}
+        drafted: list[FootballPlayerType] = []
         for position in FootballPosition:
             offer = player_type_offer(position, self._rng)
-            selected_type = self._rng.choice(offer)
+            weights = [draft_weight(item, drafted, coach_pair) for item in offer]
+            selected_type = self._rng.choices(offer, weights)[0]
+            drafted.append(selected_type)
             players[position] = player_from_type(
                 selected_type,
                 name=f"{self.team_name} {selected_type.name}",
@@ -304,9 +323,75 @@ class FootballAI:
             margin = self._score_margin(state)
             if state.period >= 2 and margin in (-2, -1):
                 return FootballConversionAction.TWO_POINT
+            if self._keep_read_play(state) is not None:
+                # Keep Read makes a Play-Action try nearly certain: two beats one.
+                return FootballConversionAction.TWO_POINT
             return FootballConversionAction.EXTRA_POINT
 
         raise ValueError(f"AI cannot act while awaiting {awaited_action!r}.")
+
+    def choose_green_dog(self, state: FootballMatchState) -> str | None:
+        """Green Dog (L6): swap to the best hand scheme when it outscores the active one.
+
+        Every difficulty uses the same estimate-based rule; the answer is a
+        scheme card copy id from this AI's defensive hand, or None to decline.
+        """
+        if (
+            state.awaited_action is not FootballAwaitedAction.GREEN_DOG_DECISION
+            or state.possession is self.team_side
+        ):
+            raise ValueError("AI can answer Green Dog only for its own defense.")
+        active = state.current_drive_defensive_scheme
+        deck = self._deck_for_state(state, offensive=False)
+        if active is None or not deck.hand:
+            return None
+        offense = self._roster_for_side(state, self._opponent(self.team_side))
+        defense = self._roster_for_side(state, self.team_side)
+
+        def score(scheme: DefensiveSchemeAction) -> float:
+            return self._hard_defensive_scheme_score(state, scheme, offense, defense)
+
+        best = max(
+            deck.hand,
+            key=lambda card: (score(DEFENSIVE_SCHEME_CATALOG[card.card_id].action), -deck.hand.index(card)),
+        )
+        if score(DEFENSIVE_SCHEME_CATALOG[best.card_id].action) > score(active) + 1e-9:
+            return best.copy_id
+        return None
+
+    def _keep_read_play(self, state: FootballMatchState) -> str | None:
+        """A Play-Action card copy when this AI's unused Keep Read covers the try."""
+        if (
+            state.awaited_action is not FootballAwaitedAction.CONVERSION
+            or FootballPlayerPerkKind.KEEP_READ not in team_perks(state, self.team_side)
+            or perk_history(state).used(FootballPlayerPerkKind.KEEP_READ, self.team_side, "half")
+        ):
+            return None
+        deck = self._deck_for_state(state, offensive=True)
+        return next(
+            (
+                card.copy_id for card in deck.hand
+                if card.card_id in OFFENSIVE_PLAY_CATALOG
+                and OFFENSIVE_PLAY_CATALOG[card.card_id].family is FootballCardFamily.PA_PASS
+            ),
+            None,
+        )
+
+    def revealed_rival_plays(
+        self, state: FootballMatchState
+    ) -> tuple[OffensivePlayAction, ...] | None:
+        """Read Keys (L4): the rival's offensive hand while this AI picks a scheme."""
+        if FootballPlayerPerkKind.READ_KEYS not in team_perks(state, self.team_side):
+            return None
+        rival = self._opponent(self.team_side)
+        deck = getattr(state, f"{rival.value}_offense_deck")
+        if not isinstance(deck, FootballDeckState):
+            return None
+        return tuple(
+            OFFENSIVE_PLAY_CATALOG[card.card_id].action
+            for card in deck.hand
+            if card.card_id in OFFENSIVE_PLAY_CATALOG
+        )
 
     def _hand_plays(self, state: FootballMatchState) -> tuple[OffensivePlayAction, ...]:
         deck = self._deck_for_state(state, offensive=True)
@@ -326,6 +411,9 @@ class FootballAI:
         deck = self._deck_for_state(state, offensive=True)
         if not deck.hand:
             return None
+        keep_read = self._keep_read_play(state)
+        if keep_read is not None:
+            return keep_read
         plays = tuple(OFFENSIVE_PLAY_CATALOG[card.card_id].action for card in deck.hand)
         play = (
             self._rng.choice(plays)
@@ -359,7 +447,21 @@ class FootballAI:
             )
         return max(
             plays,
-            key=lambda play: self._situational_play_score(state, play),
+            key=lambda play: self._situational_play_score(state, play)
+            + self._perk_play_bonus(state, play),
+        )
+
+    def _perk_play_bonus(self, state: FootballMatchState, play: OffensivePlayAction) -> float:
+        """Standard's nudge toward plays its own perks improve (Hard sees them in the estimate)."""
+        if not team_perks(state, self.team_side) or state.current_drive_defensive_scheme is None:
+            return 0.0
+        estimate = calculate_match_play_estimate(
+            state, play, offense_side=self.team_side,
+            is_conversion=state.awaited_action is FootballAwaitedAction.CONVERSION,
+        )
+        return 0.3 * sum(
+            activation.team is self.team_side and not activation.applied
+            for activation in estimate.player_perks
         )
 
     def _situational_play_score(
@@ -439,10 +541,14 @@ class FootballAI:
         schemes: tuple[DefensiveSchemeAction, ...],
     ) -> DefensiveSchemeAction:
         if self.difficulty is FootballAIDifficulty.STANDARD:
-            return max(
-                schemes,
-                key=lambda scheme: self._likely_offensive_play_score(state, scheme),
-            )
+            revealed = self.revealed_rival_plays(state) or ()
+
+            def standard_score(scheme: DefensiveSchemeAction) -> float:
+                _, counters = matchup_for_scheme(scheme)
+                read = READ_KEYS_COUNTER_BONUS * sum(play in counters for play in revealed)
+                return self._likely_offensive_play_score(state, scheme) + read
+
+            return max(schemes, key=standard_score)
 
         offense = self._roster_for_side(state, self._opponent(self.team_side))
         defense = self._roster_for_side(state, self.team_side)
@@ -488,6 +594,26 @@ class FootballAI:
         defense: FootballRoster,
     ) -> float:
         _, counters = matchup_for_scheme(scheme)
+        revealed = (
+            self.revealed_rival_plays(state)
+            if self.difficulty is FootballAIDifficulty.HARD
+            else None
+        )
+        if revealed:
+            # Read Keys: assume the rival calls its best revealed card into this scheme.
+            def rival_value(play: OffensivePlayAction) -> float:
+                estimate = calculate_match_play_estimate(
+                    state, play, scheme=scheme, offense_side=self._opponent(self.team_side),
+                )
+                return (
+                    1.2 * estimate.expected_yards
+                    + 8.0 * estimate.first_down_probability(state.yards_to_go)
+                    - 12.0 * estimate.turnover_probability
+                )
+
+            return self._likely_offensive_play_score(state, scheme) - max(
+                rival_value(play) for play in revealed
+            )
         if not counters:
             return self._likely_offensive_play_score(state, scheme)
         play = max(
@@ -565,3 +691,69 @@ class FootballAI:
         return state.period >= 3 or (
             state.period == 2 and state.game_clock_seconds <= LATE_GAME_SECONDS
         )
+
+
+def _perk_families(player_type: FootballPlayerType) -> frozenset[FootballCardFamily]:
+    """The families where a specialist's perk can matter.
+
+    Partner-required perks need the pair's own family; the rest work in every
+    family the player contributes to.
+    """
+    perk = player_type.perk
+    if perk is None:
+        return frozenset()
+    offense = player_type.position in (
+        FootballPosition.QB, FootballPosition.RB, FootballPosition.WR, FootballPosition.O_LINE,
+    )
+    families = []
+    for family in FootballCardFamily:
+        contributors = (
+            FOOTBALL_PLAY_MATCHUPS[family][0] if offense else FOOTBALL_SCHEME_MATCHUPS[family][0]
+        )
+        if player_type.position not in contributors:
+            continue
+        if perk.partner_required and player_type.partner_position not in contributors:
+            continue
+        families.append(family)
+    return frozenset(families)
+
+
+def _coach_families(pair: FootballCoachPair, offense: bool) -> frozenset[FootballCardFamily]:
+    """The three families whose contributors this coach pair boosts most (deck tilt)."""
+    coach = pair.offense if offense else pair.defense
+    scored = []
+    for index, family in enumerate(FootballCardFamily):
+        contributors = (
+            FOOTBALL_PLAY_MATCHUPS[family][0] if offense else FOOTBALL_SCHEME_MATCHUPS[family][0]
+        )
+        scored.append((sum(coach.position_modifiers[position] for position in contributors), -index, family))
+    scored.sort(reverse=True)
+    return frozenset(family for _, _, family in scored[:3])
+
+
+def draft_weight(
+    candidate: FootballPlayerType,
+    drafted: list[FootballPlayerType],
+    coach_pair: FootballCoachPair,
+) -> float:
+    """How much the AI likes one offered player, given its picks so far.
+
+    It favors partners of players it already drafted (more when the link is
+    mutual) and perks that fit the families its coach pair tilts its deck
+    toward. The pick itself is a seeded weighted choice, so drafts still vary.
+    """
+    if candidate.partner_position is None:
+        return DRAFT_BASIC_WEIGHT
+    weight = DRAFT_BASE_WEIGHT
+    for player in drafted:
+        if player.partner_position is candidate.position:
+            weight += DRAFT_PARTNER_WEIGHT
+            if candidate.partner_position is player.position:
+                weight += DRAFT_MUTUAL_WEIGHT
+            break
+    offense = candidate.position in (
+        FootballPosition.QB, FootballPosition.RB, FootballPosition.WR, FootballPosition.O_LINE,
+    )
+    if _perk_families(candidate) & _coach_families(coach_pair, offense):
+        weight += DRAFT_DECK_FIT_WEIGHT
+    return weight

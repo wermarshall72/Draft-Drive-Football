@@ -126,8 +126,27 @@ def step(controller: FootballGameController, rng: random.Random) -> bool:
         assert match is not None and match.team_a_defense_deck is not None
         hand = match.team_a_defense_deck.hand
         controller.choose_defensive_scheme(rng.choice(hand).copy_id if hand else None)
+    elif decision is FootballHumanDecision.GREEN_DOG:
+        assert match is not None and match.team_a_defense_deck is not None
+        hand = match.team_a_defense_deck.hand
+        controller.respond_to_green_dog(
+            rng.choice(hand).copy_id if hand and rng.random() < 0.5 else None
+        )
     elif decision is FootballHumanDecision.FOURTH_DOWN:
-        controller.choose_fourth_down(rng.choice(list(FootballFourthDownAction)))
+        # Mostly sensible calls (so seeded runs last long enough to reach late-run
+        # phases), with a random call now and then.
+        assert match is not None
+        if rng.random() < 0.2:
+            choice = rng.choice(list(FootballFourthDownAction))
+        elif match.yards_to_go <= 2 or match.offense_field_position >= 65:
+            choice = (
+                FootballFourthDownAction.FIELD_GOAL
+                if match.yards_to_go > 2 and match.offense_field_position >= 70
+                else FootballFourthDownAction.GO_FOR_IT
+            )
+        else:
+            choice = FootballFourthDownAction.PUNT
+        controller.choose_fourth_down(choice)
     elif decision is FootballHumanDecision.CONVERSION:
         if state.challenge_available and rng.random() < 0.5:
             controller.challenge_touchdown()

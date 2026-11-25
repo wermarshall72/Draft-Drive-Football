@@ -42,7 +42,11 @@ from src.ui.football_match_palette import (
     MATCH_CANVAS, MATCH_DANGER, MATCH_INK, MATCH_PANEL,
     MATCH_PANEL_EDGE, MATCH_TEXT, blit_text, match_font,
 )
+from src.ui.football_match_perks import (
+    draw_green_dog_panel, draw_perk_tray, draw_read_keys_panel, has_read_keys,
+)
 from src.ui.football_match_piles import draw_pile_panel
+from src.engine.football_controller import FootballHumanDecision
 from src.ui.football_match_playback import EVENT_DURATION_MS, MatchPlayback
 from src.ui.football_match_popups import (
     DEPTH, LOG, PAUSE, PILE, PopupState, draw_depth_popup, draw_log_popup,
@@ -70,6 +74,8 @@ RIGHT_PILES_RECT = pygame.Rect(1024 + 8, BOTTOM_TOP, 256 - MARGIN - 8, BOTTOM_HE
 POST_REPLAY_NOTE = "HANDS & PILES UPDATE AFTER REPLAY"
 GROUP_NOTE_OFFSET = 120
 PAUSE_RECT = pygame.Rect(SCOREBOARD_RECT.centerx + 94, SCOREBOARD_RECT.top + 10, 84, 26)
+# The human's limited perks (ready / used), under the team name beside the score.
+PERK_TRAY_RECT = pygame.Rect(SCOREBOARD_RECT.left + 196, SCOREBOARD_RECT.top + 56, 244, 26)
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,7 @@ class MatchActions:
     challenge_touchdown: Callable[[], None]
     return_to_menu: Callable[[], None]
     quit_run: Callable[[], None]
+    green_dog: Callable[[str | None], None] = lambda _copy_id: None
 
 
 _backdrop = stadium_backdrop
@@ -111,6 +118,7 @@ class FootballMatchScreen:
         self.popup = PopupState()
         self.hand = HandView()
         self._frozen_at: int | None = None
+        self.read_keys_hidden = False
         self._popup_from_pause = False
         self._strip_actions: list[StripAction] = []
         self._selectable_cards: list[Button] = []
@@ -219,9 +227,14 @@ class FootballMatchScreen:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_s:
                 self.playback.skip()
                 return HandEvent(HandEventKind.HANDLED)
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                return HandEvent(HandEventKind.HANDLED)
             if event.type == pygame.MOUSEMOTION:
                 self.interaction.pointer = event.pos
             return HandEvent(HandEventKind.IGNORED)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+            self.read_keys_hidden = not self.read_keys_hidden  # show or hide Read Keys
+            return HandEvent(HandEventKind.HANDLED)
         if event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9:
             index = event.key - pygame.K_1
             targets = self.shortcut_targets()
@@ -299,9 +312,21 @@ class FootballMatchScreen:
             surface, FIELD_RECT, display, self.theme.primary, overlay,
             human_scheme_highlight=True, kickoff_pending=kicking_next is not None,
         )
+        draw_perk_tray(surface, PERK_TRAY_RECT, display)
+        decision = state.human_decision
+        if not blocked and not self.popup.open:
+            if decision is FootballHumanDecision.GREEN_DOG:
+                draw_green_dog_panel(surface, FIELD_RECT, match)
+            elif (
+                decision is FootballHumanDecision.DEFENSIVE_SCHEME
+                and has_read_keys(match)
+                and not self.read_keys_hidden
+            ):
+                draw_read_keys_panel(surface, FIELD_RECT, match)
 
         callbacks = StripCallbacks(
             actions.fourth_down, actions.conversion, actions.challenge, actions.challenge_touchdown,
+            actions.green_dog,
         )
         if blocked:
             prompt = ""

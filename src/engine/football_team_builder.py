@@ -318,7 +318,8 @@ def _candidate_for_type(player_type: FootballPlayerType) -> FootballPlayerCandid
             if player_type.partner_position is None
             else (
                 f"Partners with {player_type.partner_position.value}; "
-                f"+10% contribution when paired. Perk is planned and inactive."
+                f"+10% contribution when paired. Perk: "
+                f"{player_type.perk.name if player_type.perk is not None else 'none'}."
             )
         ),
     )

@@ -20,6 +20,7 @@ from src.engine.football_decks import (
     DEFENSIVE_SCHEME_CATALOG,
     OFFENSIVE_PLAY_CATALOG,
 )
+from src.ui.football_player_perks import activation_preview_note
 from src.engine.football_simulator import (
     adjusted_offensive_play_clock_seconds,
     calculate_match_play_estimate,
@@ -60,6 +61,7 @@ class CardPreview:
     yards: str
     clock: str
     live: bool
+    notes: tuple[str, ...] = ()  # player perks the live estimate includes
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,7 @@ def active_group(
     decision = state.human_decision
     if decision in (FootballHumanDecision.OFFENSIVE_PLAY, FootballHumanDecision.CONVERSION):
         return OFFENSE
-    if decision is FootballHumanDecision.DEFENSIVE_SCHEME:
+    if decision in (FootballHumanDecision.DEFENSIVE_SCHEME, FootballHumanDecision.GREEN_DOG):
         return DEFENSE
     return None
 
@@ -392,15 +394,25 @@ class HandView:
         key = (id(match), match.match_events[-1].sequence if match.match_events else 0, card_id)
         if self._estimate_cache is None or len(self._estimate_cache) > 64:
             self._estimate_cache = {}
-        if key not in self._estimate_cache:
+        cached = self._estimate_cache.get(key)
+        # ``id`` values are reused after garbage collection, so the cached entry
+        # keeps its match and is used only for that very object.
+        if cached is None or cached[0] is not match:
             estimate = calculate_match_play_estimate(match, definition.action)
             seconds = adjusted_offensive_play_clock_seconds(
                 definition.clock_seconds, match.team_a_coach_upgrades
             )
-            self._estimate_cache[key] = CardPreview(
-                f"~{estimate.expected_yards:.1f}", f"{seconds}s", True
+            # Your own perks first, then the rival's that change this card.
+            ordered = sorted(
+                estimate.player_perks,
+                key=lambda activation: activation.team is not FootballTeamSide.TEAM_A,
             )
-        return self._estimate_cache[key]
+            notes = tuple(activation_preview_note(activation) for activation in ordered)
+            cached = (match, CardPreview(
+                f"~{estimate.expected_yards:.1f}", f"{seconds}s", True, notes
+            ))
+            self._estimate_cache[key] = cached
+        return cached[1]
 
     # -- drawing ---------------------------------------------------------------
 
@@ -502,8 +514,23 @@ class HandView:
                 family_label, family_label
             )
             family_font = plain_font(10, False)
-        blit_text(surface, family_font, fit_text(family_label, family_font, inner.width),
-                  family_color, text_box, midtop=(rect.centerx, y + 1))
+        notes = (
+            self.card_preview(match, card.card_id).notes
+            if group == OFFENSE and bonus is None and not fallback else ()
+        )
+        if notes:
+            # Perk preview notes take the family line (the art and name already show
+            # the family): the first note, plus a count of any others, in up to two lines.
+            extra = f" (+{len(notes) - 1})" if len(notes) > 1 else ""
+            room = stats.top - (y + 1)
+            lines_allowed = 2 if room >= 2 * plain_font(9).get_height() else 1
+            note_font, note_lines = fit_wrapped(notes[0] + extra, inner.width, (10, 9), lines_allowed)
+            for line in note_lines:
+                blit_text(surface, note_font, line, MATCH_GOLD, text_box, midtop=(rect.centerx, y + 1))
+                y += note_font.get_height() - 1
+        else:
+            blit_text(surface, family_font, fit_text(family_label, family_font, inner.width),
+                      family_color, text_box, midtop=(rect.centerx, y + 1))
 
         pygame.draw.rect(surface, MATCH_PANEL_DEEP, stats, border_radius=6)
         if bonus is not None:

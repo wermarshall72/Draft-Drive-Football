@@ -50,6 +50,7 @@ class FootballAwaitedAction(str, Enum):
     DEFENSIVE_SCHEME = "defensive_scheme"
     FOURTH_DOWN_DECISION = "fourth_down_decision"
     CONVERSION = "conversion"
+    GREEN_DOG_DECISION = "green_dog_decision"
 
 
 class FootballConversionAction(str, Enum):
@@ -59,6 +60,66 @@ class FootballConversionAction(str, Enum):
 
 class FootballAutomaticAction(str, Enum):
     KICKOFF = "kickoff"
+
+
+class FootballPerkDecision(str, Enum):
+    """The defense's answer to a Green Dog offer (perk L6)."""
+
+    GREEN_DOG_SWAP = "green_dog_swap"
+    GREEN_DOG_DECLINE = "green_dog_decline"
+
+
+class FootballPlayerPerkKind(str, Enum):
+    """One specialist player perk; each specialist player type owns exactly one."""
+
+    MESH_READ = "mesh_read"
+    OPTION_LEDGER = "option_ledger"
+    HURRY_UP_CAPTAIN = "hurry_up_captain"
+    SHOT_SETUP = "shot_setup"
+    POCKET_PRESENCE = "pocket_presence"
+    SILENT_COUNT = "silent_count"
+    CHECKDOWN = "checkdown"
+    KEEP_READ = "keep_read"
+    ORBIT_BREAKAWAY = "orbit_breakaway"
+    OUTLET_REPEAT = "outlet_repeat"
+    DOWNHILL = "downhill"
+    FALL_FORWARD = "fall_forward"
+    HOT_ROUTE = "hot_route"
+    CONTESTED_CATCH = "contested_catch"
+    MOVE_THE_STICKS = "move_the_sticks"
+    MOTION_JUMP = "motion_jump"
+    PYLON_REACH = "pylon_reach"
+    RELEASE_READ = "release_read"
+    PASS_PRO = "pass_pro"
+    TEMPO_READ = "tempo_read"
+    FOUR_MINUTE_DRILL = "four_minute_drill"
+    PULL_LEAD = "pull_lead"
+    SCREEN_WALL = "screen_wall"
+    BREATHING_ROOM = "breathing_room"
+    HOLD_THE_FRONT = "hold_the_front"
+    EDGE_SET = "edge_set"
+    CONTAIN = "contain"
+    COLLAPSE = "collapse"
+    KICK_RUSH = "kick_rush"
+    STUNT_SACK = "stunt_sack"
+    FIT_AND_SHED = "fit_and_shed"
+    CAPTAINS_ADJUSTMENT = "captains_adjustment"
+    HOLD_THE_LINE = "hold_the_line"
+    READ_KEYS = "read_keys"
+    SHORT_FIELD = "short_field"
+    GREEN_DOG = "green_dog"
+    KEEP_IT_INBOUNDS = "keep_it_inbounds"
+    FORCE_AND_FOLD = "force_and_fold"
+    NICKEL_LOCK = "nickel_lock"
+    BRACKET = "bracket"
+    DEEP_LOCK = "deep_lock"
+    BAIT_AND_JUMP = "bait_and_jump"
+    LAST_LINE = "last_line"
+    SAFETY_BLITZ = "safety_blitz"
+    DOWNHILL_FILL = "downhill_fill"
+    TIP_DRILL = "tip_drill"
+    SUDDEN_CHANGE = "sudden_change"
+    RANGE_DENIAL = "range_denial"
 
 
 class FootballTurnoverType(str, Enum):
@@ -435,6 +496,73 @@ def card_copies_from_save_data(data: Any, what: str) -> tuple[FootballCardCopy, 
 
 
 @dataclass(frozen=True)
+class FootballPerkActivation:
+    """One player perk that fired (or whose standing effect applied) on an event.
+
+    ``value`` is the perk's measured effect on that event (yards, seconds,
+    cards, power), or 0 when the perk has no single number. ``applied`` marks
+    a standing effect from an earlier trigger (for example Screen Wall's rival
+    debuff on a later snap); only non-applied activations spend a perk's limit.
+    """
+
+    kind: FootballPlayerPerkKind
+    team: "FootballTeamSide"
+    value: float = 0.0
+    applied: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, FootballPlayerPerkKind):
+            raise ValueError("Perk activation kind must be a FootballPlayerPerkKind.")
+        if not isinstance(self.team, FootballTeamSide):
+            raise ValueError("Perk activation team must be a FootballTeamSide.")
+        _validate_finite_number(self.value, "Perk activation value")
+        if not isinstance(self.applied, bool):
+            raise ValueError("Perk activation applied flag must be a boolean.")
+
+    def to_save_data(self) -> list[Any]:
+        data: list[Any] = [self.kind.value, self.team.value]
+        if self.value or self.applied:
+            data.append(self.value)
+        if self.applied:
+            data.append(True)
+        return data
+
+    @classmethod
+    def from_save_data(cls, data: Any) -> "FootballPerkActivation":
+        if not isinstance(data, list) or not 2 <= len(data) <= 4:
+            raise UnsupportedSave("A perk activation must be [kind, team, value?, applied?].")
+        kind = enum_value(FootballPlayerPerkKind, data[0], "player perk")
+        team = enum_value(FootballTeamSide, data[1], "team")
+        value = data[2] if len(data) > 2 else 0.0
+        applied = data[3] if len(data) > 3 else False
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise UnsupportedSave("A perk activation value must be a number.")
+        if not isinstance(applied, bool):
+            raise UnsupportedSave("A perk activation applied flag must be a boolean.")
+        return build("perk activation", lambda: cls(kind, team, float(value), applied))
+
+
+def _validate_activations(activations: Any) -> None:
+    if not isinstance(activations, tuple) or any(
+        not isinstance(activation, FootballPerkActivation) for activation in activations
+    ):
+        raise ValueError("Perk activations must be a tuple of FootballPerkActivation.")
+
+
+def activations_to_save_data(
+    activations: tuple[FootballPerkActivation, ...],
+) -> list[list[Any]]:
+    return [activation.to_save_data() for activation in activations]
+
+
+def activations_from_save_data(data: Any) -> tuple[FootballPerkActivation, ...]:
+    return tuple(
+        FootballPerkActivation.from_save_data(item)
+        for item in items(data, "Perk activations")
+    )
+
+
+@dataclass(frozen=True)
 class FootballDeckState:
     """Owned cards and their match-local draw, hand, and discard zones."""
 
@@ -702,8 +830,10 @@ class FootballPlayResult:
     turnover_on_downs: bool = False
     turnover_type: FootballTurnoverType | None = None
     conversion_attempt: bool = False
+    perk_activations: tuple[FootballPerkActivation, ...] = ()
 
     def __post_init__(self) -> None:
+        _validate_activations(self.perk_activations)
         if not isinstance(self.offensive_play, OffensivePlayAction):
             raise ValueError("Offensive play must be an OffensivePlayAction.")
         _validate_finite_number(self.yards_gained, "Yards gained")
@@ -759,6 +889,7 @@ class FootballMatchEvent:
         | FootballFourthDownAction
         | FootballConversionAction
         | FootballAutomaticAction
+        | FootballPerkDecision
     )
     team_a_score: int
     team_b_score: int
@@ -782,8 +913,10 @@ class FootballMatchEvent:
     card_id: str | None = None
     card_copy_id: str | None = None
     reverses_event_sequences: tuple[int, ...] = ()
+    perk_activations: tuple[FootballPerkActivation, ...] = ()
 
     def __post_init__(self) -> None:
+        _validate_activations(self.perk_activations)
         _validate_nonnegative_int(self.sequence, "Event sequence")
         if self.sequence == 0:
             raise ValueError("Event sequence must be positive.")
@@ -796,6 +929,7 @@ class FootballMatchEvent:
                 FootballFourthDownAction,
                 FootballConversionAction,
                 FootballAutomaticAction,
+                FootballPerkDecision,
             ),
         ):
             raise ValueError("Event action must be a supported football action.")
@@ -899,6 +1033,11 @@ class FootballMatchEvent:
             raise ValueError("Perk effects must be a tuple of non-empty strings.")
         if self.play_result is not None and self.perk_effects != self.play_result.perk_effects:
             raise ValueError("Event perk effects must match its play result.")
+        if (
+            self.play_result is not None
+            and self.perk_activations != self.play_result.perk_activations
+        ):
+            raise ValueError("Event perk activations must match its play result.")
 
 
 @dataclass(frozen=True)
@@ -949,8 +1088,15 @@ class FootballMatchState:
     conversion_team: FootballTeamSide | None = None
     team_a_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = ()
     team_b_coach_upgrades: tuple[FootballCoachUpgradeEffect, ...] = ()
+    # The team that received the opening kickoff (it kicks to start period 2).
+    # ``None`` means the current possession when the match is created.
+    opening_possession: FootballTeamSide | None = None
 
     def __post_init__(self) -> None:
+        if self.opening_possession is None:
+            object.__setattr__(self, "opening_possession", self.possession)
+        if not isinstance(self.opening_possession, FootballTeamSide):
+            raise ValueError("Opening possession must be a FootballTeamSide.")
         if not isinstance(self.team_a, FootballRoster) or not isinstance(
             self.team_b, FootballRoster
         ):
@@ -1072,6 +1218,9 @@ class FootballMatchState:
         elif self.awaited_action is FootballAwaitedAction.FOURTH_DOWN_DECISION:
             if self.current_drive_defensive_scheme is None:
                 raise ValueError("An active drive must have a defensive scheme.")
+        elif self.awaited_action is FootballAwaitedAction.GREEN_DOG_DECISION:
+            if self.current_drive_defensive_scheme is None or self.down != 1:
+                raise ValueError("A Green Dog offer follows a conversion inside a drive.")
         elif self.awaited_action is FootballAwaitedAction.CONVERSION:
             if (
                 self.conversion_team is None
@@ -1106,6 +1255,7 @@ _EVENT_ACTION_TYPES: Mapping[str, type[Enum]] = MappingProxyType({
     "fourth_down": FootballFourthDownAction,
     "conversion": FootballConversionAction,
     "automatic": FootballAutomaticAction,
+    "perk": FootballPerkDecision,
 })
 
 
@@ -1137,7 +1287,7 @@ _PLAY_RESULT_DEFAULTS = MappingProxyType({
     "points_scored": 0, "turnover": False, "possession_changed": False,
     "defensive_scheme": None, "incomplete": False, "offense_power": 0.0,
     "defense_power": 0.0, "perk_effects": [], "turnover_on_downs": False,
-    "turnover_type": None, "conversion_attempt": False,
+    "turnover_type": None, "conversion_attempt": False, "perk_activations": [],
 })
 
 
@@ -1161,6 +1311,7 @@ def play_result_to_save_data(result: FootballPlayResult) -> dict[str, Any]:
             result.turnover_type.value if result.turnover_type is not None else None
         ),
         "conversion_attempt": result.conversion_attempt,
+        "perk_activations": activations_to_save_data(result.perk_activations),
     }, _PLAY_RESULT_DEFAULTS)
 
 
@@ -1187,6 +1338,9 @@ def play_result_from_save_data(data: Any) -> FootballPlayResult:
             FootballTurnoverType, optional(data, "turnover_type", str, what), "turnover type"
         ),
         conversion_attempt=optional(data, "conversion_attempt", bool, what, False),
+        perk_activations=activations_from_save_data(
+            optional(data, "perk_activations", list, what, [])
+        ),
     ))
 
 
@@ -1195,7 +1349,7 @@ _EVENT_DEFAULTS = MappingProxyType({
     "scoring_team": None, "field_goal_distance": None, "perk_effects": [],
     "description": None, "gross_yards": None, "return_yards": None,
     "blocked": False, "card_id": None, "card_copy_id": None,
-    "reverses_event_sequences": [],
+    "reverses_event_sequences": [], "perk_activations": [],
 })
 
 
@@ -1228,6 +1382,7 @@ def match_event_to_save_data(event: FootballMatchEvent) -> dict[str, Any]:
         "card_id": event.card_id,
         "card_copy_id": event.card_copy_id,
         "reverses_event_sequences": list(event.reverses_event_sequences),
+        "perk_activations": activations_to_save_data(event.perk_activations),
     }, _EVENT_DEFAULTS)
 
 
@@ -1264,6 +1419,9 @@ def match_event_from_save_data(data: Any, sequence: int) -> FootballMatchEvent:
         card_copy_id=optional(data, "card_copy_id", str, what),
         reverses_event_sequences=tuple(
             optional(data, "reverses_event_sequences", list, what, [])
+        ),
+        perk_activations=activations_from_save_data(
+            optional(data, "perk_activations", list, what, [])
         ),
     ))
 
@@ -1335,6 +1493,7 @@ def match_state_to_save_data(
         "team_b_coach_upgrades": [
             effect.to_save_data() for effect in state.team_b_coach_upgrades
         ],
+        "opening_possession": state.opening_possession.value,
     }
     for name in _MATCH_DECK_FIELDS:
         deck = getattr(state, name)
@@ -1410,6 +1569,9 @@ def match_state_from_save_data(
         team_b_coach_upgrades=tuple(
             FootballCoachUpgradeEffect.from_save_data(item)
             for item in items(required(data, "team_b_coach_upgrades", list, what), "Upgrades")
+        ),
+        opening_possession=enum_value(
+            FootballTeamSide, required(data, "opening_possession", str, what), "team"
         ),
         **decks,
     ))

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import random
@@ -101,7 +102,7 @@ PHASES = {
 
 def test_round_trip_at_every_phase_and_decision() -> None:
     reached: dict[str, int] = {}
-    for seed in range(16):
+    for seed in range(64):
         controller = new_controller(seed)
         rng = random.Random(seed)
         while True:
@@ -118,7 +119,7 @@ def test_round_trip_at_every_phase_and_decision() -> None:
 
 
 def test_round_trip_preserves_challenge_snapshot_and_rng_state() -> None:
-    for seed in range(16):
+    for seed in range(64):
         controller = new_controller(seed)
         rng = random.Random(seed)
         while step(controller, rng):
@@ -177,6 +178,55 @@ def test_restored_run_continues_identically_to_the_original(seed: int) -> None:
             break
     assert restored.to_save_data() == controller.to_save_data()
     assert restored.state == controller.state
+
+
+def _continues_identically(controller: FootballGameController, seed: int, steps: int = 400) -> None:
+    restored = FootballGameController.from_save_data(json.loads(json.dumps(controller.to_save_data())))
+    original_choices, restored_choices = random.Random(seed), random.Random(seed)
+    for _ in range(steps):
+        assert _signature(restored) == _signature(controller)
+        more = step(controller, original_choices)
+        assert step(restored, restored_choices) is more
+        if not more:
+            break
+    assert restored.to_save_data() == controller.to_save_data()
+
+
+def _perk_state_reached(controller: FootballGameController) -> str | None:
+    """'charge' when a perk charge or rest-of-drive effect is armed; 'green dog' mid-prompt."""
+    from src.engine.football import FootballPlayerPerkKind as K
+    from src.engine.football_perk_context import perk_history
+
+    if controller.state.human_decision is FootballHumanDecision.GREEN_DOG:
+        return "green dog"
+    match = controller.state.match
+    if not _match(controller) or match is None:
+        return None
+    history = perk_history(match)
+    for side in (match.possession,):
+        if history.deep_charge(side, armed_by_completion=False, whole_game=False) or (
+            history.deep_charge(side, armed_by_completion=True, whole_game=True)
+        ) or history.used(K.SCREEN_WALL, side, "drive") or history.used(
+            K.CAPTAINS_ADJUSTMENT, side, "drive"
+        ):
+            return "charge"
+    return None
+
+
+def test_runs_with_perks_continue_identically_after_a_charge_and_mid_green_dog() -> None:
+    found: set[str] = set()
+    for seed in range(60):
+        controller = new_controller(seed)
+        rng = random.Random(seed)
+        while step(controller, rng):
+            reached = _perk_state_reached(controller)
+            if reached is not None and reached not in found:
+                found.add(reached)
+                _continues_identically(controller, seed)
+                break
+        if found == {"charge", "green dog"}:
+            break
+    assert found == {"charge", "green dog"}
 
 
 def test_restored_run_through_the_file_store_continues_identically(tmp_path: Path) -> None:
@@ -336,13 +386,20 @@ def test_delete_removes_the_save_and_its_backup(tmp_path: Path) -> None:
 def test_save_is_well_under_fifty_milliseconds_late_in_a_match(tmp_path: Path) -> None:
     import time
 
-    controller = new_controller(19)
-    rng = random.Random(19)
-    while not (
-        _match(controller) and controller.state.game_number >= 9
-        and controller.state.match.period >= 2
-    ):
-        assert step(controller, rng)
+    def late(controller: FootballGameController) -> bool:
+        return (
+            _match(controller) and controller.state.game_number >= 9
+            and controller.state.match.period >= 2
+        )
+
+    for seed in range(64):
+        controller = new_controller(seed)
+        rng = random.Random(seed)
+        while not late(controller) and step(controller, rng):
+            pass
+        if late(controller):
+            break
+    assert late(controller)
     store = _store(tmp_path)
     durations = []
     for _ in range(10):
@@ -411,6 +468,48 @@ def test_migration_template(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
     assert result.status is LoadStatus.OK
     assert result.controller.to_save_data() == expected
+
+
+def _mid_match_controller() -> FootballGameController:
+    for seed in range(40):
+        controller = new_controller(seed)
+        rng = random.Random(seed)
+        while step(controller, rng):
+            if _match(controller) and controller._simulator._challenge_snapshot is not None:
+                return controller
+    raise AssertionError("No mid-match state with a Challenge snapshot was reached.")
+
+
+def test_version_1_mid_match_save_migrates_to_version_2(tmp_path: Path) -> None:
+    """A v1 save has no opening receiver or perk activations; both are derived."""
+    controller = _mid_match_controller()
+    expected = json.loads(json.dumps(controller.to_save_data()))
+    old = copy.deepcopy(expected)
+    simulator = old["simulator"]
+    for match in (simulator["state"], simulator["challenge_snapshot"]):
+        del match["opening_possession"]
+    for event in simulator["state"]["match_events"]:
+        event.pop("perk_activations", None)
+        if "play_result" in event:
+            event["play_result"].pop("perk_activations", None)
+    _write_envelope(tmp_path / RUN_FILE_NAME, {"run": old}, 1)
+
+    result = _store(tmp_path).load()
+
+    assert result.status is LoadStatus.OK
+    restored = result.controller.to_save_data()
+    # The opening drive's offense received the opening kickoff (Team A in a run).
+    assert restored["simulator"]["state"]["opening_possession"] == "team_a"
+    assert restored["simulator"]["challenge_snapshot"]["opening_possession"] == "team_a"
+    events = result.controller.state.match.match_events
+    if not any(event.perk_activations for event in controller.state.match.match_events):
+        assert restored == expected
+    assert all(not event.perk_activations for event in events)
+
+
+def test_version_1_payload_between_matches_migrates_unchanged() -> None:
+    payload = {"run": {"simulator": None, "phase": "pre_match_shop"}}
+    assert migrate_payload(payload, 1) == payload
 
 
 def test_migrations_apply_in_order_without_changing_the_input() -> None:
@@ -492,7 +591,7 @@ def test_unknown_ids_and_bad_shapes_raise_unsupported_save(path, value, fragment
 def test_canonical_checksum_ignores_formatting() -> None:
     payload = {"b": [1, 2], "a": {"z": 1.5, "y": "é"}}
     assert canonical_json(payload) == '{"a":{"y":"é","z":1.5},"b":[1,2]}'.encode()
-    assert migrations.CURRENT_SCHEMA_VERSION == 1
+    assert migrations.CURRENT_SCHEMA_VERSION == 2
 
 
 def test_persistence_package_does_not_import_pygame() -> None:
@@ -508,3 +607,35 @@ def test_persistence_package_does_not_import_pygame() -> None:
         cwd=Path(__file__).resolve().parents[1],
     )
     assert result.stdout.strip() == "False"
+
+
+def _half_limited_perk_fired_this_half(controller: FootballGameController):
+    """The Bait & Jump or Keep Read kind that fired earlier in the match's current half."""
+    from src.engine.football import FootballPlayerPerkKind as K, FootballTeamSide
+    from src.engine.football_perk_context import perk_history
+
+    match = controller.state.match
+    if not _match(controller) or match is None:
+        return None
+    history = perk_history(match)
+    for kind in (K.BAIT_AND_JUMP, K.KEEP_READ):
+        if any(history.used(kind, side, "half") for side in FootballTeamSide):
+            return kind
+    return None
+
+
+def test_runs_continue_identically_after_bait_and_jump_or_keep_read_fired_this_half() -> None:
+    """Saved mid-half after a once-per-half perk fired, the restored run plays on alike."""
+    found = set()
+    for seed in range(400):
+        controller = new_controller(seed)
+        rng = random.Random(seed)
+        while step(controller, rng):
+            kind = _half_limited_perk_fired_this_half(controller)
+            if kind is not None and kind not in found:
+                found.add(kind)
+                _continues_identically(controller, seed)
+                break
+        if len(found) == 2:
+            break
+    assert len(found) == 2, found

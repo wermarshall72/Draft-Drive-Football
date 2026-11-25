@@ -519,6 +519,8 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
             human_fourth_downs += 1
         elif state.human_decision is FootballHumanDecision.CONVERSION:
             controller.choose_conversion(FootballConversionAction.EXTRA_POINT)
+        elif state.human_decision is FootballHumanDecision.GREEN_DOG:
+            controller.respond_to_green_dog(None)
         else:
             raise AssertionError(f"Unexpected decision: {state.human_decision}")
 
@@ -548,30 +550,30 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
     assert ai_offensive_plays > 0
 
     events = final.match.match_events
-    human_defense_drive_count = 0
-    for start in range(len(events)):
-        if events[start].possession is not FootballTeamSide.TEAM_B:
+    # Every human defensive drive starts with exactly one scheme call, right after
+    # the event that gave Team B the ball (a change of possession, a kick, a
+    # conversion, or a period change such as halftime or overtime).
+    scheme_indexes = [
+        index for index, event in enumerate(events)
+        if isinstance(event.action, DefensiveSchemeAction)
+        and event.possession is FootballTeamSide.TEAM_B
+    ]
+    for index in scheme_indexes:
+        if index == 0:
             continue
-        if start and events[start - 1].possession is FootballTeamSide.TEAM_B:
-            continue
-        end = start + 1
-        while end < len(events) and events[end].possession is FootballTeamSide.TEAM_B:
-            end += 1
-        drive = events[start:end]
-        schemes = [event for event in drive if isinstance(event.action, DefensiveSchemeAction)]
-        assert len(schemes) == 1
-        human_defense_drive_count += 1
-        scheme_index = drive.index(schemes[0])
-        assert scheme_index <= 1
-        if scheme_index == 1:
-            transition = drive[0]
-            if isinstance(transition.action, OffensivePlayAction):
-                assert transition.play_result is not None
-                assert transition.play_result.possession_changed
-            elif isinstance(transition.action, FootballAutomaticAction):
-                assert transition.action is FootballAutomaticAction.KICKOFF
-            else:
-                assert isinstance(transition.action, FootballFourthDownAction)
+        transition = events[index - 1]
+        assert transition.possession is FootballTeamSide.TEAM_B
+        if isinstance(transition.action, OffensivePlayAction):
+            assert transition.play_result is not None
+            period_changed = index >= 2 and events[index - 2].period != transition.period
+            assert transition.play_result.possession_changed or period_changed
+        elif isinstance(transition.action, FootballAutomaticAction):
+            assert transition.action is FootballAutomaticAction.KICKOFF
+        else:
+            assert isinstance(
+                transition.action, (FootballFourthDownAction, FootballConversionAction)
+            )
+    human_defense_drive_count = len(scheme_indexes)
     assert human_defense_drive_count == human_defensive_drives
 
 

@@ -38,9 +38,10 @@ def player_partnership_text(player_type: FootballPlayerType | None) -> tuple[str
 
 
 def player_perk_text(player_type: FootballPlayerType | None) -> str:
+    """'Perk: None', or the perk name, its card line, and its full rules on three lines."""
+    from src.ui.football_player_perks import perk_card_line, perk_rules
+
     perk = player_type.perk if player_type is not None else None
     if perk is None:
         return "Perk: None"
-    return (f"PLANNED / INACTIVE\nPerk: {perk.name}\nTrigger: {perk.trigger}\n"
-            f"Effect: {perk.effect}\nDuration: {perk.duration}\n"
-            f"Reset: {perk.reset}\nDependency: {perk.dependency}")
+    return f"Perk: {perk.name}\n{perk_card_line(perk)}\n{perk_rules(perk)}"

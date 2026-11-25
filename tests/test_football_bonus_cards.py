@@ -502,7 +502,11 @@ def test_challenge_restores_play_state_but_keeps_clock_draw_and_both_events() ->
     )
     reserve = FootballCardCopy("human:play:reserve", OffensivePlayAction.SCREEN_PASS.value)
     extra = FootballCardCopy("human:play:extra", OffensivePlayAction.PA_PASS.value)
-    offense = _deck((run, challenge, reserve, extra), (run, challenge), (reserve, extra))
+    # A spare card stays drawable for Challenge after the turnover's end-of-drive refill.
+    spare = FootballCardCopy("human:play:spare", OffensivePlayAction.SHORT_PASS.value)
+    offense = _deck(
+        (run, challenge, reserve, extra, spare), (run, challenge), (reserve, extra, spare)
+    )
     state = _match_state(offense, field_position=99.0, down=1, yards_to_go=1.0)
     simulator = FootballMatchSimulator(state)
     simulator.rng = _TurnoverRng(81)
@@ -616,10 +620,11 @@ def test_challenge_expires_when_turnover_crosses_period_boundary() -> None:
 
     after_play = simulator.resolve_offensive_play(play.copy_id)
 
-    result = after_play.match_events[-1].play_result
+    result = after_play.match_events[-2].play_result
     assert result is not None and result.turnover
+    assert after_play.match_events[-1].action.value == "kickoff"
     assert after_play.period == 2
-    assert after_play.game_clock_seconds == 900
+    assert after_play.game_clock_seconds == 890  # after the second-half kickoff
     assert simulator.available_challenge_copy_id is None
     with pytest.raises(ValueError, match="current human offensive decision"):
         simulator.resolve_bonus_card(bonus.copy_id)
@@ -873,11 +878,21 @@ def test_failed_fourth_down_also_prompts_before_the_opponent_advances() -> None:
         (short_pass, challenge),
         tuple(card for card in owned if card not in (short_pass, challenge)),
     )
+    # A basic safety unit, so no perk (such as Tip Drill) changes the incompletion.
+    from src.engine.football_player_catalog import player_from_type, player_types_for_position
+
+    team_b = simulator.state.team_b
+    basic_safeties = next(
+        item for item in player_types_for_position(FootballPosition.SAFETIES) if item.perk is None
+    )
     simulator.state = replace(
         simulator.state,
         down=4,
         yards_to_go=10.0,
         team_a_offense_deck=updated_deck,
+        team_b=replace(team_b, players={
+            **team_b.players, FootballPosition.SAFETIES: player_from_type(basic_safeties),
+        }),
     )
     controller_start = controller.state.match
     prompt = controller.choose_offensive_play(short_pass.copy_id)
