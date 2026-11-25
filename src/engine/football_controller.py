@@ -26,6 +26,14 @@ from src.engine.football import (
 from src.engine.football_coaches import FootballCoachPair
 from src.engine.football_appearance import FootballPlayerAppearance, POSITION_ART
 from src.engine.football_ai import FootballAI, FootballAIDifficulty
+from src.engine.football_ai_teams import (
+    SCHEDULED_AI_TEAMS,
+    FootballAITeam,
+    ai_team,
+    draw_run_ai_teams,
+    playoff_pool,
+    validate_run_ai_teams,
+)
 from src.engine.football_shop import (
     FootballShop,
     FootballShopCard,
@@ -64,6 +72,9 @@ from src.engine.football_team_builder import (
 
 
 PLAYOFF_BRACKET_SEED_SALT = 0x5EED_B4AC
+# The run's AI-team draw has its own stream from the AI seed, so it consumes
+# none of the AI's running RNG.
+AI_TEAMS_SEED_SALT = 0x7EA4_5C4D
 
 
 class FootballRunPhase(str, Enum):
@@ -138,6 +149,11 @@ class FootballGameControllerState:
     # skipped without a third loss). ``playoff_round`` is the current game's round.
     playoffs: FootballPlayoffBracketState | None = None
     playoff_round: FootballPlayoffRound | None = None
+    # The current game's AI team (the bracket opponent in the playoffs) and the
+    # ten regular-season rivals in schedule order (``regular_season_teams[n - 1]``
+    # is scheduled game n, including a game later skipped by Bye Week).
+    opponent_team: FootballAITeam | None = None
+    regular_season_teams: tuple[FootballAITeam, ...] = ()
 
 
 class FootballGameController:
@@ -162,17 +178,15 @@ class FootballGameController:
         shop_seed: int,
         ai_seed: int,
         match_seed: int,
-        opponent_name: str = "Local AI",
+        team_primary_color_id: str | None = None,
         shop_catalogs: Mapping[
             FootballShopSection, tuple[FootballShopCard, ...]
         ] | None = None,
     ) -> None:
         if not isinstance(team_name, str) or not team_name.strip():
             raise ValueError("Team name must be a non-empty string.")
-        if not isinstance(opponent_name, str) or not opponent_name.strip():
-            raise ValueError("Opponent name must be a non-empty string.")
-        if opponent_name.strip() == team_name.strip():
-            raise ValueError("Opponent name must differ from the player's team name.")
+        if team_primary_color_id is not None and not isinstance(team_primary_color_id, str):
+            raise ValueError("Team primary color must be a color id or None.")
         if not isinstance(difficulty, FootballAIDifficulty):
             raise ValueError("Difficulty must be a FootballAIDifficulty.")
         for seed_name, seed in (
@@ -194,15 +208,14 @@ class FootballGameController:
             if shop_catalogs is not None
             else None
         )
-        self._ai = FootballAI(
-            FootballTeamSide.TEAM_B,
-            difficulty,
-            ai_seed,
-            opponent_name,
+        self._ai = FootballAI(FootballTeamSide.TEAM_B, difficulty, ai_seed)
+        # Ten scheduled rivals, then ten playoff reserves; teams named like the
+        # human's or sharing its primary color are never drawn.
+        self._ai_teams = draw_run_ai_teams(
+            random.Random(ai_seed ^ AI_TEAMS_SEED_SALT), team_name, team_primary_color_id
         )
         self._match_seed_rng = random.Random(match_seed)
         self._difficulty = difficulty
-        self._opponent_name = opponent_name
         self._shop: FootballShop | None = None
         self._simulator: FootballMatchSimulator | None = None
         self._phase = FootballRunPhase.COACH_DRAFT
@@ -224,7 +237,8 @@ class FootballGameController:
     # match-seed stream, and the simulator's play and deck RNGs), so a restored
     # run continues exactly like an uninterrupted one. Rebuilt: the shop
     # catalogs, which come from the current game (or ``shop_catalogs``). The
-    # team name is the builder's; difficulty and opponent name are the AI's.
+    # team name is the builder's; difficulty is the AI's. The human's primary
+    # color is used only for the opening AI-team draw, which is saved.
 
     def to_save_data(self) -> dict[str, Any]:
         return {
@@ -233,7 +247,7 @@ class FootballGameController:
             "ai": self._ai.to_save_data(),
             "match_seed_rng": rng_to_data(self._match_seed_rng),
             "difficulty": self._difficulty.value,
-            "opponent_name": self._opponent_name,
+            "ai_teams": list(self._ai_teams),
             "shop": (
                 self._shop.to_save_data(include_rng=False)
                 if self._shop is not None else None
@@ -292,7 +306,12 @@ class FootballGameController:
         controller._difficulty = enum_value(
             FootballAIDifficulty, required(data, "difficulty", str, what), "difficulty"
         )
-        controller._opponent_name = required(data, "opponent_name", str, what)
+        controller._ai_teams = tuple(
+            team.team_id
+            for team in validate_run_ai_teams(
+                items(required(data, "ai_teams", list, what), "AI teams")
+            )
+        )
         shop = optional(data, "shop", dict, what)
         controller._shop = (
             FootballShop.from_save_data(
@@ -368,7 +387,7 @@ class FootballGameController:
             shop=self._shop.state if self._shop is not None else None,
             match=match,
             human_decision=self._human_decision(match),
-            opponent_name=self._current_opponent_name(),
+            opponent_name=self._current_opponent().name,
             opponent_difficulty=self._difficulty,
             selected_coach_pair=self._builder.selected_coach_pair,
             game_number=self._game_number,
@@ -387,18 +406,24 @@ class FootballGameController:
             season_history=tuple(self._season_history),
             playoffs=self._playoffs.state if self._playoffs is not None else None,
             playoff_round=playoff_round,
+            opponent_team=self._current_opponent(),
+            regular_season_teams=tuple(
+                ai_team(team_id) for team_id in self._ai_teams[:SCHEDULED_AI_TEAMS]
+            ),
         )
 
-    def _current_opponent_name(self) -> str:
-        """The AI's name in the regular season; the bracket opponent's in the playoffs."""
+    def _current_opponent(self) -> FootballAITeam:
+        """The scheduled rival in the regular season; the bracket opponent in the playoffs."""
         playoff_round = playoff_round_for_game(self._game_number)
-        if playoff_round is None or self._playoffs is None:
-            return self._opponent_name
-        game = self._playoffs.state.human_game(playoff_round)
-        if game is None:
-            return self._opponent_name
-        bracket = self._playoffs.state
-        return bracket.team(game.opponent_of(bracket.human_seed)).name
+        if playoff_round is not None and self._playoffs is not None:
+            bracket = self._playoffs.state
+            game = bracket.human_game(playoff_round)
+            if game is not None:
+                rival = bracket.team(game.opponent_of(bracket.human_seed)).ai_team
+                assert rival is not None
+                return rival
+        game = min(self._game_number, SCHEDULED_AI_TEAMS)
+        return ai_team(self._ai_teams[game - 1])
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.COACH_DRAFT)
@@ -625,7 +650,9 @@ class FootballGameController:
             raise ValueError("The pre-match shop must be finished before a match.")
         playoff_round = playoff_round_for_game(self._game_number)
         if playoff_round is None:
-            opponent = self._ai.generate_opponent_roster()
+            opponent = self._ai.generate_opponent_roster(
+                team_name=self._current_opponent().name
+            )
             bonus_cards = 0
         else:
             rival = self._require_playoffs().human_opponent(playoff_round)
@@ -755,12 +782,18 @@ class FootballGameController:
     def _create_playoffs(self) -> None:
         if self._playoffs is not None:
             raise RuntimeError("The playoff bracket already exists.")
+        played = [
+            game.game_number for game in self._season_history
+            if game.outcome is not FootballSeasonOutcome.BYE
+        ]
         self._playoffs = FootballPlayoffBracket(
             self._builder.team_name,
             self._losses,
             # Seeded from the AI's fixed seed so creating the bracket consumes no
             # running stream (a game-10 Bye Week still leaves them untouched).
             random.Random(self._ai.seed ^ PLAYOFF_BRACKET_SEED_SALT),
+            # Rivals played this season plus the reserves: rematches and new teams.
+            playoff_pool(self._ai_teams, played),
         )
 
     def _require_playoffs(self) -> FootballPlayoffBracket:

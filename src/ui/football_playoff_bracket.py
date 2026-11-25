@@ -18,6 +18,7 @@ from src.engine.football_playoffs import (
     FootballPlayoffGame,
     FootballPlayoffRound,
 )
+from src.ui.football_ai_team_colors import draw_team_chip, opponent_colors
 from src.ui.football_ui_kit import (
     MATCH_DIM, MATCH_GOLD, MATCH_INK, MATCH_MUTED, MATCH_PANEL, MATCH_PANEL_DEEP,
     MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT, MATCH_TEXT, blit_text, kit_button,
@@ -198,7 +199,13 @@ class FootballPlayoffBracketView:
         score_text = "" if score is None else str(score)
         score_font = plain_font(18)
         score_width = score_font.size("00")[0] + (22 if game.overtime else 0)
-        name_box = pygame.Rect(badge.right + 8, row.top, row.right - 12 - score_width - badge.right - 16,
+        name_left = badge.right + 8
+        if team.ai_team is not None:
+            chip = pygame.Rect(name_left, 0, 16, 14)
+            chip.centery = row.centery
+            draw_team_chip(surface, chip, opponent_colors(team.ai_team))
+            name_left = chip.right + 7
+        name_box = pygame.Rect(name_left, row.top, row.right - 12 - score_width - name_left - 8,
                                row.height)
         name_font = plain_font(16)
         blit_text(surface, name_font, fit_text(team.name.upper(), name_font, name_box.width), ink,
@@ -224,6 +231,10 @@ class FootballPlayoffBracketView:
         font = plain_font(22)
         blit_text(surface, font, fit_text(team.name.upper(), font, rect.width - 24),
                   accent if team.is_human else MATCH_TEXT, rect, center=(rect.centerx, rect.top + 96))
+        if team.ai_team is not None:
+            chip = pygame.Rect(0, 0, 28, 6)
+            chip.midtop = (rect.centerx, rect.top + 110)
+            pygame.draw.rect(surface, opponent_colors(team.ai_team).accent, chip, border_radius=3)
         blit_text(surface, match_font(12), f"#{seed} SEED", MATCH_MUTED, rect,
                   center=(rect.centerx, rect.top + 124))
 

@@ -536,21 +536,32 @@ def test_version_2_save_at_the_old_playoffs_marker_migrates_into_the_playoffs(
     )
     expected = json.loads(json.dumps(controller.to_save_data()))
     old = copy.deepcopy(expected)
-    del old["playoffs"]
+    del old["playoffs"], old["ai_teams"]
+    old["opponent_name"] = "Local AI"
     old["phase"] = "playoffs"
     _write_envelope(tmp_path / RUN_FILE_NAME, {"run": old}, 2)
 
     result = _store(tmp_path).load()
 
     assert result.status is LoadStatus.OK
-    # The bracket is seeded from the AI seed alone, so it is the one the run had.
-    assert result.controller.to_save_data() == expected
+    restored = result.controller.to_save_data()
+    # Version 4 gave the old run the fixed legacy AI-team draw; the bracket is
+    # seeded from the AI seed alone, so only its AI teams differ.
+    assert restored["ai_teams"] == [team_id for team_id, _ in migrations._V4_LEGACY_RUN_TEAMS[:20]]
+    bracket, original = restored.pop("playoffs"), expected.pop("playoffs")
+    assert {**bracket, "team_ids": None} == {**original, "team_ids": None}
+    # The retained game-10 match now names its AI roster after the legacy rival.
+    assert restored["simulator"]["state"]["team_b"]["team_name"] == (
+        migrations._V4_LEGACY_RUN_TEAMS[9][1]
+    )
+    ignored = {"ai_teams": None, "simulator": None}
+    assert {**restored, **ignored} == {**expected, **ignored}
     assert result.controller.state.human_decision is FootballHumanDecision.OPEN_NEXT_SHOP
 
 
 def test_version_2_payload_gains_an_empty_bracket() -> None:
     payload = {"run": {"simulator": None, "phase": "pre_match_shop"}}
-    assert migrate_payload(payload, 2) == {
+    assert migrate_payload(payload, 2, to_version=3) == {
         "run": {"simulator": None, "phase": "pre_match_shop", "playoffs": None},
     }
 
@@ -659,7 +670,7 @@ def test_unknown_ids_and_bad_shapes_raise_unsupported_save(path, value, fragment
 def test_canonical_checksum_ignores_formatting() -> None:
     payload = {"b": [1, 2], "a": {"z": 1.5, "y": "é"}}
     assert canonical_json(payload) == '{"a":{"y":"é","z":1.5},"b":[1,2]}'.encode()
-    assert migrations.CURRENT_SCHEMA_VERSION == 3
+    assert migrations.CURRENT_SCHEMA_VERSION == 4
 
 
 def test_persistence_package_does_not_import_pygame() -> None:
@@ -707,3 +718,113 @@ def test_runs_continue_identically_after_bait_and_jump_or_keep_read_fired_this_h
         if len(found) == 2:
             break
     assert len(found) == 2, found
+
+
+# -- version 4: AI team identities ----------------------------------------------------
+
+_PLACEHOLDERS = tuple(migrations._V4_PLACEHOLDER_TEAMS)
+
+
+def _as_version_3(data: dict) -> dict:
+    """A current payload rewritten the way version 3 saved it.
+
+    The run gets ``opponent_name`` instead of ``ai_teams``; a bracket lists
+    names (the AI seeds take placeholder names in seed order); a live match's AI
+    roster carries the old name ("Local AI", or the placeholder in the playoffs).
+    """
+    old = copy.deepcopy(data)
+    del old["ai_teams"]
+    old["opponent_name"] = "Local AI"
+    bracket = old.get("playoffs")
+    placeholder_of: dict[int, str] = {}
+    if bracket is not None:
+        names = []
+        for seed, team_id in enumerate(bracket.pop("team_ids"), start=1):
+            if team_id is None:
+                names.append(bracket["human_name"])
+            else:
+                placeholder_of[seed] = _PLACEHOLDERS[len(placeholder_of)]
+                names.append(placeholder_of[seed])
+        del bracket["human_name"]
+        bracket["teams"] = names
+    simulator = old.get("simulator")
+    if simulator is not None:
+        old_name = "Local AI"
+        if old["game_number"] > 10:
+            game = next(
+                game for game in bracket["games"]
+                if game["round"] == old["game_number"] - 10
+                and bracket["human_seed"] in (game["high_seed"], game["low_seed"])
+            )
+            other = game["low_seed"] if game["high_seed"] == bracket["human_seed"] else game["high_seed"]
+            old_name = placeholder_of[other]
+        for match in (simulator["state"], simulator.get("challenge_snapshot")):
+            if match and "team_b" in match:
+                migrations._rename_team_b(match, old_name)
+    return old
+
+
+def test_version_3_mid_match_save_meets_its_legacy_rival(tmp_path: Path) -> None:
+    controller = _mid_match_controller()
+    game = controller.state.game_number
+    old = _as_version_3(json.loads(json.dumps(controller.to_save_data())))
+    assert old["simulator"]["state"]["team_b"]["team_name"] == "Local AI"
+    _write_envelope(tmp_path / RUN_FILE_NAME, {"run": old}, 3)
+
+    result = _store(tmp_path).load()
+
+    assert result.status is LoadStatus.OK
+    restored = result.controller
+    legacy = [team_id for team_id, _name in migrations._V4_LEGACY_RUN_TEAMS[:20]]
+    assert list(restored._ai_teams) == legacy
+    rival = restored.state.opponent_team
+    assert rival.team_id == legacy[game - 1]
+    roster = restored.state.match.team_b
+    assert roster.team_name == rival.name
+    assert roster.special_teams.name == f"{rival.name} Special Teams"
+    assert all(player.name.startswith(f"{rival.name} ") for player in roster.players.values())
+    assert "opponent_name" not in restored.to_save_data()
+    rng = random.Random(1)
+    for _ in range(50):
+        step(restored, rng)
+
+
+def test_version_3_playoff_save_maps_placeholders_to_catalog_teams(tmp_path: Path) -> None:
+    controller, _seed = _reach_playoffs(
+        lambda state: state.phase is FootballRunPhase.MATCH and state.game_number == 12
+    )
+    old = _as_version_3(json.loads(json.dumps(controller.to_save_data())))
+    placeholders = [name for name in old["playoffs"]["teams"] if name in _PLACEHOLDERS]
+    _write_envelope(tmp_path / RUN_FILE_NAME, {"run": old}, 3)
+
+    result = _store(tmp_path).load()
+
+    assert result.status is LoadStatus.OK
+    state = result.controller.state
+    ai_names = [team.name for team in state.playoffs.teams if not team.is_human]
+    assert ai_names == [migrations._V4_PLACEHOLDER_TEAMS[name][1] for name in placeholders]
+    assert state.match.team_b.team_name == state.opponent_team.name
+    assert state.opponent_team.name in ai_names
+
+
+def test_version_3_migration_avoids_the_human_team_name() -> None:
+    # Ridgeline would become the Bighorns, so the spare takes its place.
+    payload = {"run": {
+        "builder": {"team_name": "Bighorns"}, "opponent_name": "Local AI",
+        "game_number": 1, "simulator": None,
+        "playoffs": {"human_seed": 1, "games": [], "teams": [
+            "Bighorns", "Ridgeline", "Harbor City", "Prairie State", "Iron Valley",
+            "Lakeshore", "Red Mesa", "Pine Hollow",
+        ]},
+    }}
+    run = migrate_payload(payload, 3)["run"]
+    assert run["ai_teams"] == [team for team, _ in migrations._V4_LEGACY_RUN_TEAMS[:20]]
+    assert run["playoffs"]["human_name"] == "Bighorns"
+    assert run["playoffs"]["team_ids"][:2] == [None, migrations._V4_PLACEHOLDER_SPARE[0]]
+    renamed = migrate_payload({"run": {**payload["run"], "builder": {"team_name": "wolves"},
+                                       "playoffs": None}}, 3)["run"]
+    assert "wolves" not in renamed["ai_teams"] and len(renamed["ai_teams"]) == 20
+    with pytest.raises(UnsupportedSave, match="Unknown playoff team"):
+        bad = copy.deepcopy(payload)
+        bad["run"]["playoffs"]["teams"][3] = "Local AI"
+        migrate_payload(bad, 3)

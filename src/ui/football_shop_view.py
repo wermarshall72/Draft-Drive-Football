@@ -25,6 +25,7 @@ from src.engine.football_shop import (
 )
 from src.engine.football_playoffs import game_label
 from src.ui.coach_art import draw_coach_portrait
+from src.ui.football_ai_team_colors import draw_team_chip, opponent_colors
 from src.ui.football_card_art import draw_card_art
 from src.ui.football_card_faces import card_art_name, draw_play_card_face
 from src.ui.football_coach_upgrade_details import (
@@ -68,6 +69,7 @@ from src.ui.football_ui_kit import (
     draw_stat_value,
     fit_wrapped,
     kit_button,
+    match_font,
     mix,
     plain_font,
     rarity_color,
@@ -250,6 +252,7 @@ class FootballShopView:
                               topleft=(swatch.right + 8, sub_y - 2))
         blit_text(surface, sub_font, tail, MATCH_MUTED, content, topleft=(name_rect.right, sub_y - 2))
         pygame.draw.rect(surface, accent, (title.right + 10, title.centery - 2, 34, 4), border_radius=2)
+        self._draw_next_opponent(surface, content, title)
 
         number_font = plain_font(40)
         number = str(shop.remaining_ap)
@@ -278,6 +281,23 @@ class FootballShopView:
         if message:
             banner = pygame.Rect(content.left + 420, content.top + 2, right_edge - content.left - 420, 50)
             draw_message_banner(surface, banner, message, danger=error)
+
+    def _draw_next_opponent(self, surface: pygame.Surface, content: pygame.Rect,
+                            title: pygame.Rect) -> None:
+        """``NEXT  [chip] RIVAL`` on the title row, left of the message banner area."""
+        rival = self._run_state.opponent_team if self._run_state is not None else None
+        if rival is None:
+            return
+        label_font, name_font = match_font(12), plain_font(18)
+        left = title.right + 58
+        label = blit_text(surface, label_font, "NEXT", MATCH_MUTED, content,
+                          midleft=(left, title.centery + 1))
+        chip = pygame.Rect(0, 0, 18, 14)
+        chip.midleft = (label.right + 8, title.centery)
+        draw_team_chip(surface, chip, opponent_colors(rival))
+        room = content.left + 410 - (chip.right + 8)
+        blit_text(surface, name_font, fit_text(rival.name.upper(), name_font, room), MATCH_TEXT,
+                  content, midleft=(chip.right + 8, title.centery + 1))
 
     def _draw_panel(self, surface: pygame.Surface, rect: pygame.Rect, title: str) -> None:
         pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=12)

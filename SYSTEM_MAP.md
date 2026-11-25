@@ -242,6 +242,13 @@ covers extracted interaction state.
   continues; ended playoff runs add VIEW BRACKET. An injectable clock drives a
   score count-up that never blocks the button; the Bye Week game-10 result
   never shows the retained previous match.
+  [football_ai_team_colors.py](src/ui/football_ai_team_colors.py) turns an AI
+  team's color ids into display colors (`opponent_colors`, neutral steel when
+  there is no team) and the two-color `draw_team_chip`; the scoreboard helmet,
+  rails, and card backs, the AI end zone and markers, the result hero, stat
+  bars, and season-tracker/playoff-path rival tags, the bracket rows, and the
+  shop header's NEXT opponent use it (see
+  [test_football_ai_team_colors.py](tests/test_football_ai_team_colors.py)).
   [football_playoff_bracket.py](src/ui/football_playoff_bracket.py) draws the
   eight-team bracket; the run screen shows it (`bracket_open`, a UI-only step)
   between a result and the next playoff shop, or from an ended run's result. [football_result_stats.py](src/ui/football_result_stats.py)
@@ -329,7 +336,14 @@ covers extracted interaction state.
   pairings, AI-vs-AI results, `game_label`) is created when the regular
   season ends and saved with the run; playoff rivals come from
   `FootballAI.generate_opponent_roster(team_name=, power_bonus=)` and
-  `generate_opponent_decks(bonus_cards=)`. Coach upgrades are implemented as
+  `generate_opponent_decks(bonus_cards=)`. AI team identities (name,
+  abbreviation, colors) come from the catalog in
+  [football_ai_teams.py](src/engine/football_ai_teams.py): the controller draws
+  20 teams at run start (`draw_run_ai_teams`; ten scheduled rivals, then ten
+  reserves, skipping the human's name and profile primary color), exposes
+  `opponent_team` and `regular_season_teams` on its state, and passes
+  `playoff_pool` (played rivals plus reserves) to the bracket. See
+  [test_football_ai_teams.py](tests/test_football_ai_teams.py). Coach upgrades are implemented as
   an initial catalog. The controller routes Green Dog offers (`respond_to_green_dog`,
   `FootballHumanDecision.GREEN_DOG`). See
   [test_football_controller.py](tests/test_football_controller.py),
@@ -349,7 +363,9 @@ checksummed envelope, `run.json`/`run.backup.json` rotation, load fallbacks
 (`LoadResult`/`LoadStatus`), moving damaged or abandoned files aside, and the
 `save_run`/`load_run`/`delete_run` helpers; [migrations.py](src/persistence/migrations.py)
 holds `CURRENT_SCHEMA_VERSION` and the `N -> N+1` registry (version 2 added
-the match's `opening_possession` and per-event perk activations). The engine owns
+the match's `opening_possession` and per-event perk activations; version 4
+replaced `opponent_name` with the run's `ai_teams` draw and the bracket's
+placeholder names with catalog `team_ids`). The engine owns
 the payload: `to_save_data`/`from_save_data` on the controller, team builder,
 shop, AI, simulator, and match models in [football.py](src/engine/football.py),
 with shared helpers and `UnsupportedSave` in [save_data.py](src/engine/save_data.py).

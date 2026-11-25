@@ -399,11 +399,13 @@ def test_full_draft_shop_and_match_lifecycle_starts_team_a_against_local_ai() ->
     match_view = controller.finish_shop()
     assert match_view.phase is FootballRunPhase.MATCH
     assert match_view.human_decision is FootballHumanDecision.OFFENSIVE_PLAY
-    assert match_view.opponent_name == "Local AI"
+    rival = match_view.regular_season_teams[0]
+    assert match_view.opponent_team is rival
+    assert match_view.opponent_name == rival.name
     assert match_view.opponent_difficulty is FootballAIDifficulty.STANDARD
     assert match_view.match is not None
     assert match_view.match.team_a.team_name == "Human Team"
-    assert match_view.match.team_b.team_name == "Local AI"
+    assert match_view.match.team_b.team_name == rival.name
     assert (
         match_view.match.team_a.coach_assignment
         == selected_pair.assignment
@@ -959,7 +961,7 @@ def test_public_state_is_immutable_and_contains_ui_rendering_data() -> None:
     state = controller.state
     assert state.phase is FootballRunPhase.MATCH
     assert state.human_decision is FootballHumanDecision.OFFENSIVE_PLAY
-    assert state.opponent_name == "Local AI"
+    assert state.opponent_name == state.regular_season_teams[0].name
     assert state.opponent_difficulty is FootballAIDifficulty.HARD
     assert state.game_number == 1
     assert state.wins == 0 and state.losses == 0

@@ -341,3 +341,50 @@ def test_score_count_up_uses_injected_clock_without_blocking_the_button(finished
 def test_result_view_rejects_missing_match(finished) -> None:
     with pytest.raises(RuntimeError, match="completed match"):
         _draw(replace(finished, match=None))
+
+
+def _widest_abbreviations(count: int):
+    from src.engine.football_ai_teams import AI_TEAM_CATALOG
+    from src.ui.football_ui_kit import match_font
+
+    font = match_font(11)
+    return tuple(sorted(AI_TEAM_CATALOG, key=lambda team: -font.size(team.abbreviation)[0])[:count])
+
+
+def test_season_tracker_tags_each_game_with_its_rival(finished) -> None:
+    rivals = _widest_abbreviations(10)
+    state = replace(
+        _season(finished, FootballRunPhase.READY_FOR_NEXT_GAME, [_played(1, W), _played(2, L)]),
+        regular_season_teams=rivals,
+    )
+    _buttons, _texts, records, _calls, _view = _draw(state)
+    for number, rival in enumerate(rivals, start=1):
+        label = next(rect for text, rect, _c in records if text == f"G{number}")
+        tag, container = next((rect, c) for text, rect, c in records if text == rival.abbreviation)
+        assert container.contains(tag) and not tag.colliderect(label), rival
+
+
+def test_playoff_path_tags_each_paired_rival(finished) -> None:
+    bracket = _bracket((QF, 24, 20))
+    state = replace(finished, phase=FootballRunPhase.READY_FOR_NEXT_GAME, game_number=11,
+                    playoffs=bracket, playoff_round=QF)
+    _buttons, texts, records, _calls, _view = _draw(state)
+    for playoff_round, label in ((QF, "QF"), (SF, "SF")):
+        game = bracket.human_game(playoff_round)
+        rival = bracket.team(game.opponent_of(bracket.human_seed)).ai_team
+        tag = next(rect for text, rect, _c in records if text == rival.abbreviation)
+        assert not tag.colliderect(next(rect for text, rect, _c in records if text == label))
+
+
+def test_hero_and_stats_use_the_rivals_colors(finished) -> None:
+    from src.ui.football_ai_team_colors import opponent_colors
+
+    rival = finished.opponent_team
+    assert rival is not None and rival.name == finished.match.team_b.team_name
+    surface = pygame.Surface((1280, 720))
+    FootballResultView(lambda: None, lambda: None, lambda: None).draw(
+        surface, finished, Theme.from_profile(new_team_profile("Test Owls", "navy", "gold")))
+    from src.ui.football_result import STATS
+
+    marker = surface.get_at((STATS.right - 18, STATS.top + 20))
+    assert marker[:3] == tuple(opponent_colors(rival).accent)[:3]

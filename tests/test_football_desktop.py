@@ -1649,7 +1649,11 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     initial = controller.state.match
     assert initial is not None
     assert initial.team_a.team_name == "Test Owls"
-    assert initial.team_b.team_name == "Local AI"
+    rival = controller.state.regular_season_teams[0]
+    assert initial.team_b.team_name == rival.name
+    # The schedule never draws a rival wearing the profile's primary color.
+    primary = desktop.menu_state.profile.primary_color_id
+    assert all(team.primary_color_id != primary for team in controller.state.regular_season_teams)
 
     seen_offense = seen_defense = seen_ai_play = seen_two_point = False
     for _ in range(1200):

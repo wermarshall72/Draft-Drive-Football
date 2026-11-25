@@ -9,9 +9,10 @@ import pygame
 
 from src.engine.football import FootballAwaitedAction, FootballMatchState, FootballTeamSide
 from src.engine.football_playoffs import game_label
+from src.ui.football_ai_team_colors import NEUTRAL_OPPONENT, OpponentColors
 from src.ui.football_match_events import period_label
 from src.ui.football_match_palette import (
-    MATCH_DIM, MATCH_INK, MATCH_MUTED, MATCH_OPPONENT, MATCH_OPPONENT_DARK,
+    MATCH_DIM, MATCH_INK, MATCH_MUTED,
     MATCH_PANEL, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT,
     MATCH_TEXT, blit_text, match_font, mix, plain_font,
 )
@@ -105,6 +106,7 @@ def draw_scoreboard(
     wins: int,
     losses: int,
     kickoff_next: bool = False,
+    opponent: OpponentColors = NEUTRAL_OPPONENT,
 ) -> pygame.Rect:
     """Draw everything except the PAUSE button; returns the opponent hand-count area."""
     pygame.draw.rect(surface, MATCH_PANEL_DEEP, rect, border_radius=12)
@@ -115,13 +117,13 @@ def draw_scoreboard(
     half = rect.width // 2
     team_rail = theme.primary_accent if match.possession is FootballTeamSide.TEAM_A else mix(
         theme.primary_accent, MATCH_PANEL, 0.55)
-    opp_rail = MATCH_OPPONENT if match.possession is FootballTeamSide.TEAM_B else mix(
-        MATCH_OPPONENT, MATCH_PANEL, 0.55)
+    opp_rail = opponent.accent if match.possession is FootballTeamSide.TEAM_B else mix(
+        opponent.accent, MATCH_PANEL, 0.55)
     pygame.draw.rect(surface, team_rail, (rect.left + 14, rect.bottom - 6, half - 40, 3))
     pygame.draw.rect(surface, opp_rail, (rect.centerx + 26, rect.bottom - 6, half - 40, 3))
 
     _draw_team_block(surface, rect, match, theme)
-    opponent_hand = _draw_opponent_block(surface, rect, match)
+    opponent_hand = _draw_opponent_block(surface, rect, match, opponent)
     _draw_center(surface, rect, match, game_number, wins, losses, kickoff_next)
     return opponent_hand
 
@@ -159,16 +161,17 @@ def _draw_team_block(
 
 
 def _draw_opponent_block(
-    surface: pygame.Surface, rect: pygame.Rect, match: FootballMatchState
+    surface: pygame.Surface, rect: pygame.Rect, match: FootballMatchState,
+    opponent: OpponentColors = NEUTRAL_OPPONENT,
 ) -> pygame.Rect:
     helmet_box = pygame.Rect(rect.right - 14 - 72, rect.top + 12, 72, 66)
-    sprite = _helmet_sprite(tuple(MATCH_OPPONENT[:3]), 60)
+    sprite = _helmet_sprite(tuple(opponent.primary[:3]), 60)
     if sprite is not None:
         # The menu helmet faces right; mirror it to face our team across the board.
         sprite = pygame.transform.flip(sprite, True, False)
         surface.blit(sprite, sprite.get_rect(center=helmet_box.center))
     else:
-        pygame.draw.ellipse(surface, MATCH_OPPONENT, helmet_box.inflate(-8, -6))
+        pygame.draw.ellipse(surface, opponent.primary, helmet_box.inflate(-8, -6))
 
     right = helmet_box.left - 14
     name_font = plain_font(20)
@@ -183,7 +186,8 @@ def _draw_opponent_block(
     if match.possession is FootballTeamSide.TEAM_B:
         draw_football_icon(surface, (cursor - 11, rect.top + 60), 22, pygame.Color("#b5733d"))
         cursor -= 34
-    return draw_opponent_hand(surface, match, right_edge=cursor, center_y=rect.top + 60)
+    return draw_opponent_hand(surface, match, right_edge=cursor, center_y=rect.top + 60,
+                              colors=opponent)
 
 
 def opponent_hand_counts(match: FootballMatchState) -> tuple[int, int]:
@@ -196,7 +200,8 @@ def opponent_hand_counts(match: FootballMatchState) -> tuple[int, int]:
 
 
 def draw_opponent_hand(
-    surface: pygame.Surface, match: FootballMatchState, *, right_edge: int, center_y: int
+    surface: pygame.Surface, match: FootballMatchState, *, right_edge: int, center_y: int,
+    colors: OpponentColors = NEUTRAL_OPPONENT,
 ) -> pygame.Rect:
     """Face-down backs with counts only; the AI's card identities never render."""
     offense_count, defense_count = opponent_hand_counts(match)
@@ -212,7 +217,7 @@ def draw_opponent_hand(
         x -= 6 + 8 * max(0, shown - 1) + 12
         for index in range(shown):
             back = pygame.Rect(x + index * 8, center_y - 9, 12, 18)
-            draw_card_back(surface, back, MATCH_OPPONENT_DARK, MATCH_OPPONENT)
+            draw_card_back(surface, back, colors.dark, colors.accent)
         if not shown:
             empty = pygame.Rect(x, center_y - 9, 12, 18)
             pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, empty, 1, border_radius=2)

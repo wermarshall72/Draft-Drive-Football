@@ -10,6 +10,7 @@ import pygame
 
 from src.engine.football import FootballMatchState, FootballTeamSide
 from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG
+from src.ui.football_ai_team_colors import NEUTRAL_OPPONENT, OpponentColors
 from src.ui.football_match_events import (
     PlayLine,
     PlayLineKind,
@@ -17,7 +18,7 @@ from src.ui.football_match_events import (
     direction,
 )
 from src.ui.football_match_palette import (
-    FIRST_DOWN_LINE, LINE_OF_SCRIMMAGE, MATCH_FOCUS, MATCH_INK, MATCH_OPPONENT,
+    FIRST_DOWN_LINE, LINE_OF_SCRIMMAGE, MATCH_FOCUS, MATCH_INK,
     MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_TEXT, PLAY_LINE_CASING, PLAY_LINE_OTHER,
     PLAY_LINE_PASS, PLAY_LINE_RUN, TURF_DARK, TURF_EDGE, TURF_LIGHT, TURF_LINE,
     blit_text, match_font, mix, plain_font,
@@ -124,8 +125,10 @@ def _turf_surface(size: tuple[int, int]) -> pygame.Surface:
 
 
 def _end_zone(
-    surface: pygame.Surface, rect: pygame.Rect, fill: pygame.Color, name: str, *, left: bool
+    surface: pygame.Surface, rect: pygame.Rect, fill: pygame.Color, name: str, *, left: bool,
+    short: str | None = None,
 ) -> None:
+    """Fill and stripe an end zone and letter it with the team name (or ``short`` if it won't fit)."""
     pygame.draw.rect(surface, fill, rect)
     stripe = mix(fill, pygame.Color("#000000"), 0.16)
     clip = surface.get_clip()
@@ -137,7 +140,10 @@ def _end_zone(
     surface.set_clip(clip)
     ink = readable_ink(fill)
     font = plain_font(30)
-    text = fit_text(name.upper(), font, rect.height - 24)
+    available = rect.height - 24
+    if short and font.size(name.upper())[0] > available:
+        name = short
+    text = fit_text(name.upper(), font, available)
     label = font.render(text, True, ink)
     rotated = pygame.transform.rotate(label, 90 if left else -90)
     surface.blit(rotated, rotated.get_rect(center=rect.center))
@@ -266,13 +272,16 @@ def draw_match_field(
     *,
     human_scheme_highlight: bool,
     kickoff_pending: bool = False,
+    opponent: OpponentColors = NEUTRAL_OPPONENT,
+    opponent_short: str | None = None,
 ) -> FieldGeometry:
     geometry = field_geometry(rect)
     pygame.draw.rect(surface, TURF_EDGE, rect, border_radius=10)
     pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=10)
     surface.blit(_turf_surface(geometry.playing.size), geometry.playing.topleft)
     _end_zone(surface, geometry.left_end_zone, team_color, match.team_a.team_name, left=True)
-    _end_zone(surface, geometry.right_end_zone, MATCH_OPPONENT, match.team_b.team_name, left=False)
+    _end_zone(surface, geometry.right_end_zone, opponent.primary, match.team_b.team_name,
+              left=False, short=opponent_short)
     for x in (geometry.playing.left, geometry.playing.right):
         pygame.draw.line(surface, TURF_LINE, (x, geometry.turf.top), (x, geometry.turf.bottom), 3)
 
@@ -318,7 +327,7 @@ def draw_match_field(
     if in_progress:
         heading = direction(side)
         arrow_y = geometry.turf.bottom - 26
-        color = team_color if side is FootballTeamSide.TEAM_A else MATCH_OPPONENT
+        color = team_color if side is FootballTeamSide.TEAM_A else opponent.accent
         tip_x = los_x + heading * 34
         pygame.draw.line(surface, PLAY_LINE_CASING, (los_x, arrow_y), (tip_x, arrow_y), 7)
         pygame.draw.line(surface, MATCH_TEXT, (los_x, arrow_y), (tip_x, arrow_y), 3)

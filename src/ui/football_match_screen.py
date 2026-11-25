@@ -58,6 +58,7 @@ from src.ui.football_pause_menu import (
 from src.ui.football_match_scoreboard import SCOREBOARD_HEIGHT, draw_scoreboard
 from src.ui.football_ui_kit import stadium_backdrop
 from src.ui.text import fit_text
+from src.ui.football_ai_team_colors import opponent_colors
 from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button
 
@@ -284,10 +285,11 @@ class FootballMatchScreen:
             self.interaction.cancel_drag()
 
         surface.blit(_backdrop(surface.get_size()), (0, 0))
+        opponent = opponent_colors(state.opponent_team)
         opponent_hand_rect = draw_scoreboard(
             surface, SCOREBOARD_RECT, display, self.theme,
             game_number=state.game_number, wins=state.wins, losses=state.losses,
-            kickoff_next=kicking_next is not None,
+            kickoff_next=kicking_next is not None, opponent=opponent,
         )
 
         events = display.match_events
@@ -311,6 +313,10 @@ class FootballMatchScreen:
         draw_match_field(
             surface, FIELD_RECT, display, self.theme.primary, overlay,
             human_scheme_highlight=True, kickoff_pending=kicking_next is not None,
+            opponent=opponent,
+            opponent_short=(
+                state.opponent_team.abbreviation if state.opponent_team is not None else None
+            ),
         )
         draw_perk_tray(surface, PERK_TRAY_RECT, display)
         decision = state.human_decision

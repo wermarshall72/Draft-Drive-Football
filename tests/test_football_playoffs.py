@@ -9,13 +9,13 @@ import pytest
 
 from src.engine.football_playoffs import (
     FIRST_ROUND_PAIRS,
-    PLAYOFF_TEAM_NAMES,
     FootballPlayoffBracket,
     FootballPlayoffRound,
     game_label,
     human_seed_for_losses,
     playoff_round_for_game,
 )
+from src.engine.football_ai_teams import AI_TEAMS_BY_ID
 from src.engine.save_data import UnsupportedSave
 
 QF, SF, CH = FootballPlayoffRound
@@ -44,14 +44,32 @@ def test_first_round_pairs_one_v_eight_in_bracket_order_with_unique_names() -> N
     assert [(game.high_seed, game.low_seed) for game in bracket.games] == list(FIRST_ROUND_PAIRS)
     names = [team.name for team in bracket.teams]
     assert len(set(names)) == 8
-    assert all(name in PLAYOFF_TEAM_NAMES for name in names if name != "Owls")
+    for team in bracket.teams:
+        if team.is_human:
+            assert team.ai_team is None
+        else:
+            assert team.ai_team is AI_TEAMS_BY_ID[team.ai_team.team_id]
+            assert team.name == team.ai_team.name
     assert bracket.next_human_round is QF
 
 
 def test_ai_names_never_repeat_the_human_team_name() -> None:
     for seed in range(40):
-        names = [team.name for team in _bracket(seed=seed, name="Ridgeline").state.teams]
-        assert names.count("Ridgeline") == 1
+        names = [team.name for team in _bracket(seed=seed, name="herons").state.teams]
+        assert [name.casefold() for name in names].count("herons") == 1
+
+
+def test_ai_seeds_come_only_from_the_given_pool() -> None:
+    pool = ("herons", "comets", "anvils", "yetis", "tigers", "otters", "bison", "lynx")
+    for seed in range(20):
+        bracket = FootballPlayoffBracket("Owls", 0, random.Random(seed), pool).state
+        ids = [team.ai_team.team_id for team in bracket.teams if team.ai_team is not None]
+        assert len(set(ids)) == 7 and set(ids) <= set(pool)
+    with pytest.raises(ValueError, match="at least 7"):
+        FootballPlayoffBracket("Owls", 0, random.Random(1), pool[:6])
+    # A pool team named like the human's never enters the field.
+    with pytest.raises(ValueError, match="at least 7"):
+        FootballPlayoffBracket("Herons", 0, random.Random(1), pool[:7])
 
 
 def test_each_recorded_round_decides_the_others_and_pairs_winners_in_order() -> None:
@@ -146,7 +164,13 @@ def test_bracket_round_trips_through_json_and_continues_identically() -> None:
 def test_damaged_bracket_saves_are_unsupported() -> None:
     data = _bracket().to_save_data()
     with pytest.raises(UnsupportedSave):
-        FootballPlayoffBracket.from_save_data({**data, "teams": data["teams"][:7]})
+        FootballPlayoffBracket.from_save_data({**data, "team_ids": data["team_ids"][:7]})
+    with pytest.raises(UnsupportedSave, match="Unknown AI team"):
+        FootballPlayoffBracket.from_save_data(
+            {**data, "team_ids": [None, "not-a-team", *data["team_ids"][2:]]}
+        )
+    with pytest.raises(UnsupportedSave, match="human seed"):
+        FootballPlayoffBracket.from_save_data({**data, "team_ids": ["herons", *data["team_ids"][1:]]})
     broken = json.loads(json.dumps(data))
     broken["games"][0]["winner_seed"] = 5
     with pytest.raises(UnsupportedSave):

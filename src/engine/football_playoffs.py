@@ -1,8 +1,9 @@
 """The eight-team, single-elimination playoff bracket that follows the regular season.
 
 The human team is seeded by regular-season losses (0 -> #1, 1 -> #2, 2 -> #3),
-so a Bye Week never costs a seed. The other seven seeds are local AI teams with
-placeholder names. Round 1 pairs 1v8, 4v5, 3v6, and 2v7; winners meet in bracket
+so a Bye Week never costs a seed. The other seven seeds are catalog AI teams
+(``football_ai_teams``) sampled from a pool the controller passes in: the
+regular-season rivals actually played plus the run's reserve teams. Round 1 pairs 1v8, 4v5, 3v6, and 2v7; winners meet in bracket
 order. The human's games are real matches (scheduled games 11-13); every other
 game in a round is decided by the bracket's own seeded RNG once the human's game
 in that round is recorded, so the bracket fills in round by round.
@@ -11,10 +12,12 @@ in that round is recorded, so the bracket fills in round by round.
 from __future__ import annotations
 
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from src.engine.football_ai_teams import FootballAITeam, ai_team, eligible_ai_teams
 from src.engine.save_data import (
     UnsupportedSave,
     enum_value,
@@ -38,14 +41,6 @@ PLAYOFF_EXTRA_CARDS_PER_ROUND = 1
 # Round-1 pairings (higher seed first) in bracket order; winners of games
 # (0, 1) and (2, 3) meet in the semifinals.
 FIRST_ROUND_PAIRS: tuple[tuple[int, int], ...] = ((1, 8), (4, 5), (3, 6), (2, 7))
-
-# Placeholder names for the seven AI playoff teams until local AI teams get
-# their own identities.
-PLAYOFF_TEAM_NAMES: tuple[str, ...] = (
-    "Ridgeline", "Harbor City", "Prairie State", "Iron Valley", "Lakeshore",
-    "Red Mesa", "Pine Hollow", "Summit Tech", "Bayou A&M", "Granite Falls",
-    "Coastal State", "Northfield",
-)
 
 # AI-vs-AI games: the better seed wins 50% + 5% per seed of difference, at most 80%.
 _SEED_EDGE = 0.05
@@ -89,9 +84,12 @@ def human_seed_for_losses(losses: int) -> int:
 
 @dataclass(frozen=True)
 class FootballPlayoffTeam:
+    """One seed. AI seeds carry their catalog identity; the human's ``ai_team`` is None."""
+
     seed: int
     name: str
     is_human: bool = False
+    ai_team: FootballAITeam | None = None
 
 
 @dataclass(frozen=True)
@@ -170,22 +168,38 @@ class FootballPlayoffBracketState:
 class FootballPlayoffBracket:
     """Mutable bracket owned by the controller; see the module docstring."""
 
-    def __init__(self, human_name: str, losses: int, rng: random.Random) -> None:
+    def __init__(
+        self,
+        human_name: str,
+        losses: int,
+        rng: random.Random,
+        team_pool: Sequence[str] | None = None,
+    ) -> None:
+        """Seed the bracket; the seven AI seeds are sampled from ``team_pool`` ids.
+
+        Without a pool, every catalog team not named like the human's is eligible.
+        """
         if not isinstance(human_name, str) or not human_name.strip():
             raise ValueError("The human team needs a name.")
         self._rng = rng
         self._human_seed = human_seed_for_losses(losses)
+        self._human_name = human_name
+        if team_pool is None:
+            team_pool = [team.team_id for team in eligible_ai_teams(human_name)]
         pool = [
-            name for name in PLAYOFF_TEAM_NAMES
-            if name.casefold() != human_name.strip().casefold()
+            team for team in dict.fromkeys(ai_team(team_id) for team_id in team_pool)
+            if team.name.casefold() != human_name.strip().casefold()
         ]
-        names = self._rng.sample(pool, PLAYOFF_TEAMS - 1)
+        if len(pool) < PLAYOFF_TEAMS - 1:
+            raise ValueError(f"The playoff pool needs at least {PLAYOFF_TEAMS - 1} AI teams.")
+        rivals = self._rng.sample(pool, PLAYOFF_TEAMS - 1)
         teams = []
         for seed in range(1, PLAYOFF_TEAMS + 1):
             if seed == self._human_seed:
                 teams.append(FootballPlayoffTeam(seed, human_name, is_human=True))
             else:
-                teams.append(FootballPlayoffTeam(seed, names.pop(0)))
+                rival = rivals.pop(0)
+                teams.append(FootballPlayoffTeam(seed, rival.name, ai_team=rival))
         self._teams = tuple(teams)
         self._games = [
             FootballPlayoffGame(FootballPlayoffRound.QUARTERFINAL, slot, high, low)
@@ -193,13 +207,18 @@ class FootballPlayoffBracket:
         ]
 
     # -- save data -------------------------------------------------------------
-    # Saved: the RNG state, human seed, teams, and every game. Nothing is rebuilt.
+    # Saved: the RNG state, human seed and name, the AI seeds' catalog ids (None
+    # at the human's seed), and every game. Nothing is rebuilt.
 
     def to_save_data(self) -> dict[str, Any]:
         return {
             "rng": rng_to_data(self._rng),
             "human_seed": self._human_seed,
-            "teams": [team.name for team in self._teams],
+            "human_name": self._human_name,
+            "team_ids": [
+                team.ai_team.team_id if team.ai_team is not None else None
+                for team in self._teams
+            ],
             "games": [_game_to_save_data(game) for game in self._games],
         }
 
@@ -209,17 +228,26 @@ class FootballPlayoffBracket:
         bracket = cls.__new__(cls)
         bracket._rng = rng_from_data(required(data, "rng", list, what), "playoff RNG")
         bracket._human_seed = required(data, "human_seed", int, what)
-        names = items(required(data, "teams", list, what), "Playoff teams")
-        if len(names) != PLAYOFF_TEAMS or not all(
-            isinstance(name, str) and name for name in names
-        ):
-            raise UnsupportedSave("A playoff bracket has eight named teams.")
+        bracket._human_name = required(data, "human_name", str, what)
+        if not bracket._human_name.strip():
+            raise UnsupportedSave("The human playoff team needs a name.")
+        team_ids = items(required(data, "team_ids", list, what), "Playoff teams")
         if not 1 <= bracket._human_seed <= PLAYOFF_TEAMS:
             raise UnsupportedSave("The human playoff seed is out of range.")
-        bracket._teams = tuple(
-            FootballPlayoffTeam(seed, name, is_human=seed == bracket._human_seed)
-            for seed, name in enumerate(names, start=1)
-        )
+        if len(team_ids) != PLAYOFF_TEAMS or [
+            seed for seed, team_id in enumerate(team_ids, start=1) if team_id is None
+        ] != [bracket._human_seed]:
+            raise UnsupportedSave("A playoff bracket has the human seed and seven AI teams.")
+        teams = []
+        for seed, team_id in enumerate(team_ids, start=1):
+            if team_id is None:
+                teams.append(FootballPlayoffTeam(seed, bracket._human_name, is_human=True))
+            else:
+                rival = ai_team(team_id)
+                teams.append(FootballPlayoffTeam(seed, rival.name, ai_team=rival))
+        if len({team.name.casefold() for team in teams}) != PLAYOFF_TEAMS:
+            raise UnsupportedSave("Playoff team names must be distinct.")
+        bracket._teams = tuple(teams)
         bracket._games = [
             _game_from_save_data(item)
             for item in items(required(data, "games", list, what), "Playoff games")

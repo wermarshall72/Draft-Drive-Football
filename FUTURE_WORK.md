@@ -130,9 +130,16 @@ or the design changes.
 - [ ] Drafted players keep the jersey colors chosen at draft time; a profile
   color edit while a run is saved recolors the UI theme on resume but not
   those saved appearances. Decide whether saved runs should follow the profile.
-- [ ] Give local AI opponents their own names and team colors; the result
-  screen and match scoreboard currently show a neutral grey helmet, and the
-  seven playoff teams use placeholder names (`PLAYOFF_TEAM_NAMES`).
+- [x] Give local AI opponents their own names and team colors: a 100-team
+  catalog, a per-run draw of ten scheduled rivals and ten playoff reserves,
+  rival colors on the match, result, bracket, and shop screens, and save
+  format 4.
+- [ ] AI team follow-ups: decide whether AI teams should keep persistent
+  rosters or coaches across a run, whether a profile color edit mid-run should
+  redraw clashing rivals (the draw only checks the color at run start), and
+  whether the bracket should mark playoff rematches. Runs migrated from save
+  format 3 get a fixed legacy draw, so their already-played games show that
+  draw's rivals in the season tracker.
 - [ ] Shop polish ideas: number-key shortcuts for shop cards, and a live-app
   pass on hover timing and keyboard flow (verified headless so far).
 - [ ] Match screen polish ideas: on-card number-key hints, a play-log filter

@@ -232,6 +232,7 @@ class DesktopApplication:
             shop_seed=shop_seed,
             ai_seed=ai_seed,
             match_seed=match_seed,
+            team_primary_color_id=self.menu_state.profile.primary_color_id,
         )
         if self.run_store.blocked:
             # The replace-run confirmation covered the unloadable save.

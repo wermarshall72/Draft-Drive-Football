@@ -15,6 +15,7 @@ from enum import Enum
 import pygame
 
 from src.engine.football import FootballMatchState, FootballTeamSide
+from src.engine.football_ai_teams import FootballAITeam
 from src.engine.football_controller import (
     FootballGameControllerState,
     FootballRunPhase,
@@ -26,11 +27,12 @@ from src.engine.football_playoffs import (
     FootballPlayoffRound,
     game_label,
 )
+from src.ui.football_ai_team_colors import NEUTRAL_OPPONENT, draw_team_chip, opponent_colors
 from src.ui.football_match_events import period_label
 from src.ui.football_match_scoreboard import _helmet_sprite
 from src.ui.football_result_stats import TeamGameStats, match_team_stats
 from src.ui.football_ui_kit import (
-    MATCH_DANGER, MATCH_DIM, MATCH_GOLD, MATCH_INK, MATCH_MUTED, MATCH_OPPONENT,
+    MATCH_DANGER, MATCH_DIM, MATCH_GOLD, MATCH_INK, MATCH_MUTED,
     MATCH_PANEL, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT, MATCH_TEXT,
     PLAY_LINE_PASS, PLAY_LINE_RUN, blit_text, blit_wrapped, draw_message_banner,
     kit_button, match_font, mix, plain_font, stadium_backdrop, team_accent,
@@ -178,7 +180,8 @@ class FootballResultView:
             self._draw_bye_panel(surface, state, accent)
         else:
             stats = match_team_stats(match.match_events)
-            self._draw_stats(surface, match, stats.team_a, stats.team_b, accent)
+            self._draw_stats(surface, match, stats.team_a, stats.team_b, accent,
+                             opponent_colors(state.opponent_team).accent)
         self._draw_season(surface, state, variant, accent)
         if error:
             draw_message_banner(surface, pygame.Rect(FOOTER.left, FOOTER.top, PRIMARY_RECT.left
@@ -277,7 +280,8 @@ class FootballResultView:
         rail_width = HERO.width // 2 - 190
         pygame.draw.rect(surface, accent if won else mix(accent, MATCH_PANEL, 0.45),
                          (HERO.left + 18, HERO.bottom - 9, rail_width, 4), border_radius=2)
-        pygame.draw.rect(surface, mix(MATCH_OPPONENT, MATCH_PANEL, 0.55 if won else 0.15),
+        opponent = opponent_colors(state.opponent_team)
+        pygame.draw.rect(surface, mix(opponent.accent, MATCH_PANEL, 0.55 if won else 0.15),
                          (HERO.right - 18 - rail_width, HERO.bottom - 9, rail_width, 4), border_radius=2)
 
         progress = self._progress(state)
@@ -292,12 +296,12 @@ class FootballResultView:
                   topleft=(block.left - 4, block.top + 30))
 
         helmet = pygame.Rect(HERO.right - 26 - 140, HERO.top + 34, 140, 120)
-        sprite = _helmet_sprite(tuple(MATCH_OPPONENT[:3]), 110)
+        sprite = _helmet_sprite(tuple(opponent.primary[:3]), 110)
         if sprite is not None:
             sprite = pygame.transform.flip(sprite, True, False)
             surface.blit(sprite, sprite.get_rect(center=helmet.center))
         else:
-            pygame.draw.ellipse(surface, MATCH_OPPONENT, helmet.inflate(-16, -14))
+            pygame.draw.ellipse(surface, opponent.primary, helmet.inflate(-16, -14))
         opp_block = pygame.Rect(HERO.centerx + 170, HERO.top + 18,
                                 helmet.left - 18 - HERO.centerx - 170, 160)
         blit_text(surface, name_font, fit_text(match.team_b.team_name.upper(), name_font, opp_block.width),
@@ -432,7 +436,8 @@ class FootballResultView:
         pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, rect, 2, border_radius=12)
 
     def _draw_stats(self, surface, match: FootballMatchState, team: TeamGameStats,
-                    opponent: TeamGameStats, accent: pygame.Color) -> None:
+                    opponent: TeamGameStats, accent: pygame.Color,
+                    opponent_accent: pygame.Color = NEUTRAL_OPPONENT.accent) -> None:
         self._panel(surface, STATS)
         label_width = 150
         bar_max = (STATS.width - 40 - label_width) // 2 - 90
@@ -449,7 +454,8 @@ class FootballResultView:
                   midtop=(STATS.centerx, STATS.top + 10))
         blit_text(surface, head, fit_text(match.team_b.team_name.upper(), head, name_width), MATCH_TEXT,
                   STATS, midtop=(right_center, STATS.top + 12))
-        pygame.draw.rect(surface, MATCH_OPPONENT, (STATS.right - 20, STATS.top + 14, 4, 16), border_radius=2)
+        pygame.draw.rect(surface, opponent_accent, (STATS.right - 20, STATS.top + 14, 4, 16),
+                         border_radius=2)
 
         row_height = 40
         top = STATS.top + 42
@@ -479,7 +485,7 @@ class FootballResultView:
                 elif width:
                     color = {
                         "run": PLAY_LINE_RUN, "pass": PLAY_LINE_PASS, "turnover": MATCH_DANGER,
-                    }.get(kind, accent if side == 0 else MATCH_OPPONENT)
+                    }.get(kind, accent if side == 0 else opponent_accent)
                     pygame.draw.rect(surface, color, bar, border_radius=4)
                 other = their_value if side == 0 else our_value
                 leads = value < other if kind == "turnover" else value > other
@@ -525,7 +531,10 @@ class FootballResultView:
         for number in range(1, 11):
             tile = pygame.Rect(grid_left + (number - 1) % 5 * (width + gap),
                                grid_top + (number - 1) // 5 * (height + gap), width, height)
-            self._draw_tile(surface, tile, number, history.get(number), number == state.game_number)
+            rival = (state.regular_season_teams[number - 1]
+                     if len(state.regular_season_teams) >= number else None)
+            self._draw_tile(surface, tile, number, history.get(number), number == state.game_number,
+                            rival)
 
         strikes_y = grid_top + 2 * height + gap + 34
         if state.playoffs is not None:
@@ -603,6 +612,10 @@ class FootballResultView:
                 pygame.draw.rect(surface, MATCH_TEXT, tile.inflate(6, 6), 2, border_radius=10)
             blit_text(surface, match_font(11), labels[playoff_round], MATCH_MUTED, tile,
                       topleft=(tile.left + 7, tile.top + 4))
+            if game is not None:
+                rival = bracket.team(game.opponent_of(bracket.human_seed)).ai_team
+                if rival is not None:
+                    _draw_rival_tag(surface, tile, rival, dim=False)
             if decided:
                 assert game is not None
                 opponent = game.opponent_of(bracket.human_seed)
@@ -623,7 +636,7 @@ class FootballResultView:
 
     @staticmethod
     def _draw_tile(surface, tile: pygame.Rect, number: int, game: FootballSeasonGame | None,
-                   current: bool) -> None:
+                   current: bool, rival: FootballAITeam | None = None) -> None:
         outcome = game.outcome if game is not None else None
         if outcome is FootballSeasonOutcome.WIN:
             fill, edge, ink = (mix(MATCH_GOLD, MATCH_PANEL_DEEP, 0.8),
@@ -641,6 +654,8 @@ class FootballResultView:
             pygame.draw.rect(surface, MATCH_TEXT, tile.inflate(6, 6), 2, border_radius=10)
         blit_text(surface, match_font(11), f"G{number}", MATCH_MUTED if game else MATCH_DIM, tile,
                   topleft=(tile.left + 7, tile.top + 4))
+        if rival is not None:
+            _draw_rival_tag(surface, tile, rival, dim=game is None)
         if outcome is None:
             pygame.draw.circle(surface, MATCH_PANEL_EDGE_SOFT, (tile.centerx, tile.centery + 2), 3)
             return
@@ -663,6 +678,16 @@ class FootballResultView:
         pygame.draw.rect(surface, MATCH_PANEL_DEEP, cap, border_radius=5)
         pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, cap, 1, border_radius=5)
         blit_text(surface, font, "ENTER", MATCH_DIM, cap, center=cap.center)
+
+
+def _draw_rival_tag(surface, tile: pygame.Rect, rival: FootballAITeam, *, dim: bool) -> None:
+    """The opponent's abbreviation and color chip in a tile's top-right corner."""
+    font = match_font(11)
+    chip = pygame.Rect(0, 0, 12, 9)
+    chip.topright = (tile.right - 7, tile.top + 6)
+    draw_team_chip(surface, chip, opponent_colors(rival))
+    blit_text(surface, font, rival.abbreviation, MATCH_DIM if dim else MATCH_MUTED, tile,
+              topright=(chip.left - 4, tile.top + 4))
 
 
 def _dashed_rect(surface, rect: pygame.Rect, color: pygame.Color, dash: int = 8) -> None:

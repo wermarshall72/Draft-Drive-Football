@@ -1096,3 +1096,24 @@ def test_review_escape_cancels_pending_removal_without_spending_ap(tmp_path: Pat
     assert after.pending_removal is None and after.remaining_ap == before.remaining_ap
     assert after.offensive_deck == before.offensive_deck
     assert desktop.run_screen.shop_review.mode is None and not desktop.run_screen.pause.is_open
+
+
+def test_header_names_the_next_opponent_without_reaching_the_banner(tmp_path: Path) -> None:
+    from src.engine.football_ai_teams import AI_TEAM_CATALOG
+    from src.ui.football_ui_kit import plain_font
+
+    desktop = _shop_desktop(tmp_path)
+    screen = desktop.run_screen
+    rival = screen.state.opponent_team
+    assert rival is not None and rival is screen.state.regular_season_teams[0]
+    texts = [text for text, _rect, _container in _texts(desktop)]
+    assert "NEXT" in texts and rival.name.upper() in texts
+
+    font = plain_font(18)
+    widest = max(AI_TEAM_CATALOG, key=lambda team: font.size(team.name.upper())[0])
+    screen.state = replace(screen.state, opponent_team=widest,
+                           transition_message="A long message banner fills the header.")
+    records = _texts(desktop)
+    title = next(rect for text, rect, _c in records if text == "SHOP")
+    name = next(rect for text, rect, _c in records if text.startswith(widest.name.upper()[:6]))
+    assert name.right <= title.left + 420

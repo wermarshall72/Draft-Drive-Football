@@ -41,7 +41,7 @@ MODIFIER_POSITIVE = pygame.Color("#9fe4ad")
 MODIFIER_NEGATIVE = pygame.Color("#ff9d98")
 MODIFIER_NEUTRAL = pygame.Color("#c1cbd5")
 
-# The local AI wears a neutral steel uniform so it never clashes with team colors.
+# Neutral steel for an AI side without a catalog team (see football_ai_team_colors).
 MATCH_OPPONENT = pygame.Color("#7d8ea3")
 MATCH_OPPONENT_DARK = pygame.Color("#3f4d5e")
 
