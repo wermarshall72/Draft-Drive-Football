@@ -131,7 +131,8 @@ or the design changes.
   color edit while a run is saved recolors the UI theme on resume but not
   those saved appearances. Decide whether saved runs should follow the profile.
 - [ ] Give local AI opponents their own names and team colors; the result
-  screen and match scoreboard currently show a neutral grey helmet.
+  screen and match scoreboard currently show a neutral grey helmet, and the
+  seven playoff teams use placeholder names (`PLAYOFF_TEAM_NAMES`).
 - [ ] Shop polish ideas: number-key shortcuts for shop cards, and a live-app
   pass on hover timing and keyboard flow (verified headless so far).
 - [ ] Match screen polish ideas: on-card number-key hints, a play-log filter
@@ -149,7 +150,16 @@ or the design changes.
   the six-family invariants.
 - [ ] Design future player synergies and AP-saving actions. Unspent AP
   currently expires at the end of each shop visit.
-- [ ] Implement a playoff bracket; the current run ends at the playoffs marker.
+- [x] Implement an eight-team, single-elimination playoff bracket after game
+  10: seeding by regular-season losses, a shop before each round, tougher
+  rivals each round, AI-vs-AI results, a bracket screen, CHAMPION and
+  ELIMINATED endings, and save format 3.
+- [ ] Tune playoff difficulty. Each round adds +0.25 rival power and one deck
+  card; a Standard AI proxy's win rate fell from about 0.49 (game 10) to 0.41
+  (championship) in a 400-game sample, with wide noise. Revisit after
+  playtesting, and decide whether seeds should change rival strength.
+- [ ] Decide whether playoff results should feed a career record, and whether
+  the bracket should be viewable from the pause menu mid-shop.
 - [ ] Revisit asynchronous opponents, accounts, and career history after the
   offline-first game loop is established.
 

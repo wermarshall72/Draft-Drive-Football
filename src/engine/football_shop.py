@@ -9,6 +9,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
+from src.engine.football_playoffs import FINAL_GAME_NUMBER, REGULAR_SEASON_GAMES
 from src.engine.football import (
     FootballBonusCardAction,
     FootballCardCopy,
@@ -50,7 +51,6 @@ MAX_PLAYER_UPGRADE_SLOTS = 4
 MAX_PLAY_SCHEME_SLOTS = 6
 MAX_COACH_UPGRADE_SLOTS = 2
 MAX_FUTURE_SHOP_AP_BONUS = 2
-REGULAR_SEASON_GAMES = 10
 CARD_REMOVAL_COST = 2
 MIN_PLAYBOOK_DECK_SIZE = 4
 class FootballShopSection(str, Enum):
@@ -1090,9 +1090,16 @@ class FootballShop:
                 for owned in self._owned_coach_upgrades
             ):
                 return False
+            # +AP needs a later shop: the last one is before the championship.
             if (
                 effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP
-                and self._game_number >= REGULAR_SEASON_GAMES
+                and self._game_number >= FINAL_GAME_NUMBER
+            ):
+                return False
+            # Bye Week skips a scheduled regular-season game, never a playoff game.
+            if (
+                effect.kind is FootballCoachUpgradeKind.BYE_WEEK
+                and self._game_number > REGULAR_SEASON_GAMES
             ):
                 return False
         return card.eligible(self._roster)

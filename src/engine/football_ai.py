@@ -135,16 +135,23 @@ class FootballAI:
         ai._rng = rng_from_data(required(data, "rng", list, what), "AI RNG")
         return ai
 
-    def generate_opponent_roster(self) -> FootballRoster:
+    def generate_opponent_roster(
+        self, *, team_name: str | None = None, power_bonus: float = 0.0,
+    ) -> FootballRoster:
         """Create a catalog-based roster with the existing difficulty offset.
 
         Easy, Standard, and Hard apply named offsets of -0.5, 0, and +0.5.
+        A playoff opponent passes its bracket ``team_name`` and a ``power_bonus``
+        added to every player's power.
         """
+        if team_name is not None and (not isinstance(team_name, str) or not team_name.strip()):
+            raise ValueError("Opponent team name must be a non-empty string.")
+        name = team_name if team_name is not None else self.team_name
         power_adjustment = {
             FootballAIDifficulty.EASY: EASY_POWER_ADJUSTMENT,
             FootballAIDifficulty.STANDARD: STANDARD_POWER_ADJUSTMENT,
             FootballAIDifficulty.HARD: HARD_POWER_ADJUSTMENT,
-        }[self.difficulty]
+        }[self.difficulty] + power_bonus
         coach_pair = self._rng.choice(COACH_PAIR_OFFERS)
         players = {}
         drafted: list[FootballPlayerType] = []
@@ -155,25 +162,31 @@ class FootballAI:
             drafted.append(selected_type)
             players[position] = player_from_type(
                 selected_type,
-                name=f"{self.team_name} {selected_type.name}",
+                name=f"{name} {selected_type.name}",
                 power=PLAYER_BASE_POWER + power_adjustment,
                 volatility=PLAYER_BASE_VOLATILITY,
                 stamina=PLAYER_BASE_STAMINA,
             )
         return FootballRoster(
-            team_name=self.team_name,
+            team_name=name,
             players=players,
             coach=FootballCoach(
                 f"{coach_pair.offense.name} / {coach_pair.defense.name}"
             ),
-            special_teams=FootballSpecialTeams(f"{self.team_name} Special Teams"),
+            special_teams=FootballSpecialTeams(f"{name} Special Teams"),
             coach_assignment=coach_pair.assignment,
         )
 
     def generate_opponent_decks(
-        self, game_number: int, roster: FootballRoster
+        self, game_number: int, roster: FootballRoster, *, bonus_cards: int = 0,
     ) -> tuple[tuple[FootballCardCopy, ...], tuple[FootballCardCopy, ...]]:
-        """Return deterministic run decks using an RNG separate from AI decisions."""
+        """Return deterministic run decks using an RNG separate from AI decisions.
+
+        ``bonus_cards`` (playoff rounds) adds that many extra cards per deck
+        beyond the difficulty's cap.
+        """
+        if isinstance(bonus_cards, bool) or not isinstance(bonus_cards, int) or bonus_cards < 0:
+            raise ValueError("Bonus card count must be a non-negative integer.")
         if isinstance(game_number, bool) or not isinstance(game_number, int) or game_number < 1:
             raise ValueError("AI deck game number must be a positive integer.")
         if not isinstance(roster, FootballRoster):
@@ -186,7 +199,7 @@ class FootballAI:
                 FootballAIDifficulty.HARD: 4,
             }[self.difficulty],
             1 + (game_number - 1) // 3,
-        )
+        ) + bonus_cards
         offense, defense = coaches_for_assignment(roster.coach_assignment)
         offense_cards = list(starting_offensive_deck(f"ai:{game_number}"))
         defense_cards = list(starting_defensive_deck(f"ai:{game_number}"))

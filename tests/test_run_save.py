@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_decks import BONUS_CARD_CATALOG
 from src.engine.football_controller import (
     FootballGameController,
@@ -138,7 +139,9 @@ def test_ended_runs_round_trip_too() -> None:
     rng = random.Random(1)
     while step(controller, rng):
         pass
-    assert controller.state.phase in (FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS)
+    assert controller.state.phase in (
+        FootballRunPhase.FIRED, FootballRunPhase.ELIMINATED, FootballRunPhase.CHAMPION,
+    )
     _round_trip(controller)
 
 
@@ -509,7 +512,72 @@ def test_version_1_mid_match_save_migrates_to_version_2(tmp_path: Path) -> None:
 
 def test_version_1_payload_between_matches_migrates_unchanged() -> None:
     payload = {"run": {"simulator": None, "phase": "pre_match_shop"}}
-    assert migrate_payload(payload, 1) == payload
+    assert migrate_payload(payload, 1, to_version=2) == payload
+
+
+def _reach_playoffs(predicate) -> tuple[FootballGameController, int]:
+    """The first Easy run (by seed) that reaches a playoff state matching ``predicate``."""
+    for seed in range(60):
+        controller = new_controller(seed, FootballAIDifficulty.EASY)
+        rng = random.Random(seed)
+        while step(controller, rng):
+            if controller.state.playoffs is not None and predicate(controller.state):
+                return controller, seed
+    pytest.fail("No seeded run reached the requested playoff state.")
+
+
+def test_version_2_save_at_the_old_playoffs_marker_migrates_into_the_playoffs(
+    tmp_path: Path,
+) -> None:
+    """A v2 run that ended at the playoffs marker resumes at game 10 with its bracket."""
+    controller, _seed = _reach_playoffs(
+        lambda state: state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
+        and state.game_number == 10
+    )
+    expected = json.loads(json.dumps(controller.to_save_data()))
+    old = copy.deepcopy(expected)
+    del old["playoffs"]
+    old["phase"] = "playoffs"
+    _write_envelope(tmp_path / RUN_FILE_NAME, {"run": old}, 2)
+
+    result = _store(tmp_path).load()
+
+    assert result.status is LoadStatus.OK
+    # The bracket is seeded from the AI seed alone, so it is the one the run had.
+    assert result.controller.to_save_data() == expected
+    assert result.controller.state.human_decision is FootballHumanDecision.OPEN_NEXT_SHOP
+
+
+def test_version_2_payload_gains_an_empty_bracket() -> None:
+    payload = {"run": {"simulator": None, "phase": "pre_match_shop"}}
+    assert migrate_payload(payload, 2) == {
+        "run": {"simulator": None, "phase": "pre_match_shop", "playoffs": None},
+    }
+
+
+def test_a_run_in_the_playoffs_without_a_bracket_is_unsupported() -> None:
+    controller, _seed = _reach_playoffs(lambda state: state.game_number == 11)
+    data = json.loads(json.dumps(controller.to_save_data()))
+    data["playoffs"] = None
+    with pytest.raises(UnsupportedSave, match="bracket"):
+        FootballGameController.from_save_data(data)
+
+
+@pytest.mark.parametrize(
+    "where",
+    ("bracket", "quarterfinal shop", "semifinal match"),
+)
+def test_runs_continue_identically_from_the_playoffs(where: str) -> None:
+    predicates = {
+        "bracket": lambda state: state.phase is FootballRunPhase.READY_FOR_NEXT_GAME,
+        "quarterfinal shop": lambda state: state.phase is FootballRunPhase.PRE_MATCH_SHOP
+        and state.game_number == 11,
+        "semifinal match": lambda state: state.phase is FootballRunPhase.MATCH
+        and state.game_number == 12 and len(state.match.match_events) > 20,
+    }
+    controller, seed = _reach_playoffs(predicates[where])
+    _round_trip(controller)
+    _continues_identically(controller, seed, steps=3000)
 
 
 def test_migrations_apply_in_order_without_changing_the_input() -> None:
@@ -591,7 +659,7 @@ def test_unknown_ids_and_bad_shapes_raise_unsupported_save(path, value, fragment
 def test_canonical_checksum_ignores_formatting() -> None:
     payload = {"b": [1, 2], "a": {"z": 1.5, "y": "é"}}
     assert canonical_json(payload) == '{"a":{"y":"é","z":1.5},"b":[1,2]}'.encode()
-    assert migrations.CURRENT_SCHEMA_VERSION == 2
+    assert migrations.CURRENT_SCHEMA_VERSION == 3
 
 
 def test_persistence_package_does_not_import_pygame() -> None:

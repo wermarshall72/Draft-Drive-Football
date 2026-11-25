@@ -13,8 +13,10 @@ from src.engine.football_controller import (
     FootballHumanDecision,
     FootballRunPhase,
 )
+from src.engine.football_playoffs import game_label
 from src.engine.football_shop import FootballShopSection
 from src.ui.coach_fonts import staff_font
+from src.ui.football_playoff_bracket import FootballPlayoffBracketView
 from src.ui.football_result import FootballResultView
 from src.ui.football_review_view import FootballReviewView
 from src.ui.football_shop_view import FootballShopView
@@ -35,10 +37,13 @@ from src.ui.widgets import Button, draw_text
 RESULT_PHASES = frozenset({
     FootballRunPhase.READY_FOR_NEXT_GAME,
     FootballRunPhase.FIRED,
-    FootballRunPhase.PLAYOFFS,
+    FootballRunPhase.ELIMINATED,
+    FootballRunPhase.CHAMPION,
 })
 # A run in one of these phases is over: it cannot be paused or resumed.
-ENDED_PHASES = frozenset({FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS})
+ENDED_PHASES = frozenset({
+    FootballRunPhase.FIRED, FootballRunPhase.ELIMINATED, FootballRunPhase.CHAMPION,
+})
 PAUSE_LABEL = "PAUSE"
 RUN_PAUSE_VARIANT = "run-pause"
 # Coach selection and the player draft show choice errors in the header, between the
@@ -86,7 +91,12 @@ class FootballRunScreen(Screen):
         self._shop_view_instance: FootballShopView | None = None
         self._result_view = FootballResultView(
             self._open_next_shop, self._quit_run, self._open_pause,
+            open_bracket=self._open_bracket,
         )
+        self._bracket_view = FootballPlayoffBracketView()
+        # The playoff bracket is a UI step between a result and the next playoff
+        # shop (or, once the run has ended, a look back from the final result).
+        self.bracket_open = False
 
     def begin(self, controller: FootballGameController) -> None:
         self.controller = controller
@@ -102,6 +112,7 @@ class FootballRunScreen(Screen):
         self.pressed_index = None
         self.shop_review = ShopReviewInteraction()
         self._shop_view_instance = None
+        self.bracket_open = False
 
     def restore(self, controller: FootballGameController) -> None:
         """Start the UI on a run loaded from disk, settled on its saved decision."""
@@ -219,6 +230,8 @@ class FootballRunScreen(Screen):
         if escape:
             if self._current_state().phase not in ENDED_PHASES:
                 self._open_pause()
+            elif self.bracket_open:
+                self._close_bracket()
             return
         previous_focus = self.focus_index
         super().handle_event(event)
@@ -316,10 +329,10 @@ class FootballRunScreen(Screen):
             FootballRunPhase.PRE_MATCH_SHOP: (
                 "Coaching shop",
                 (
-                    f"GAME {state.game_number:02d} / "
+                    f"{game_label(state.game_number)} / "
                     f"SHOP DAY {state.shop.day:02d}"
                     if state.shop is not None
-                    else f"GAME {state.game_number:02d} / PRE-GAME SHOP"
+                    else f"{game_label(state.game_number)} / PRE-GAME SHOP"
                 ),
             ),
         }
@@ -447,6 +460,17 @@ class FootballRunScreen(Screen):
         state: FootballGameControllerState,
     ) -> None:
         """Full-screen result: the view owns the backdrop, header, and every button."""
+        if self.bracket_open and state.playoffs is not None:
+            ended = state.phase in ENDED_PHASES
+            buttons = self._bracket_view.draw(
+                surface, state.playoffs, self.theme,
+                record=f"{state.wins}-{state.losses}",
+                primary=self._quit_run if ended else self._open_next_shop,
+                request_exit=None if ended else self._open_pause,
+            )
+            self._set_buttons(buttons)
+            self._draw_buttons(surface)
+            return
         buttons = self._result_view.draw(surface, state, self.theme, error=self.last_error)
         self._set_buttons(buttons)
         self._draw_buttons(surface)
@@ -660,6 +684,24 @@ class FootballRunScreen(Screen):
 
     def _open_next_shop(self) -> None:
         self._submit(self._require_controller().enter_next_shop)
+        if self._current_state().phase is not FootballRunPhase.READY_FOR_NEXT_GAME:
+            self.bracket_open = False
+
+    def _open_bracket(self) -> None:
+        if self._current_state().playoffs is None:
+            return
+        self.bracket_open = True
+        self._reset_controls()
+
+    def _close_bracket(self) -> None:
+        self.bracket_open = False
+        self._reset_controls()
+
+    def _reset_controls(self) -> None:
+        self.buttons = []
+        self.focus_index = 0
+        self.hover_index = None
+        self.pressed_index = None
 
     def _move_to_next_day(self) -> None:
         self._submit(self._require_controller().move_to_next_day)

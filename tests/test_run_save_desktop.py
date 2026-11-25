@@ -190,7 +190,7 @@ def test_an_ended_run_deletes_its_save(tmp_path: Path) -> None:
     while _ui_step(desktop, rng):
         pass
     assert desktop.run_screen.controller.state.phase in (
-        FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS,
+        FootballRunPhase.FIRED, FootballRunPhase.ELIMINATED, FootballRunPhase.CHAMPION,
     )
     assert not (tmp_path / RUN_FILE_NAME).exists()
     assert not (tmp_path / BACKUP_FILE_NAME).exists()

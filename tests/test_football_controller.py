@@ -22,6 +22,7 @@ from src.engine.football_decks import (
     OFFENSIVE_PLAY_CATALOG,
 )
 from src.engine.football_ai import FootballAIDifficulty
+from src.engine.football_playoffs import FootballPlayoffRound
 from src.engine.football_controller import (
     FootballGameController,
     FootballHumanDecision,
@@ -531,7 +532,6 @@ def test_human_offense_defense_fourth_down_and_ai_progression_complete_a_real_ma
     assert final.phase in (
         FootballRunPhase.READY_FOR_NEXT_GAME,
         FootballRunPhase.FIRED,
-        FootballRunPhase.PLAYOFFS,
     )
     assert final.match is not None
     assert final.match.status is FootballMatchStatus.COMPLETED
@@ -740,29 +740,116 @@ def test_three_losses_immediately_fire_run(monkeypatch) -> None:
         controller.enter_next_shop()
 
 
-def test_surviving_tenth_regular_season_game_marks_playoffs_without_bracket(
-    monkeypatch,
-) -> None:
-    controller = _controller()
+def _win_regular_season(monkeypatch, controller, *, lose_games: tuple[int, ...] = ()) -> None:
     _start_match(controller)
     for game_number in range(1, 11):
+        winner = FootballTeamSide.TEAM_B if game_number in lose_games else FootballTeamSide.TEAM_A
+        _force_match_result(monkeypatch, controller, winner)
+        _complete_forced_match(controller)
+        if game_number < 10:
+            _enter_next_match(controller)
+
+
+def test_surviving_game_ten_seeds_the_bracket_and_the_title_ends_the_run(monkeypatch) -> None:
+    controller = _controller()
+    _win_regular_season(monkeypatch, controller)
+    state = controller.state
+    assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
+    assert state.human_decision is FootballHumanDecision.OPEN_NEXT_SHOP
+    assert state.playoff_round is None
+    bracket = state.playoffs
+    assert bracket is not None and bracket.human_seed == 1
+    assert bracket.team(1).name == "Human Team" and bracket.team(1).is_human
+    assert len({team.name for team in bracket.teams}) == 8
+    assert [(game.high_seed, game.low_seed) for game in bracket.games] == [
+        (1, 8), (4, 5), (3, 6), (2, 7),
+    ]
+
+    for game_number, playoff_round in zip((11, 12, 13), FootballPlayoffRound):
+        state = controller.enter_next_shop()
+        assert state.phase is FootballRunPhase.PRE_MATCH_SHOP
+        assert state.game_number == game_number and state.playoff_round is playoff_round
+        rival = bracket_rival(state)
+        assert state.opponent_name == rival
+        controller.finish_shop()
+        assert controller.state.match.team_b.team_name == rival
         _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
         _complete_forced_match(controller)
         state = controller.state
-        assert state.game_number == game_number
-        assert state.wins == game_number
-        if game_number < 10:
+        assert (state.wins, state.losses, state.games_played) == (10, 0, 10)
+        assert len(state.season_history) == 10
+        game = state.playoffs.human_game(playoff_round)
+        assert game.winner_seed == 1 and game.score_for(1) == 7
+        # Every other game in the round is decided with the human's.
+        assert all(other.decided for other in state.playoffs.round_games(playoff_round))
+        if playoff_round is not FootballPlayoffRound.CHAMPIONSHIP:
             assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
-            _enter_next_match(controller)
-        else:
-            assert state.phase is FootballRunPhase.PLAYOFFS
-            assert state.human_decision is None
-            assert state.match is not None and state.match.final_result is not None
-            assert state.shop is not None
-            assert state.shop.game_number == 10 and state.shop.finished
+            assert state.human_decision is FootballHumanDecision.OPEN_NEXT_SHOP
 
+    assert state.phase is FootballRunPhase.CHAMPION
+    assert state.human_decision is None
+    assert state.playoffs.champion_seed == 1
     with pytest.raises(ValueError, match="phase"):
         controller.enter_next_shop()
+
+
+def bracket_rival(state) -> str:
+    game = state.playoffs.human_game(state.playoff_round)
+    return state.playoffs.team(game.opponent_of(state.playoffs.human_seed)).name
+
+
+def test_a_playoff_loss_eliminates_and_regular_season_losses_set_the_seed(monkeypatch) -> None:
+    controller = _controller()
+    _win_regular_season(monkeypatch, controller, lose_games=(2, 5))
+    state = controller.state
+    assert (state.wins, state.losses) == (8, 2)
+    assert state.playoffs.human_seed == 3
+    assert state.playoffs.human_game(FootballPlayoffRound.QUARTERFINAL).opponent_of(3) == 6
+    controller.enter_next_shop()
+    controller.finish_shop()
+    _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_B)
+    _complete_forced_match(controller)
+    state = controller.state
+    assert state.phase is FootballRunPhase.ELIMINATED
+    assert state.human_decision is None
+    assert state.losses == 2  # playoff results live in the bracket
+    assert state.playoffs.human_eliminated
+    with pytest.raises(ValueError, match="phase"):
+        controller.enter_next_shop()
+
+
+def test_playoff_rivals_get_tougher_each_round(monkeypatch) -> None:
+    from src.engine.football_ai import FootballAI
+
+    calls = []
+    roster = FootballAI.generate_opponent_roster
+    decks = FootballAI.generate_opponent_decks
+
+    def spy_roster(self, **kwargs):
+        calls.append(("roster", kwargs.get("power_bonus", 0.0)))
+        return roster(self, **kwargs)
+
+    def spy_decks(self, game_number, opponent, **kwargs):
+        offense, defense = decks(self, game_number, opponent, **kwargs)
+        calls.append(("decks", len(offense)))
+        return offense, defense
+
+    monkeypatch.setattr(FootballAI, "generate_opponent_roster", spy_roster)
+    monkeypatch.setattr(FootballAI, "generate_opponent_decks", spy_decks)
+    controller = _controller(difficulty=FootballAIDifficulty.STANDARD)
+    _win_regular_season(monkeypatch, controller)
+    for _round in FootballPlayoffRound:
+        controller.enter_next_shop()
+        controller.finish_shop()
+        _force_match_result(monkeypatch, controller, FootballTeamSide.TEAM_A)
+        _complete_forced_match(controller)
+    powers = [value for kind, value in calls if kind == "roster"]
+    sizes = [value for kind, value in calls if kind == "decks"]
+    assert powers[:10] == [0.0] * 10 and powers[10:] == [0.25, 0.5, 0.75]
+    # Standard caps regular-season extras at 3; each round adds one more.
+    assert sizes[9] == 6 + 3 and sizes[10:] == [6 + 4, 6 + 5, 6 + 6]
+    final = controller.state.match.team_b
+    assert all(player.power == 50.75 for player in final.players.values())
 
 
 def test_next_shop_resets_ap_and_preserves_upgrades_roster_and_slot_unlocks(
@@ -953,7 +1040,9 @@ def test_season_history_marks_game_ten_bye_and_reaches_playoffs(monkeypatch) -> 
         _complete_forced_match(controller)
         controller.enter_next_shop()
     state = _buy_bye(controller, bye)
-    assert state.phase is FootballRunPhase.PLAYOFFS
+    assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
+    assert state.playoffs is not None and state.playoffs.human_seed == 1
+    assert state.human_decision is FootballHumanDecision.OPEN_NEXT_SHOP
     assert len(state.season_history) == 10
     assert state.season_history[-1] == FootballSeasonGame(10, FootballSeasonOutcome.BYE)
     assert (state.wins, state.losses, state.games_played) == (9, 0, 9)

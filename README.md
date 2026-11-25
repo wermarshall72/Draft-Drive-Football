@@ -19,7 +19,8 @@ drafting one player at each of the eight positions. Before each game, visit
 the shop with 12 Action Points shared across its sections; unspent points
 expire when the visit ends. Call offensive plays and defensive schemes during
 matches. Three losses end the run; surviving all ten regular-season games
-reaches a playoffs marker, without a playoff bracket.
+earns a seed in an eight-team, single-elimination playoff bracket, with a shop
+before each round. One playoff loss ends the run; three wins take the title.
 
 Each coach pair shows both coaches' team-colored portraits, position
 modifiers, and active perks inline; hover a pair or use Tab / arrow keys to

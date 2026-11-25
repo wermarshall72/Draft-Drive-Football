@@ -23,6 +23,7 @@ from src.engine.football_shop import (
     FootballShopState,
     FootballUpgradeDuration,
 )
+from src.engine.football_playoffs import game_label
 from src.ui.coach_art import draw_coach_portrait
 from src.ui.football_card_art import draw_card_art
 from src.ui.football_card_faces import card_art_name, draw_play_card_face
@@ -242,7 +243,7 @@ class FootballShopView:
         pygame.draw.rect(surface, self.theme.primary, swatch, border_radius=3)
         pygame.draw.rect(surface, mix(accent, MATCH_TEXT, 0.4), swatch, 1, border_radius=3)
         sub_font = plain_font(14)
-        tail = f"  ·  GAME {shop.game_number}  ·  DAY {shop.day}"
+        tail = f"  ·  {game_label(shop.game_number, padded=False)}  ·  DAY {shop.day}"
         name_width = 380 - sub_font.size(tail)[0]
         name = fit_text(team_name.upper(), sub_font, name_width)
         name_rect = blit_text(surface, sub_font, name, MATCH_TEXT, content,

@@ -8,6 +8,7 @@ from functools import lru_cache
 import pygame
 
 from src.engine.football import FootballAwaitedAction, FootballMatchState, FootballTeamSide
+from src.engine.football_playoffs import game_label
 from src.ui.football_match_events import period_label
 from src.ui.football_match_palette import (
     MATCH_DIM, MATCH_INK, MATCH_MUTED, MATCH_OPPONENT, MATCH_OPPONENT_DARK,
@@ -248,5 +249,5 @@ def _draw_center(
     situation_font = match_font(16)
     situation = fit_text(situation, situation_font, center.width - 16)
     blit_text(surface, situation_font, situation, MATCH_TEXT, center, midtop=(rect.centerx, rect.top + 50))
-    meta = f"GAME {game_number:02d}  ·  RECORD {wins}-{losses}"
+    meta = f"{game_label(game_number)}  ·  RECORD {wins}-{losses}"
     blit_text(surface, match_font(12), meta, MATCH_DIM, center, midtop=(rect.centerx, rect.top + 71))

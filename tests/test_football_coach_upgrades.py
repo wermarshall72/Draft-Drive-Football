@@ -217,11 +217,15 @@ def test_future_shop_ap_stacks_without_changing_the_current_shop() -> None:
     assert shop.open_next_visit(6).remaining_ap == ACTION_POINT_BUDGET + 2
 
 
-def test_future_ap_upgrade_is_not_offered_in_the_last_scheduled_shop() -> None:
+@pytest.mark.parametrize(("game_number", "offered"), ((10, True), (12, True), (13, False)))
+def test_future_ap_upgrade_is_offered_until_the_championship_shop(
+    game_number: int, offered: bool,
+) -> None:
+    """Playoff shops follow game 10, so +AP pays off until the semifinal shop."""
     shop = FootballShop(
         _roster("Shop"),
         22,
-        game_number=10,
+        game_number=game_number,
         catalogs={
             FootballShopSection.COACH_UPGRADES: (
                 _coach_card("booster_club_drive"),
@@ -231,7 +235,21 @@ def test_future_ap_upgrade_is_not_offered_in_the_last_scheduled_shop() -> None:
     section = shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1).section(
         FootballShopSection.COACH_UPGRADES
     )
-    assert section.slots[0].card is None
+    assert (section.slots[0].card is not None) is offered
+
+
+@pytest.mark.parametrize(("game_number", "offered"), ((10, True), (11, False), (13, False)))
+def test_bye_week_is_never_offered_in_a_playoff_shop(game_number: int, offered: bool) -> None:
+    shop = FootballShop(
+        _roster("Shop"),
+        22,
+        game_number=game_number,
+        catalogs={FootballShopSection.COACH_UPGRADES: (_coach_card("bye_week"),)},
+    )
+    section = shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1).section(
+        FootballShopSection.COACH_UPGRADES
+    )
+    assert (section.slots[0].card is not None) is offered
 
 
 def test_bye_week_shop_purchase_is_atomic_and_preserves_run_assets() -> None:
@@ -1191,10 +1209,7 @@ def _finish_game_as_win(controller: FootballGameController) -> None:
     assert controller.state.human_decision is not None
     controller.finish_shop()
     controller.choose_offensive_play(OffensivePlayAction.RB_RUN)
-    assert controller.state.phase in (
-        FootballRunPhase.READY_FOR_NEXT_GAME,
-        FootballRunPhase.PLAYOFFS,
-    )
+    assert controller.state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
 
 
 def test_bye_week_skips_a_game_without_match_or_ai_rng_and_run_finishes_after_nine(
@@ -1236,14 +1251,15 @@ def test_bye_week_skips_a_game_without_match_or_ai_rng_and_run_finishes_after_ni
         if game_number < 10:
             controller.enter_next_shop()
     final = controller.state
-    assert final.phase is FootballRunPhase.PLAYOFFS
+    assert final.phase is FootballRunPhase.READY_FOR_NEXT_GAME
+    assert final.playoffs is not None
     assert final.games_played == 9
     assert (final.wins, final.losses) == (9, 0)
     assert final.skipped_games == (4,)
     assert len(final.match.match_events) > 0
 
 
-def test_bye_week_on_game_ten_reaches_marker_without_a_fake_result(monkeypatch) -> None:
+def test_bye_week_on_game_ten_reaches_the_playoffs_without_a_fake_result(monkeypatch) -> None:
     _force_wins(monkeypatch)
     controller = _controller_with_bye()
     _draft_to_shop(controller)
@@ -1263,7 +1279,9 @@ def test_bye_week_on_game_ten_reaches_marker_without_a_fake_result(monkeypatch) 
     final = controller.buy_shop_card(
         FootballShopSection.COACH_UPGRADES, "bye_week"
     )
-    assert final.phase is FootballRunPhase.PLAYOFFS
+    assert final.phase is FootballRunPhase.READY_FOR_NEXT_GAME
+    assert final.playoffs is not None and final.playoffs.human_seed == 1
+    assert final.playoff_round is None
     assert final.game_number == 10
     assert final.skipped_games == (10,)
     assert final.games_played == 9

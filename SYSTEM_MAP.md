@@ -57,7 +57,8 @@ clock), the shared veil/panel/button drawing, and the PAUSE [ESC] button look.
 Every run screen shows PAUSE [ESC] and opens the same menu on Esc (KEEP
 PLAYING, RETURN TO MENU, QUIT RUN; the match variant adds DEPTH CHART and PLAY
 LOG); inner popups, visible inspect panels, and a pending removal take Esc
-first. FIRED and PLAYOFFS runs have ended: no pause, and leaving discards them.
+first. FIRED, ELIMINATED, and CHAMPION runs have ended: no pause, and leaving
+discards them.
 [test_pause_menu.py](tests/test_pause_menu.py) covers the menu, resume, Quit
 Run, and the replace-run confirmation.
 [test_football_desktop.py](tests/test_football_desktop.py) covers the
@@ -233,18 +234,23 @@ covers extracted interaction state.
   `text_audit` fit recorder are re-exported by [football_match_palette.py](src/ui/football_match_palette.py)
   from the shared [football_ui_kit.py](src/ui/football_ui_kit.py).
   [football_result.py](src/ui/football_result.py) owns the full-screen
-  result (no shared app header): a compact GAME/FINAL header, scoreboard hero
-  with WIN/LOSS banner and OT label, a verdict ribbon (next shop, FIRED,
-  PLAYOFFS, or BYE WEEK), team stats, the 10-game season tracker with the
-  3-strike loss meter, and the primary action plus PAUSE [ESC] (regular-season
-  results only). An injectable clock drives a score count-up that never
-  blocks the button; the Bye Week game-10 marker never shows the retained
-  previous match. [football_result_stats.py](src/ui/football_result_stats.py)
+  result (no shared app header): a compact GAME/round FINAL header, scoreboard
+  hero with WIN/LOSS banner and OT label, a verdict ribbon (next shop, FIRED,
+  PLAYOFFS, BYE WEEK, ADVANCES, ELIMINATED, or CHAMPIONS), team stats, the
+  10-game season tracker with the 3-strike loss meter (the playoff path once
+  the bracket exists), and the primary action plus PAUSE [ESC] while the run
+  continues; ended playoff runs add VIEW BRACKET. An injectable clock drives a
+  score count-up that never blocks the button; the Bye Week game-10 result
+  never shows the retained previous match.
+  [football_playoff_bracket.py](src/ui/football_playoff_bracket.py) draws the
+  eight-team bracket; the run screen shows it (`bracket_open`, a UI-only step)
+  between a result and the next playoff shop, or from an ended run's result. [football_result_stats.py](src/ui/football_result_stats.py)
   is the pure team-stat helper (offensive snaps only, Challenge-overturned
   plays and two-point tries excluded). The run screen routes result phases
   to `_draw_result_screen`. Tests include
   [test_football_result_screen.py](tests/test_football_result_screen.py)
-  (variants, Bye Week, text fit, count-up),
+  (variants, Bye Week, playoff path, text fit, count-up),
+  [test_football_playoff_bracket_view.py](tests/test_football_playoff_bracket_view.py),
   [test_football_result_stats.py](tests/test_football_result_stats.py),
   [test_football_match_presentation.py](tests/test_football_match_presentation.py)
   (lines, wording, playback), [test_football_desktop.py](tests/test_football_desktop.py)
@@ -311,17 +317,23 @@ covers extracted interaction state.
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py), and
   [test_football_models.py](tests/test_football_models.py).
 - **Run progression:** [football_controller.py](src/engine/football_controller.py)
-  connects draft, shop, simulator, AI, results, and subsequent shops.
+  connects draft, shop, simulator, AI, results, subsequent shops, and the
+  playoffs (games 11-13).
   It tracks actual games played separately from scheduled games skipped by
   Bye Week, and keeps a read-only per-game `season_history`
   (`FootballSeasonGame`: W/L with score and overtime flag, or BYE). Pending player upgrades are applied to the human match roster and
   cleared only when a match result is recorded, not on a Bye Week;
   [football_result.py](src/ui/football_result.py) renders the
-  game-10 skip as a marker without a fabricated score. Coach upgrades are
-  implemented as an initial catalog; a playable playoff bracket remains
-  unfinished. The controller routes Green Dog offers (`respond_to_green_dog`,
+  game-10 skip without a fabricated score. The playoff bracket
+  ([football_playoffs.py](src/engine/football_playoffs.py): seeding,
+  pairings, AI-vs-AI results, `game_label`) is created when the regular
+  season ends and saved with the run; playoff rivals come from
+  `FootballAI.generate_opponent_roster(team_name=, power_bonus=)` and
+  `generate_opponent_decks(bonus_cards=)`. Coach upgrades are implemented as
+  an initial catalog. The controller routes Green Dog offers (`respond_to_green_dog`,
   `FootballHumanDecision.GREEN_DOG`). See
-  [test_football_controller.py](tests/test_football_controller.py) and
+  [test_football_controller.py](tests/test_football_controller.py),
+  [test_football_playoffs.py](tests/test_football_playoffs.py), and
   [test_football_coach_upgrades.py](tests/test_football_coach_upgrades.py).
 
 ## Persistence, legacy, and tooling

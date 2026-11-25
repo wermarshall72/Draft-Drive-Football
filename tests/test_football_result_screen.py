@@ -17,12 +17,15 @@ from src.engine.football_controller import (
     FootballSeasonGame,
     FootballSeasonOutcome,
 )
+from src.engine.football_playoffs import FootballPlayoffBracket, FootballPlayoffRound
 from src.engine.football_simulator import FootballMatchSimulator
 from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
 from src.profile import new_team_profile
 from src.ui.football_result import (
     OPEN_NEXT_SHOP,
     RETURN_TO_MENU,
+    VIEW_BRACKET,
+    VIEW_PLAYOFF_BRACKET,
     FootballResultView,
     ResultVariant,
     result_variant,
@@ -116,6 +119,7 @@ def _draw(state, *, clock=None, color="navy", error=None):
     calls: list[str] = []
     view = FootballResultView(
         lambda: calls.append("shop"), lambda: calls.append("menu"), lambda: calls.append("exit"),
+        open_bracket=lambda: calls.append("bracket"),
         clock=clock,
     )
     theme = Theme.from_profile(new_team_profile("Test Owls", color, "gold" if color != "gold" else "navy"))
@@ -123,6 +127,32 @@ def _draw(state, *, clock=None, color="navy", error=None):
     with text_audit() as records:
         buttons = view.draw(surface, state, theme, error=error)
     return buttons, [text for text, _rect, _container in records], records, calls, view
+
+
+QF, SF, CH = FootballPlayoffRound
+
+
+def _bracket(*results):
+    """A 2-loss (#3 seed) bracket after the human's (round, score, against) results."""
+    bracket = FootballPlayoffBracket("Test Owls", 2, __import__("random").Random(5))
+    for playoff_round, score, against in results:
+        bracket.record_human_result(playoff_round, score, against)
+    return bracket.state
+
+
+def _rival(bracket, playoff_round) -> str:
+    game = bracket.human_game(playoff_round)
+    return bracket.team(game.opponent_of(bracket.human_seed)).name.upper()
+
+
+def _playoff(finished, phase, game_number, playoff_round, bracket, score=(31, 17)):
+    winner = FootballTeamSide.TEAM_A if score[0] > score[1] else FootballTeamSide.TEAM_B
+    match = replace(finished.match, team_a_score=score[0], team_b_score=score[1],
+                    final_result=FootballMatchResult(*score, winner, True))
+    nine = [_played(n, W if n not in (3, 6) else L) for n in range(1, 10)]
+    season = _season(finished, phase, [*nine, _played(10, W, (31, 17))])
+    return replace(season, match=match, game_number=game_number, playoffs=bracket,
+                   playoff_round=playoff_round)
 
 
 def _variants(finished):
@@ -136,37 +166,86 @@ def _variants(finished):
             FootballRunPhase.FIRED,
             [_played(1, L), _played(2, W), _played(3, L), _played(4, L, (17, 31))],
         ),
-        ResultVariant.PLAYOFFS: _season(
-            finished, FootballRunPhase.PLAYOFFS, [*nine, _played(10, W, (31, 17))],
-        ),
-        ResultVariant.BYE_WEEK: _season(
-            finished, FootballRunPhase.PLAYOFFS, [*nine, FootballSeasonGame(10, BYE)],
+        ResultVariant.SEASON_COMPLETE: replace(_season(
+            finished, FootballRunPhase.READY_FOR_NEXT_GAME, [*nine, _played(10, W, (31, 17))],
+        ), playoffs=_bracket()),
+        ResultVariant.BYE_WEEK: replace(_season(
+            finished, FootballRunPhase.READY_FOR_NEXT_GAME, [*nine, FootballSeasonGame(10, BYE)],
             skipped=(10,), message="Bye Week skipped scheduled game 10 without a match result.",
+        ), playoffs=_bracket()),
+        ResultVariant.PLAYOFF_WIN: _playoff(
+            finished, FootballRunPhase.READY_FOR_NEXT_GAME, 11, QF, _bracket((QF, 31, 17)),
+        ),
+        ResultVariant.ELIMINATED: _playoff(
+            finished, FootballRunPhase.ELIMINATED, 12, SF,
+            _bracket((QF, 31, 17), (SF, 10, 24)), score=(10, 24),
+        ),
+        ResultVariant.CHAMPION: _playoff(
+            finished, FootballRunPhase.CHAMPION, 13, CH,
+            _bracket((QF, 31, 17), (SF, 24, 21), (CH, 31, 17)),
         ),
     }
 
 
 def test_each_variant_has_its_banner_and_primary_action(finished) -> None:
+    states = _variants(finished)
+    fresh = states[ResultVariant.SEASON_COMPLETE].playoffs
+    after_qf = states[ResultVariant.PLAYOFF_WIN].playoffs
     expected = {
         ResultVariant.REGULAR: ("WIN", OPEN_NEXT_SHOP, "shop", "NEXT UP · SHOP BEFORE GAME 2"),
         ResultVariant.FIRED: ("FIRED", RETURN_TO_MENU, "menu", "RUN OVER · 3 LOSSES  ·  FINAL RECORD 1-3"),
-        ResultVariant.PLAYOFFS: ("PLAYOFFS", RETURN_TO_MENU, "menu",
-                                 "REGULAR SEASON COMPLETE  ·  8-2  ·  PLAYOFF GAMES AREN'T AVAILABLE YET"),
-        ResultVariant.BYE_WEEK: ("BYE WEEK", RETURN_TO_MENU, "menu",
-                                 "GAME 10 SKIPPED  ·  7-2  ·  PLAYOFFS MARKER REACHED"),
+        ResultVariant.SEASON_COMPLETE: (
+            "PLAYOFFS", VIEW_PLAYOFF_BRACKET, "bracket",
+            f"REGULAR SEASON COMPLETE  ·  8-2  ·  #3 SEED  ·  NEXT UP · QUARTERFINAL VS {_rival(fresh, QF)}",
+        ),
+        ResultVariant.BYE_WEEK: (
+            "BYE WEEK", VIEW_PLAYOFF_BRACKET, "bracket",
+            f"GAME 10 SKIPPED  ·  7-2  ·  #3 SEED  ·  NEXT UP · QUARTERFINAL VS {_rival(fresh, QF)}",
+        ),
+        ResultVariant.PLAYOFF_WIN: (
+            "ADVANCES", VIEW_PLAYOFF_BRACKET, "bracket",
+            f"QUARTERFINAL WON  ·  NEXT UP · SEMIFINAL VS {_rival(after_qf, SF)}",
+        ),
+        ResultVariant.ELIMINATED: (
+            "ELIMINATED", RETURN_TO_MENU, "menu",
+            "SEMIFINAL LOSS  ·  RUN OVER  ·  #3 SEED  ·  REGULAR SEASON 8-2",
+        ),
+        ResultVariant.CHAMPION: (
+            "CHAMPIONS", RETURN_TO_MENU, "menu",
+            "CHAMPIONSHIP WON  ·  #3 SEED  ·  REGULAR SEASON 8-2",
+        ),
     }
-    for variant, state in _variants(finished).items():
+    for variant, state in states.items():
         assert result_variant(state) is variant
         banner, label, call, ribbon = expected[variant]
         buttons, texts, _records, calls, _view = _draw(state)
-        assert banner in texts and ribbon in texts
+        assert banner in texts and ribbon in texts, (variant, texts)
         assert buttons[0].label == label and buttons[0].variant == "kit-primary"
         buttons[0].action()
         assert calls == [call]
         labels = [button.label for button in buttons]
-        assert ("PAUSE" in labels) is (variant is ResultVariant.REGULAR)
-    fired_texts = _draw(_variants(finished)[ResultVariant.FIRED])[1]
+        assert ("PAUSE" in labels) is (
+            variant in (ResultVariant.REGULAR, ResultVariant.SEASON_COMPLETE,
+                        ResultVariant.BYE_WEEK, ResultVariant.PLAYOFF_WIN)
+        )
+        assert (VIEW_BRACKET in labels) is (
+            variant in (ResultVariant.ELIMINATED, ResultVariant.CHAMPION)
+        )
+    fired_texts = _draw(states[ResultVariant.FIRED])[1]
     assert "LOSS" in fired_texts and "RUN OVER" in fired_texts
+
+
+def test_playoff_results_name_the_round_and_show_the_playoff_path(finished) -> None:
+    state = _variants(finished)[ResultVariant.ELIMINATED]
+    texts = _draw(state)[1]
+    assert "SEMIFINAL" in texts and "PLAYOFFS" in texts and "LOSS" in texts
+    assert {"QF", "SF", "FINAL", "W", "L", "31-17", "10-24"} <= set(texts)
+    # The regular-season tracker and record stay; the loss meter gives way to the path.
+    assert "G10" in texts and "8-2" in texts and "LOSSES" not in texts
+    champion = _draw(_variants(finished)[ResultVariant.CHAMPION])[1]
+    assert "CHAMPIONSHIP" in champion and "24-21" in champion
+    complete = _draw(_variants(finished)[ResultVariant.SEASON_COMPLETE])[1]
+    assert "NEXT" in complete and "REGULAR SEASON COMPLETE" in complete
 
 
 def test_pause_button_opens_the_pause_menu(finished) -> None:
@@ -228,7 +307,7 @@ def test_text_fits_every_variant(finished, color, team) -> None:
         for text, rect, container in records:
             assert container.contains(rect), (text, rect, container)
             assert pygame.Rect(0, 0, 1280, 720).contains(rect), text
-        if team is not None and state.phase is not FootballRunPhase.PLAYOFFS:
+        if team is not None and state.game_number not in state.skipped_games:
             assert any(text.startswith("NORTHERN PLAINS") and text.endswith("...") for text in texts)
 
 

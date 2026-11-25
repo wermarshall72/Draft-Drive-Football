@@ -978,12 +978,12 @@ def test_match_decision_callbacks_reach_controller_with_fallback_and_copy_id(
         (
             FootballTeamSide.TEAM_A,
             10,
-            FootballRunPhase.PLAYOFFS,
-            "RETURN TO MAIN MENU",
+            FootballRunPhase.READY_FOR_NEXT_GAME,
+            "VIEW PLAYOFF BRACKET",
         ),
     ),
 )
-def test_result_routes_fired_and_game_ten_playoffs_without_bracket(
+def test_result_routes_fired_and_game_ten_to_the_playoffs(
     tmp_path: Path,
     monkeypatch,
     winner: FootballTeamSide,
@@ -1015,6 +1015,74 @@ def test_result_routes_fired_and_game_ten_playoffs_without_bracket(
     assert any(button.label == expected_button for button in desktop.run_screen.buttons)
     assert desktop.run_screen.state == final
     assert not (tmp_path / "legacy-game.db").exists()
+
+
+def _win_to_the_playoffs(desktop: DesktopApplication, monkeypatch) -> None:
+    _start_match(desktop)
+    _force_result(monkeypatch, FootballTeamSide.TEAM_A)
+    for game_number in range(1, 11):
+        _play_first_match_card(desktop)
+        if game_number < 10:
+            _activate(desktop, "OPEN NEXT GAME SHOP")
+            _activate(desktop, "FINISH SHOP / START MATCH")
+
+
+def test_playoff_bracket_leads_each_round_to_its_shop_and_the_title_returns_to_menu(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    desktop = _new_desktop(tmp_path)
+    _win_to_the_playoffs(desktop, monkeypatch)
+    controller = desktop.football_controller
+    assert controller is not None
+    for game_number, shop_label in (
+        (11, "OPEN QUARTERFINAL SHOP"),
+        (12, "OPEN SEMIFINAL SHOP"),
+        (13, "OPEN CHAMPIONSHIP SHOP"),
+    ):
+        _activate(desktop, "VIEW PLAYOFF BRACKET", keyboard=True)
+        assert desktop.run_screen.bracket_open
+        # Esc pauses the bracket like any unfinished run screen.
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_ESCAPE}))
+        assert desktop.run_screen.pause.is_open
+        _activate(desktop, "KEEP PLAYING")
+        _activate(desktop, shop_label, keyboard=True)
+        assert not desktop.run_screen.bracket_open
+        state = controller.state
+        assert state.phase is FootballRunPhase.PRE_MATCH_SHOP
+        assert state.game_number == game_number
+        _activate(desktop, "FINISH SHOP / START MATCH")
+        _play_first_match_card(desktop)
+
+    assert controller.state.phase is FootballRunPhase.CHAMPION
+    desktop.router.draw(_surface())
+    labels = [button.label for button in desktop.run_screen.buttons]
+    assert labels == ["RETURN TO MAIN MENU", "VIEW BRACKET"]
+    assert not desktop.run_screen.resumable
+    _activate(desktop, "VIEW BRACKET")
+    desktop.router.draw(_surface())
+    assert [button.label for button in desktop.run_screen.buttons] == ["RETURN TO MAIN MENU"]
+    # Esc on an ended run's bracket goes back to its result.
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_ESCAPE}))
+    assert not desktop.run_screen.bracket_open
+    _activate(desktop, "RETURN TO MAIN MENU")
+    assert desktop.router.current is not desktop.run_screen
+    assert desktop.football_controller is None
+
+
+def test_a_playoff_loss_ends_the_run_as_eliminated(tmp_path: Path, monkeypatch) -> None:
+    desktop = _new_desktop(tmp_path)
+    _win_to_the_playoffs(desktop, monkeypatch)
+    _activate(desktop, "VIEW PLAYOFF BRACKET")
+    _activate(desktop, "OPEN QUARTERFINAL SHOP")
+    _activate(desktop, "FINISH SHOP / START MATCH")
+    _force_result(monkeypatch, FootballTeamSide.TEAM_B)
+    _play_first_match_card(desktop)
+    controller = desktop.football_controller
+    assert controller is not None and controller.state.phase is FootballRunPhase.ELIMINATED
+    desktop.router.draw(_surface())
+    assert [button.label for button in desktop.run_screen.buttons] == [
+        "RETURN TO MAIN MENU", "VIEW BRACKET",
+    ]
 
 
 def test_ready_for_next_game_button_opens_shop_before_the_next_match(
@@ -1670,7 +1738,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
 
     final = controller.state
     assert final.phase in (
-        FootballRunPhase.READY_FOR_NEXT_GAME, FootballRunPhase.FIRED, FootballRunPhase.PLAYOFFS,
+        FootballRunPhase.READY_FOR_NEXT_GAME, FootballRunPhase.FIRED,
     )
     assert final.match is not None and final.match.final_result is not None
     assert seen_offense and seen_defense and seen_ai_play and seen_two_point

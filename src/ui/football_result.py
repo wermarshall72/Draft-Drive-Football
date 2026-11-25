@@ -1,9 +1,10 @@
 """Full-screen post-game result: scoreboard hero, verdict ribbon, team stats, season tracker.
 
 Layout on the 1280x720 logical surface (see ``HEADER`` .. ``FOOTER``). One layout
-serves every ending: a regular-season win or loss, Run Over (third loss),
-Playoffs after game 10, and the Bye Week game-10 marker, which never shows the
-previous match's score or stats.
+serves every result: a regular-season win or loss, Run Over (third loss), the
+end of the regular season after game 10 (or its Bye Week, which never shows the
+previous match's score or stats), a playoff win, a playoff loss (Eliminated),
+and the championship. From game 10 on, the season panel adds the playoff path.
 """
 
 from __future__ import annotations
@@ -19,6 +20,11 @@ from src.engine.football_controller import (
     FootballRunPhase,
     FootballSeasonGame,
     FootballSeasonOutcome,
+)
+from src.engine.football_playoffs import (
+    FootballPlayoffBracketState,
+    FootballPlayoffRound,
+    game_label,
 )
 from src.ui.football_match_events import period_label
 from src.ui.football_match_scoreboard import _helmet_sprite
@@ -48,26 +54,56 @@ FIRED_RED = pygame.Color("#d9645b")
 COUNT_UP_MS = 700
 
 OPEN_NEXT_SHOP = "OPEN NEXT GAME SHOP"
+VIEW_PLAYOFF_BRACKET = "VIEW PLAYOFF BRACKET"
+VIEW_BRACKET = "VIEW BRACKET"
 RETURN_TO_MENU = "RETURN TO MAIN MENU"
+SECONDARY_RECT = pygame.Rect(FOOTER.left, FOOTER.top, 220, 48)
 
 
 class ResultVariant(Enum):
     REGULAR = "regular"
     FIRED = "fired"
-    PLAYOFFS = "playoffs"
+    SEASON_COMPLETE = "season_complete"
     BYE_WEEK = "bye_week"
+    PLAYOFF_WIN = "playoff_win"
+    ELIMINATED = "eliminated"
+    CHAMPION = "champion"
+
+
+PLAYOFF_VARIANTS = frozenset({
+    ResultVariant.PLAYOFF_WIN, ResultVariant.ELIMINATED, ResultVariant.CHAMPION,
+})
+# Variants whose primary button opens the bracket before the next playoff shop.
+BRACKET_NEXT_VARIANTS = frozenset({
+    ResultVariant.SEASON_COMPLETE, ResultVariant.BYE_WEEK, ResultVariant.PLAYOFF_WIN,
+})
 
 
 def result_variant(state: FootballGameControllerState) -> ResultVariant:
-    if state.phase is FootballRunPhase.PLAYOFFS and state.game_number in state.skipped_games:
-        return ResultVariant.BYE_WEEK
     if state.phase is FootballRunPhase.FIRED:
         return ResultVariant.FIRED
-    if state.phase is FootballRunPhase.PLAYOFFS:
-        return ResultVariant.PLAYOFFS
+    if state.phase is FootballRunPhase.ELIMINATED:
+        return ResultVariant.ELIMINATED
+    if state.phase is FootballRunPhase.CHAMPION:
+        return ResultVariant.CHAMPION
     if state.phase is FootballRunPhase.READY_FOR_NEXT_GAME:
+        if state.playoff_round is not None:
+            return ResultVariant.PLAYOFF_WIN
+        if state.playoffs is not None:
+            if state.game_number in state.skipped_games:
+                return ResultVariant.BYE_WEEK
+            return ResultVariant.SEASON_COMPLETE
         return ResultVariant.REGULAR
     raise RuntimeError(f"No result screen for phase {state.phase!r}.")
+
+
+def _next_rival(bracket: FootballPlayoffBracketState) -> tuple[FootballPlayoffRound, str] | None:
+    playoff_round = bracket.next_human_round
+    if playoff_round is None:
+        return None
+    game = bracket.human_game(playoff_round)
+    assert game is not None
+    return playoff_round, bracket.team(game.opponent_of(bracket.human_seed)).name
 
 
 def stat_rows(
@@ -103,9 +139,11 @@ class FootballResultView:
         return_to_menu: Callable[[], None],
         request_exit: Callable[[], None],
         *,
+        open_bracket: Callable[[], None] = lambda: None,
         clock: Callable[[], int] | None = pygame.time.get_ticks,
     ) -> None:
         self.open_next_shop = open_next_shop
+        self.open_bracket = open_bracket
         self.return_to_menu = return_to_menu
         self.request_exit = request_exit
         self.clock = clock
@@ -154,9 +192,17 @@ class FootballResultView:
                 kit_button(OPEN_NEXT_SHOP, self.open_next_shop, PRIMARY_RECT, variant="kit-primary"),
                 Button("PAUSE", self.request_exit, PAUSE_RECT, variant="run-pause"),
             ]
+        elif variant in BRACKET_NEXT_VARIANTS:
+            buttons = [
+                kit_button(VIEW_PLAYOFF_BRACKET, self.open_bracket, PRIMARY_RECT,
+                           variant="kit-primary"),
+                Button("PAUSE", self.request_exit, PAUSE_RECT, variant="run-pause"),
+            ]
         else:
             buttons = [kit_button(RETURN_TO_MENU, self.return_to_menu, PRIMARY_RECT,
                                   variant="kit-primary")]
+            if variant is not ResultVariant.FIRED and not error:
+                buttons.append(kit_button(VIEW_BRACKET, self.open_bracket, SECONDARY_RECT))
         return buttons
 
     # -- animation -----------------------------------------------------------------
@@ -177,7 +223,7 @@ class FootballResultView:
 
     def _draw_header(self, surface, state, variant, match) -> None:
         font = plain_font(30)
-        game = blit_text(surface, font, f"GAME {state.game_number:02d}", MATCH_TEXT, HEADER,
+        game = blit_text(surface, font, game_label(state.game_number), MATCH_TEXT, HEADER,
                          topleft=(HEADER.left, HEADER.top))
         if match is None:
             tail = "BYE WEEK"
@@ -189,8 +235,11 @@ class FootballResultView:
         stage = {
             ResultVariant.REGULAR: "REGULAR SEASON",
             ResultVariant.FIRED: "SEASON OVER",
-            ResultVariant.PLAYOFFS: "REGULAR SEASON COMPLETE",
+            ResultVariant.SEASON_COMPLETE: "REGULAR SEASON COMPLETE",
             ResultVariant.BYE_WEEK: "REGULAR SEASON COMPLETE",
+            ResultVariant.PLAYOFF_WIN: "PLAYOFFS",
+            ResultVariant.ELIMINATED: "PLAYOFFS",
+            ResultVariant.CHAMPION: "PLAYOFFS",
         }[variant]
         blit_text(surface, plain_font(13), stage, MATCH_DIM, HEADER,
                   topleft=(HEADER.left + 2, HEADER.top + 34))
@@ -323,18 +372,36 @@ class FootballResultView:
 
     def _draw_ribbon(self, surface, state, variant: ResultVariant) -> None:
         record = f"{state.wins}-{state.losses}"
+        bracket = state.playoffs
+        rival = _next_rival(bracket) if bracket is not None else None
+        next_up = (f"NEXT UP · {rival[0].name} VS {rival[1].upper()}" if rival is not None else "")
+        seed = f"#{bracket.human_seed} SEED" if bracket is not None else ""
+        gold = False
         if variant is ResultVariant.REGULAR:
             stamp, line, tone = None, f"NEXT UP · SHOP BEFORE GAME {state.game_number + 1}", MATCH_PANEL_EDGE
         elif variant is ResultVariant.FIRED:
             stamp, line, tone = "FIRED", f"RUN OVER · 3 LOSSES  ·  FINAL RECORD {record}", FIRED_RED
-        elif variant is ResultVariant.PLAYOFFS:
-            stamp, tone = "PLAYOFFS", MATCH_GOLD
-            line = f"REGULAR SEASON COMPLETE  ·  {record}  ·  PLAYOFF GAMES AREN'T AVAILABLE YET"
-        else:
+        elif variant is ResultVariant.SEASON_COMPLETE:
+            stamp, tone, gold = "PLAYOFFS", MATCH_GOLD, True
+            line = f"REGULAR SEASON COMPLETE  ·  {record}  ·  {seed}  ·  {next_up}"
+        elif variant is ResultVariant.BYE_WEEK:
             stamp, tone = "BYE WEEK", MATCH_MUTED
-            line = f"GAME {state.game_number} SKIPPED  ·  {record}  ·  PLAYOFFS MARKER REACHED"
-        fill = MATCH_PANEL_DEEP if variant is not ResultVariant.FIRED else mix(FIRED_RED, MATCH_PANEL_DEEP, 0.88)
-        if variant is ResultVariant.PLAYOFFS:
+            line = f"GAME {state.game_number} SKIPPED  ·  {record}  ·  {seed}  ·  {next_up}"
+        elif variant is ResultVariant.PLAYOFF_WIN:
+            stamp, tone, gold = "ADVANCES", MATCH_GOLD, True
+            assert state.playoff_round is not None
+            line = f"{state.playoff_round.name} WON  ·  {next_up}"
+        elif variant is ResultVariant.CHAMPION:
+            stamp, tone, gold = "CHAMPIONS", MATCH_GOLD, True
+            line = f"CHAMPIONSHIP WON  ·  {seed}  ·  REGULAR SEASON {record}"
+        else:
+            stamp, tone = "ELIMINATED", FIRED_RED
+            round_name = state.playoff_round.name if state.playoff_round is not None else "PLAYOFF"
+            line = f"{round_name} LOSS  ·  RUN OVER  ·  {seed}  ·  REGULAR SEASON {record}"
+        fill = MATCH_PANEL_DEEP
+        if tone is FIRED_RED:
+            fill = mix(FIRED_RED, MATCH_PANEL_DEEP, 0.88)
+        if gold:
             fill = mix(MATCH_GOLD, MATCH_PANEL_DEEP, 0.9)
         pygame.draw.rect(surface, fill, RIBBON, border_radius=10)
         pygame.draw.rect(surface, mix(tone, MATCH_PANEL_DEEP, 0.35), RIBBON, 2, border_radius=10)
@@ -343,7 +410,7 @@ class FootballResultView:
             font = plain_font(22)
             box = pygame.Rect(0, 0, font.size(stamp)[0] + 28, 32)
             box.midleft = (x, RIBBON.centery)
-            if variant is ResultVariant.PLAYOFFS:
+            if gold:
                 pygame.draw.rect(surface, MATCH_GOLD, box, border_radius=6)
                 blit_text(surface, font, stamp, MATCH_INK, box, center=box.center)
             else:
@@ -438,8 +505,8 @@ class FootballResultView:
         blit_text(surface, plain_font(44), "NO GAME PLAYED", MATCH_MUTED, STATS,
                   center=(STATS.centerx, STATS.top + 104))
         message = state.transition_message or (
-            "Bye Week skipped scheduled game 10 without a score or win/loss. You reached "
-            "the playoffs marker; playoff games are not available yet."
+            "Bye Week skipped scheduled game 10 without a score or win/loss. "
+            "The regular season is complete: on to the playoffs."
         )
         blit_wrapped(surface, message, pygame.Rect(STATS.left + 60, STATS.top + 156, STATS.width - 120, 110),
                      (17, 16, 15, 14), MATCH_MUTED, max_lines=4)
@@ -461,6 +528,23 @@ class FootballResultView:
             self._draw_tile(surface, tile, number, history.get(number), number == state.game_number)
 
         strikes_y = grid_top + 2 * height + gap + 34
+        if state.playoffs is not None:
+            self._draw_playoff_path(surface, state.playoffs, state.playoff_round,
+                                    pygame.Rect(SEASON.left + 16, strikes_y - 22, SEASON.width - 32, 50))
+        else:
+            self._draw_losses(surface, state, variant, strikes_y)
+
+        scored = sum(game.team_score or 0 for game in state.season_history)
+        allowed = sum(game.opponent_score or 0 for game in state.season_history)
+        totals = f"POINTS FOR {scored}  ·  AGAINST {allowed}"
+        totals_box = pygame.Rect(SEASON.left + 16, SEASON.bottom - 40, SEASON.width - 32, 28)
+        pygame.draw.line(surface, MATCH_PANEL_EDGE_SOFT, (totals_box.left, totals_box.top - 6),
+                         (totals_box.right, totals_box.top - 6))
+        font = match_font(13)
+        blit_text(surface, font, fit_text(totals, font, totals_box.width), MATCH_MUTED, totals_box,
+                  center=totals_box.center)
+
+    def _draw_losses(self, surface, state, variant: ResultVariant, strikes_y: int) -> None:
         blit_text(surface, plain_font(15), "LOSSES", MATCH_MUTED, SEASON,
                   midleft=(SEASON.left + 22, strikes_y))
         strikes_left = SEASON.left + 104
@@ -487,15 +571,55 @@ class FootballResultView:
                       FIRED_RED if state.losses >= 2 else MATCH_DIM, note_box,
                       midleft=(note_box.left, strikes_y))
 
-        scored = sum(game.team_score or 0 for game in state.season_history)
-        allowed = sum(game.opponent_score or 0 for game in state.season_history)
-        totals = f"POINTS FOR {scored}  ·  AGAINST {allowed}"
-        totals_box = pygame.Rect(SEASON.left + 16, SEASON.bottom - 40, SEASON.width - 32, 28)
-        pygame.draw.line(surface, MATCH_PANEL_EDGE_SOFT, (totals_box.left, totals_box.top - 6),
-                         (totals_box.right, totals_box.top - 6))
-        font = match_font(13)
-        blit_text(surface, font, fit_text(totals, font, totals_box.width), MATCH_MUTED, totals_box,
-                  center=totals_box.center)
+
+    @staticmethod
+    def _draw_playoff_path(surface, bracket: FootballPlayoffBracketState,
+                           current: FootballPlayoffRound | None, rect: pygame.Rect) -> None:
+        """PLAYOFFS label and one tile per round: W/L and score, NEXT, or pending."""
+        blit_text(surface, plain_font(15), "PLAYOFFS", MATCH_MUTED, SEASON,
+                  midleft=(rect.left + 6, rect.centery))
+        labels = {FootballPlayoffRound.QUARTERFINAL: "QF", FootballPlayoffRound.SEMIFINAL: "SF",
+                  FootballPlayoffRound.CHAMPIONSHIP: "FINAL"}
+        left = rect.left + 100
+        gap = 8
+        width = (rect.right - left - 2 * gap) // 3
+        next_round = None if bracket.human_eliminated else bracket.next_human_round
+        for index, playoff_round in enumerate(FootballPlayoffRound):
+            tile = pygame.Rect(left + index * (width + gap), rect.top, width, rect.height)
+            game = bracket.human_game(playoff_round)
+            decided = game is not None and game.decided
+            won = decided and game.winner_seed == bracket.human_seed
+            if decided:
+                tone = MATCH_GOLD if won else FIRED_RED
+                fill, edge = mix(tone, MATCH_PANEL_DEEP, 0.8), mix(tone, MATCH_PANEL_DEEP, 0.3)
+            elif playoff_round is next_round:
+                fill, edge = MATCH_PANEL_DEEP, MATCH_GOLD
+            else:
+                fill, edge = mix(MATCH_PANEL_DEEP, MATCH_PANEL, 0.5), MATCH_PANEL_EDGE_SOFT
+            pygame.draw.rect(surface, fill, tile, border_radius=8)
+            pygame.draw.rect(surface, edge, tile, 2 if decided or playoff_round is next_round else 1,
+                             border_radius=8)
+            if playoff_round is current:
+                pygame.draw.rect(surface, MATCH_TEXT, tile.inflate(6, 6), 2, border_radius=10)
+            blit_text(surface, match_font(11), labels[playoff_round], MATCH_MUTED, tile,
+                      topleft=(tile.left + 7, tile.top + 4))
+            if decided:
+                assert game is not None
+                opponent = game.opponent_of(bracket.human_seed)
+                word = "W" if won else "L"
+                blit_text(surface, plain_font(22), word, MATCH_GOLD if won else FIRED_RED, tile,
+                          midright=(tile.centerx - 4, tile.centery + 4))
+                score = f"{game.score_for(bracket.human_seed)}-{game.score_for(opponent)}"
+                score += " OT" if game.overtime else ""
+                font = match_font(11)
+                blit_text(surface, font, fit_text(score, font, tile.width // 2 - 6), MATCH_MUTED, tile,
+                          midleft=(tile.centerx + 2, tile.centery + 5))
+            elif playoff_round is next_round:
+                blit_text(surface, match_font(13), "NEXT", MATCH_GOLD, tile,
+                          center=(tile.centerx, tile.centery + 5))
+            else:
+                pygame.draw.circle(surface, MATCH_PANEL_EDGE_SOFT, (tile.centerx, tile.centery + 5), 3)
+
 
     @staticmethod
     def _draw_tile(surface, tile: pygame.Rect, number: int, game: FootballSeasonGame | None,

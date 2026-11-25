@@ -22,7 +22,7 @@ from typing import Any
 
 from src.engine.save_data import UnsupportedSave
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -61,8 +61,24 @@ def _migrate_1_to_2(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_2_to_3(payload: dict[str, Any]) -> dict[str, Any]:
+    """Playoff games arrived (version 3).
+
+    Runs gain ``playoffs`` (the bracket, null until the regular season ends).
+    The old ended ``playoffs`` phase, reached by finishing or skipping game 10,
+    becomes ``ready_for_next_game`` at game 10; loading seeds its bracket.
+    """
+    run = payload.get("run")
+    if not isinstance(run, dict):
+        return payload
+    run.setdefault("playoffs", None)
+    if run.get("phase") == "playoffs":
+        run["phase"] = "ready_for_next_game"
+    return payload
+
+
 # schema_version N -> function returning the payload at N + 1.
-MIGRATIONS: MutableMapping[int, Migration] = {1: _migrate_1_to_2}
+MIGRATIONS: MutableMapping[int, Migration] = {1: _migrate_1_to_2, 2: _migrate_2_to_3}
 
 
 class NewerSaveVersion(UnsupportedSave):

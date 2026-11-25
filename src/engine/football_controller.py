@@ -47,11 +47,23 @@ from src.engine.save_data import (
     rng_from_data,
     rng_to_data,
 )
+from src.engine.football_playoffs import (
+    FINAL_GAME_NUMBER,
+    PLAYOFF_EXTRA_CARDS_PER_ROUND,
+    PLAYOFF_POWER_STEP,
+    FootballPlayoffBracket,
+    FootballPlayoffBracketState,
+    FootballPlayoffRound,
+    playoff_round_for_game,
+)
 from src.engine.football_team_builder import (
     FootballPlayerCandidate,
     FootballTeamBuilder,
     FootballTeamBuilderState,
 )
+
+
+PLAYOFF_BRACKET_SEED_SALT = 0x5EED_B4AC
 
 
 class FootballRunPhase(str, Enum):
@@ -60,8 +72,10 @@ class FootballRunPhase(str, Enum):
     PRE_MATCH_SHOP = "pre_match_shop"
     MATCH = "match"
     READY_FOR_NEXT_GAME = "ready_for_next_game"
-    PLAYOFFS = "playoffs"
+    # Run endings: three regular-season losses, a playoff loss, or the title.
     FIRED = "fired"
+    ELIMINATED = "eliminated"
+    CHAMPION = "champion"
 
 
 class FootballHumanDecision(str, Enum):
@@ -120,13 +134,19 @@ class FootballGameControllerState:
     )
     challenge_available: bool = False
     season_history: tuple[FootballSeasonGame, ...] = ()
+    # The bracket exists once the regular season is complete (game 10 played or
+    # skipped without a third loss). ``playoff_round`` is the current game's round.
+    playoffs: FootballPlayoffBracketState | None = None
+    playoff_round: FootballPlayoffRound | None = None
 
 
 class FootballGameController:
-    """Coordinate drafting, recurring shops, local AI, and regular-season games.
+    """Coordinate drafting, recurring shops, local AI, the season, and the playoffs.
 
     Each random stream has its own seed: builder, shop, AI, and match. Team A
-    is always the human roster and Team B is always the local AI roster.
+    is always the human roster and Team B is always the local AI roster. The
+    playoff bracket's RNG is seeded from the AI seed when the regular season ends. Scheduled games 11-13 are the playoff rounds; ``wins``,
+    ``losses``, ``games_played``, and ``season_history`` stay regular-season only.
     """
 
     REGULAR_SEASON_GAMES = 10
@@ -196,6 +216,7 @@ class FootballGameController:
         self._challenge_prompt = False
         self._player_appearances: dict[FootballPosition, FootballPlayerAppearance] = {}
         self._drafted_players: dict[FootballPosition, FootballPlayer] = {}
+        self._playoffs: FootballPlayoffBracket | None = None
 
     # -- save data -------------------------------------------------------------
     # Saved: every attribute set in ``__init__`` and the shop and simulator once
@@ -238,6 +259,9 @@ class FootballGameController:
             "drafted_players": [
                 player.to_save_data() for player in self._drafted_players.values()
             ],
+            "playoffs": (
+                self._playoffs.to_save_data() if self._playoffs is not None else None
+            ),
         }
 
     @classmethod
@@ -308,6 +332,20 @@ class FootballGameController:
             for item in items(required(data, "drafted_players", list, what), "Drafted players")
         ]
         controller._drafted_players = {player.position: player for player in drafted}
+        playoffs = optional(data, "playoffs", dict, what)
+        controller._playoffs = (
+            FootballPlayoffBracket.from_save_data(playoffs) if playoffs is not None else None
+        )
+        if (
+            controller._playoffs is None
+            and controller._phase is FootballRunPhase.READY_FOR_NEXT_GAME
+            and controller._game_number == cls.REGULAR_SEASON_GAMES
+        ):
+            # A save from before playoff games existed, left at the end of the
+            # regular season (see the version 3 migration): seed its bracket now.
+            controller._create_playoffs()
+        if controller._game_number > cls.REGULAR_SEASON_GAMES and controller._playoffs is None:
+            raise UnsupportedSave("A run in the playoffs must have a bracket.")
         if controller._phase in (
             FootballRunPhase.PRE_MATCH_SHOP, FootballRunPhase.READY_FOR_NEXT_GAME,
         ) and controller._shop is None:
@@ -323,13 +361,14 @@ class FootballGameController:
     @property
     def state(self) -> FootballGameControllerState:
         match = self._simulator.state if self._simulator is not None else None
+        playoff_round = playoff_round_for_game(self._game_number)
         return FootballGameControllerState(
             phase=self._phase,
             team_builder=self._builder.state,
             shop=self._shop.state if self._shop is not None else None,
             match=match,
             human_decision=self._human_decision(match),
-            opponent_name=self._opponent_name,
+            opponent_name=self._current_opponent_name(),
             opponent_difficulty=self._difficulty,
             selected_coach_pair=self._builder.selected_coach_pair,
             game_number=self._game_number,
@@ -346,7 +385,20 @@ class FootballGameController:
                 else False
             ),
             season_history=tuple(self._season_history),
+            playoffs=self._playoffs.state if self._playoffs is not None else None,
+            playoff_round=playoff_round,
         )
+
+    def _current_opponent_name(self) -> str:
+        """The AI's name in the regular season; the bracket opponent's in the playoffs."""
+        playoff_round = playoff_round_for_game(self._game_number)
+        if playoff_round is None or self._playoffs is None:
+            return self._opponent_name
+        game = self._playoffs.state.human_game(playoff_round)
+        if game is None:
+            return self._opponent_name
+        bracket = self._playoffs.state
+        return bracket.team(game.opponent_of(bracket.human_seed)).name
 
     def choose_coach(self, choice: FootballCoachPair | int) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.COACH_DRAFT)
@@ -449,6 +501,9 @@ class FootballGameController:
 
     def enter_next_shop(self) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.READY_FOR_NEXT_GAME)
+        if self._game_number >= FINAL_GAME_NUMBER:
+            raise RuntimeError("No scheduled game remains after the championship.")
+        self._transition_message = None
         self._require_shop().open_next_visit(self._game_number + 1)
         self._game_number += 1
         self._phase = FootballRunPhase.PRE_MATCH_SHOP
@@ -568,10 +623,21 @@ class FootballGameController:
             or self._shop.game_number != self._game_number
         ):
             raise ValueError("The pre-match shop must be finished before a match.")
-        opponent = self._ai.generate_opponent_roster()
+        playoff_round = playoff_round_for_game(self._game_number)
+        if playoff_round is None:
+            opponent = self._ai.generate_opponent_roster()
+            bonus_cards = 0
+        else:
+            rival = self._require_playoffs().human_opponent(playoff_round)
+            opponent = self._ai.generate_opponent_roster(
+                team_name=rival.name,
+                power_bonus=PLAYOFF_POWER_STEP * playoff_round.value,
+            )
+            bonus_cards = PLAYOFF_EXTRA_CARDS_PER_ROUND * playoff_round.value
         opponent_offense, opponent_defense = self._ai.generate_opponent_decks(
             self._game_number,
             opponent,
+            bonus_cards=bonus_cards,
         )
         match_seed = self._match_seed_rng.getrandbits(64)
         match_state = FootballMatchState(
@@ -649,6 +715,19 @@ class FootballGameController:
         if result is None or not result.completed or result.winner is None:
             raise RuntimeError("A completed match must include a decisive result.")
         self._require_shop().complete_match()
+        playoff_round = playoff_round_for_game(self._game_number)
+        if playoff_round is not None:
+            self._require_playoffs().record_human_result(
+                playoff_round, result.team_a_score, result.team_b_score,
+                overtime=match.period > 2,
+            )
+            if result.winner is not FootballTeamSide.TEAM_A:
+                self._phase = FootballRunPhase.ELIMINATED
+            elif playoff_round is FootballPlayoffRound.CHAMPIONSHIP:
+                self._phase = FootballRunPhase.CHAMPION
+            else:
+                self._phase = FootballRunPhase.READY_FOR_NEXT_GAME
+            return
         if result.winner is FootballTeamSide.TEAM_A:
             self._wins += 1
         else:
@@ -668,10 +747,26 @@ class FootballGameController:
 
         if self._losses >= self.LOSSES_TO_BE_FIRED:
             self._phase = FootballRunPhase.FIRED
-        elif self._game_number == self.REGULAR_SEASON_GAMES:
-            self._phase = FootballRunPhase.PLAYOFFS
         else:
+            if self._game_number == self.REGULAR_SEASON_GAMES:
+                self._create_playoffs()
             self._phase = FootballRunPhase.READY_FOR_NEXT_GAME
+
+    def _create_playoffs(self) -> None:
+        if self._playoffs is not None:
+            raise RuntimeError("The playoff bracket already exists.")
+        self._playoffs = FootballPlayoffBracket(
+            self._builder.team_name,
+            self._losses,
+            # Seeded from the AI's fixed seed so creating the bracket consumes no
+            # running stream (a game-10 Bye Week still leaves them untouched).
+            random.Random(self._ai.seed ^ PLAYOFF_BRACKET_SEED_SALT),
+        )
+
+    def _require_playoffs(self) -> FootballPlayoffBracket:
+        if self._playoffs is None:
+            raise RuntimeError("The playoff bracket is unavailable.")
+        return self._playoffs
 
     def _apply_bye_week(self) -> None:
         scheduled_game = self._game_number
@@ -685,11 +780,11 @@ class FootballGameController:
             FootballSeasonGame(scheduled_game, FootballSeasonOutcome.BYE)
         )
         if scheduled_game == self.REGULAR_SEASON_GAMES:
-            self._phase = FootballRunPhase.PLAYOFFS
+            self._create_playoffs()
+            self._phase = FootballRunPhase.READY_FOR_NEXT_GAME
             self._transition_message = (
                 "Bye Week skipped scheduled game 10 without a match result. "
-                "The regular season is complete; you reached the playoffs marker. "
-                "No playoff games are available yet."
+                "The regular season is complete: on to the playoffs."
             )
             return
 
