@@ -65,3 +65,18 @@ def app_data_dir(
     if create:
         directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+# The legacy terminal client's SQLite snapshot database (``python -m src.main``).
+# The desktop app never opens it.
+LEGACY_DATABASE_FILE_NAME = "cfb_battler.db"
+
+
+def legacy_database_path(override: str | os.PathLike[str] | None = None) -> Path:
+    """Where the legacy terminal client keeps its snapshot database.
+
+    Resolved on each call (never at import) so ``override``, ``$DDF_DATA_DIR``,
+    and test fixtures take effect. The folder is not created here; opening the
+    database creates it.
+    """
+    return app_data_dir(override, create=False) / LEGACY_DATABASE_FILE_NAME

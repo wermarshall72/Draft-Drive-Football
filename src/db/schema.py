@@ -9,18 +9,23 @@ from pathlib import Path
 from typing import TypeAlias
 
 from src.engine.units import Coach, Roster, SpecialTeams, Unit
+from src.persistence.paths import legacy_database_path
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "cfb_battler.db"
 DatabasePath: TypeAlias = str | os.PathLike[str]
 
 
-def _connect(db_path: DatabasePath) -> sqlite3.Connection:
-    path = Path(db_path)
+def resolve_database_path(db_path: DatabasePath | None = None) -> Path:
+    """``db_path``, or the app-data folder's legacy database when it is ``None``."""
+    return legacy_database_path() if db_path is None else Path(db_path)
+
+
+def _connect(db_path: DatabasePath | None) -> sqlite3.Connection:
+    path = resolve_database_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(path)
 
 
-def init_db(db_path: DatabasePath = DB_PATH) -> None:
+def init_db(db_path: DatabasePath | None = None) -> None:
     with closing(_connect(db_path)) as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -57,7 +62,7 @@ def save_snapshot(
     round_number: int,
     wins: int,
     losses: int,
-    db_path: DatabasePath = DB_PATH,
+    db_path: DatabasePath | None = None,
 ) -> str:
     init_db(db_path)
     snapshot_id = str(uuid.uuid4())
@@ -96,7 +101,7 @@ def get_random_snapshot(
     round_number: int,
     exclude_id: str | None = None,
     exclude_player_name: str | None = None,
-    db_path: DatabasePath = DB_PATH,
+    db_path: DatabasePath | None = None,
 ) -> Roster | None:
     init_db(db_path)
     query = """

@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from os import PathLike
 
 from src.application import ApplicationController
-from src.persistence.paths import DATA_DIR_ENV, app_data_dir
+from src.persistence.paths import DATA_DIR_ENV, app_data_dir, legacy_database_path
 from src.persistence.run_save import RunSaveStore
 from src.profile import default_profile_path
 from src.ui.application import DesktopApplication
@@ -27,7 +27,9 @@ def main(
     args = parser.parse_args(argv)
     data_dir = app_data_dir(args.data_dir)
     profile = args.profile_path or default_profile_path(data_dir)
-    controller = ApplicationController(profile)
+    # The desktop never opens the legacy database; passing the path keeps it
+    # in --data-dir if anything ever does.
+    controller = ApplicationController(profile, legacy_database_path(data_dir))
     DesktopApplication(controller, run_store=RunSaveStore(data_dir)).run()
 
 

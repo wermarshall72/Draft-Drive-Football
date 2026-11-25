@@ -118,9 +118,11 @@ or the design changes.
   a rotated backup, step-by-step schema migrations, exact random-number state,
   and safe handling of missing, damaged, newer-version, and unloadable saves.
   The team profile moved to the same folder.
-- [ ] Move or retire the legacy SQLite snapshot database (`src/db/schema.py`,
-  `DB_PATH` under the repo's `data/` folder). It writes inside the install
-  folder, which Steam and Mac App Store installs do not allow.
+- [x] Move the legacy SQLite snapshot database out of the install folder (moved,
+  not retired): the terminal client now opens `cfb_battler.db` in the app-data
+  folder (`legacy_database_path` in `src/persistence/paths.py`), and the
+  desktop never creates it. An old `data/cfb_battler.db` in the project folder
+  is not migrated or used and can be deleted by hand.
 - [ ] Steam Cloud: configure Steamworks Auto-Cloud for the app-data folder's
   `profile.json`, `run.json`, and `run.backup.json` on each OS, and decide on
   cloud-conflict UI. Multiple save slots are out of scope for now.

@@ -60,6 +60,12 @@ another folder, e.g. for debugging. On first launch a profile from the old
 Saves are readable JSON with a checksum; damaged or set-aside saves are kept
 beside them with a timestamped name.
 
+The terminal client's legacy SQLite snapshot database (`cfb_battler.db`)
+lives in the same folder and moves with `DDF_DATA_DIR` too; the desktop app
+never creates it. Nothing is written inside the project or install folder. An
+old `data/cfb_battler.db` in the project folder is no longer used and can be
+deleted.
+
 For code paths, feature ownership, and relevant tests, see the
 [system map](SYSTEM_MAP.md).
 
@@ -72,9 +78,12 @@ python -m src.main
 ```
 
 The first launch asks for a team name and two different colors. The saved
-profile is stored outside the project in the app-data folder listed under
-[Save files](#save-files), so it is not tied to the current working directory
-or the game's SQLite snapshot database. Profiles can also be created or
+profile and the terminal client's SQLite snapshot database (`cfb_battler.db`,
+created when a run starts) are stored outside the project in the app-data
+folder listed under [Save files](#save-files), so they are not tied to the
+current working directory; set `DDF_DATA_DIR` to move both. An old
+`data/cfb_battler.db` in the project folder is no longer used and can be
+deleted. Profiles can also be created or
 edited in the desktop app.
 
 ## Application boundary

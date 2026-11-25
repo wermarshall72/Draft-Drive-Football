@@ -357,7 +357,8 @@ covers extracted interaction state.
 
 [src/persistence/](src/persistence/__init__.py) does all save-file I/O and
 imports no Pygame. [paths.py](src/persistence/paths.py) resolves the per-OS
-app-data folder (`APP_DATA_NAME`, `DDF_DATA_DIR`, `app_data_dir`);
+app-data folder (`APP_DATA_NAME`, `DDF_DATA_DIR`, `app_data_dir`) and, on
+each call, the legacy terminal client's `cfb_battler.db` (`legacy_database_path`);
 [atomic_io.py](src/persistence/atomic_io.py) writes temp-fsync-replace files
 (also used by [profile.py](src/profile.py), whose `default_profile_path`
 copies a legacy `~/.cfb-auto-battler` profile once);
@@ -385,9 +386,14 @@ legacy run methods in [src/application.py](src/application.py), legacy
 [simulator.py](src/engine/simulator.py), and
 [units.py](src/engine/units.py), with action definitions in
 [coaching_actions.py](src/engine/coaching_actions.py). Its snapshot storage is
-[schema.py](src/db/schema.py). These are not the redesigned match engine.
+[schema.py](src/db/schema.py); a `None` `db_path` (the default everywhere)
+means `legacy_database_path()` in the app-data folder, resolved when
+`start_run` or a schema helper opens it, so the desktop never creates it.
+These are not the redesigned match engine.
 See [test_cli.py](tests/test_cli.py), [test_application.py](tests/test_application.py),
-and [test_snapshots.py](tests/test_snapshots.py).
+[test_snapshots.py](tests/test_snapshots.py), and
+[test_legacy_database_location.py](tests/test_legacy_database_location.py)
+(location, desktop never opens it, no repo-relative writable paths).
 
 [backtest_football_models.py](scripts/backtest_football_models.py) runs model
 and full regression tests; [measure_football_balance.py](scripts/measure_football_balance.py)

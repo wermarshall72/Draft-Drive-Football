@@ -11,7 +11,7 @@ from src.application import (
     RunState,
     UnitView,
 )
-from src.db.schema import DB_PATH, DatabasePath
+from src.db.schema import DatabasePath
 from src.engine.coaching_actions import CoachingAction
 from src.engine.game_run import GameRun
 from src.engine.shop import Shop
@@ -581,7 +581,7 @@ def _start_run(
 
 
 def main(
-    db_path: DatabasePath = DB_PATH,
+    db_path: DatabasePath | None = None,
     profile_path: str | PathLike[str] | None = None,
 ) -> None:
     application = ApplicationController(profile_path, db_path)

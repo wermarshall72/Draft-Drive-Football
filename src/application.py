@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from os import PathLike
 from typing import Literal
 
-from src.db.schema import DB_PATH, DatabasePath, init_db
+from src.db.schema import DatabasePath, init_db, resolve_database_path
 from src.engine.coaching_actions import POSITIONS, CoachingAction
 from src.engine.game_run import GameRun, RunPhase
 from src.engine.shop import Shop
@@ -121,11 +121,13 @@ class ApplicationController:
     def __init__(
         self,
         profile_path: str | PathLike[str] | None = None,
-        db_path: DatabasePath = DB_PATH,
+        db_path: DatabasePath | None = None,
     ) -> None:
         self.profile_path = (
             profile_path if profile_path is not None else default_profile_path()
         )
+        # None means the app-data folder's legacy database, resolved only when
+        # the terminal client's start_run opens it; the desktop never does.
         self.db_path = db_path
         self._profile: TeamProfile | None = None
         self._coach_choices: tuple[Coach, ...] = ()
@@ -165,11 +167,12 @@ class ApplicationController:
         if self._game is not None and not self._game.is_game_over():
             raise RuntimeError("A run is already in progress.")
 
-        init_db(self.db_path)
+        db_path = resolve_database_path(self.db_path)
+        init_db(db_path)
         self._coach_choices = tuple(random_coach_options())
         self._roster = create_starter_team(profile.team_name)
         self._shop = Shop(self._roster, days=Shop.OPENING_AP)
-        self._game = GameRun(self._roster, self._shop, db_path=self.db_path)
+        self._game = GameRun(self._roster, self._shop, db_path=db_path)
         self._step = "coach_selection"
         return self.run_state()
 

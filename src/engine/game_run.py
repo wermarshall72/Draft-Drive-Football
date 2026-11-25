@@ -1,6 +1,6 @@
 from typing import Literal
 
-from src.db.schema import DB_PATH, DatabasePath, get_random_snapshot, save_snapshot
+from src.db.schema import DatabasePath, get_random_snapshot, save_snapshot
 from src.engine.shop import Shop
 from src.engine.simulator import MatchResult, simulate_match
 from src.engine.units import Coach, Roster, SpecialTeams, Unit
@@ -19,7 +19,7 @@ class GameRun:
         self,
         roster: Roster,
         shop: Shop,
-        db_path: DatabasePath = DB_PATH,
+        db_path: DatabasePath | None = None,
     ) -> None:
         self.roster = roster
         self.shop = shop
