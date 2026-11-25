@@ -9,7 +9,7 @@ from src.ui.football_match_events import period_label
 
 
 def run_summary(state: FootballGameControllerState) -> str:
-    """e.g. ``GAME 4 · SHOP DAY 2 · 3-0 · HARD`` or ``GAME 6 · 2ND HALF · 14-10 · HARD``."""
+    """e.g. ``WEEK 4 · SHOP DAY 2 · 3-0 · HARD`` or ``WEEK 6 · 2ND HALF · 14-10 · HARD``."""
     record = f"{state.wins}-{state.losses}"
     phase = state.phase
     if phase is FootballRunPhase.COACH_DRAFT:
@@ -33,7 +33,7 @@ def run_summary(state: FootballGameControllerState) -> str:
 
 
 def replace_run_summary(state: FootballGameControllerState) -> str:
-    """The compact ``Game 4 · 3-0 · Hard`` used in the replace-run warning."""
+    """The compact ``Week 4 · 3-0 · Hard`` used in the replace-run warning."""
     if state.phase in (FootballRunPhase.COACH_DRAFT, FootballRunPhase.PLAYER_DRAFT):
         where = "Draft"
     else:

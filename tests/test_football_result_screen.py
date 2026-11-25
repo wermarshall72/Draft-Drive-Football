@@ -171,7 +171,7 @@ def _variants(finished):
         ), playoffs=_bracket()),
         ResultVariant.BYE_WEEK: replace(_season(
             finished, FootballRunPhase.READY_FOR_NEXT_GAME, [*nine, FootballSeasonGame(10, BYE)],
-            skipped=(10,), message="Bye Week skipped scheduled game 10 without a match result.",
+            skipped=(10,), message="Bye Week skipped week 10 without a match result.",
         ), playoffs=_bracket()),
         ResultVariant.PLAYOFF_WIN: _playoff(
             finished, FootballRunPhase.READY_FOR_NEXT_GAME, 11, QF, _bracket((QF, 31, 17)),
@@ -192,7 +192,7 @@ def test_each_variant_has_its_banner_and_primary_action(finished) -> None:
     fresh = states[ResultVariant.SEASON_COMPLETE].playoffs
     after_qf = states[ResultVariant.PLAYOFF_WIN].playoffs
     expected = {
-        ResultVariant.REGULAR: ("WIN", OPEN_NEXT_SHOP, "shop", "NEXT UP · SHOP BEFORE GAME 2"),
+        ResultVariant.REGULAR: ("WIN", OPEN_NEXT_SHOP, "shop", "NEXT UP · SHOP BEFORE WEEK 2"),
         ResultVariant.FIRED: ("FIRED", RETURN_TO_MENU, "menu", "RUN OVER · 3 LOSSES  ·  FINAL RECORD 1-3"),
         ResultVariant.SEASON_COMPLETE: (
             "PLAYOFFS", VIEW_PLAYOFF_BRACKET, "bracket",
@@ -200,7 +200,7 @@ def test_each_variant_has_its_banner_and_primary_action(finished) -> None:
         ),
         ResultVariant.BYE_WEEK: (
             "BYE WEEK", VIEW_PLAYOFF_BRACKET, "bracket",
-            f"GAME 10 SKIPPED  ·  7-2  ·  #3 SEED  ·  NEXT UP · QUARTERFINAL VS {_rival(fresh, QF)}",
+            f"WEEK 10 SKIPPED  ·  7-2  ·  #3 SEED  ·  NEXT UP · QUARTERFINAL VS {_rival(fresh, QF)}",
         ),
         ResultVariant.PLAYOFF_WIN: (
             "ADVANCES", VIEW_PLAYOFF_BRACKET, "bracket",
@@ -241,7 +241,7 @@ def test_playoff_results_name_the_round_and_show_the_playoff_path(finished) -> N
     assert "SEMIFINAL" in texts and "PLAYOFFS" in texts and "LOSS" in texts
     assert {"QF", "SF", "FINAL", "W", "L", "31-17", "10-24"} <= set(texts)
     # The regular-season tracker and record stay; the loss meter gives way to the path.
-    assert "G10" in texts and "8-2" in texts and "LOSSES" not in texts
+    assert "WK10" in texts and "8-2" in texts and "LOSSES" not in texts
     champion = _draw(_variants(finished)[ResultVariant.CHAMPION])[1]
     assert "CHAMPIONSHIP" in champion and "24-21" in champion
     complete = _draw(_variants(finished)[ResultVariant.SEASON_COMPLETE])[1]
@@ -256,14 +256,14 @@ def test_pause_button_opens_the_pause_menu(finished) -> None:
 
 def test_regular_result_shows_scores_header_stats_and_tracker(finished) -> None:
     _buttons, texts, _records, _calls, _view = _draw(finished)
-    assert "GAME 01" in texts and " · FINAL" in texts
+    assert "WEEK 01" in texts and " · FINAL" in texts
     assert "31" in texts and "17" in texts
     stats = match_team_stats(finished.match.match_events)
     assert f"{stats.team_a.total_yards} yd" in texts
     assert str(stats.team_a.plays) in texts
     for label in ("TOTAL YARDS", "RUSHING", "PASSING", "PLAYS", "TURNOVERS", "LONGEST PLAY"):
         assert label in texts
-    assert "1-0" in texts and "G1" in texts and "G10" in texts
+    assert "1-0" in texts and "WK1" in texts and "WK10" in texts
     assert "31-17" in texts  # game 1 tile
     assert "Final whistle" not in texts
 
@@ -292,7 +292,7 @@ def test_earlier_bye_appears_in_tracker(finished) -> None:
     state = _season(finished, FootballRunPhase.READY_FOR_NEXT_GAME,
                     [_played(1, W), FootballSeasonGame(2, BYE), _played(3, W, (31, 17))], skipped=(2,))
     texts = _draw(state)[1]
-    assert "BYE" in texts and "GAME 03" in texts and "2-0" in texts
+    assert "BYE" in texts and "WEEK 03" in texts and "2-0" in texts
 
 
 @pytest.mark.parametrize("color", ["navy", "silver", "yellow", "crimson"])
@@ -359,7 +359,7 @@ def test_season_tracker_tags_each_game_with_its_rival(finished) -> None:
     )
     _buttons, _texts, records, _calls, _view = _draw(state)
     for number, rival in enumerate(rivals, start=1):
-        label = next(rect for text, rect, _c in records if text == f"G{number}")
+        label = next(rect for text, rect, _c in records if text == f"WK{number}")
         tag, container = next((rect, c) for text, rect, c in records if text == rival.abbreviation)
         assert container.contains(tag) and not tag.colliderect(label), rival
 
@@ -388,3 +388,45 @@ def test_hero_and_stats_use_the_rivals_colors(finished) -> None:
 
     marker = surface.get_at((STATS.right - 18, STATS.top + 20))
     assert marker[:3] == tuple(opponent_colors(rival).accent)[:3]
+
+
+def test_week_tiles_fit_wk10_the_widest_abbreviation_and_the_chip(finished) -> None:
+    from src.engine.football_ai_teams import AI_TEAM_CATALOG
+    from src.ui.football_result import SEASON, TILE_FONT_SIZE
+    from src.ui.football_ui_kit import match_font
+
+    font = match_font(TILE_FONT_SIZE)
+    widest = max(AI_TEAM_CATALOG, key=lambda team: font.size(team.abbreviation)[0])
+    assert widest.abbreviation == "WRNG"
+    history = [_played(number, W if number % 3 else L) for number in range(1, 10)]
+    state = replace(_season(finished, FootballRunPhase.READY_FOR_NEXT_GAME, history),
+                    regular_season_teams=(widest,) * 10)
+    _buttons, _texts, records, _calls, _view = _draw(state)
+    tags = [(rect, c) for text, rect, c in records if text == widest.abbreviation]
+    assert len(tags) == 10
+    for number in range(1, 11):
+        label, tile = next((rect, c) for text, rect, c in records if text == f"WK{number}")
+        tag = next(rect for rect, c in tags if c == tile)
+        chip_left = tile.right - 6 - 12  # _draw_rival_tag's 12px chip, 6px from the edge
+        assert SEASON.contains(tile) and tile.contains(label) and tile.contains(tag)
+        assert label.right + 2 <= tag.left and tag.right <= chip_left, number
+
+
+def test_earlier_bye_week_numbers_weeks_not_games_played(finished) -> None:
+    history = [_played(1, W), _played(2, W), FootballSeasonGame(3, BYE), _played(4, L), _played(5, W)]
+    state = _season(finished, FootballRunPhase.READY_FOR_NEXT_GAME, history, skipped=(3,))
+    assert state.games_played == 4
+    _buttons, texts, records, _calls, _view = _draw(state)
+    # N GAMES PLAYED appears only on the Bye Week result; here the header names the week.
+    assert "WEEK 05" in texts and "WEEK 04" not in texts
+    assert "NEXT UP · SHOP BEFORE WEEK 6" in texts and "BYE" in texts
+    assert not any("GAME 0" in text or "GAME 6" in text for text in texts)
+
+
+def test_week_ten_bye_week_uses_week_wording(finished) -> None:
+    state = _variants(finished)[ResultVariant.BYE_WEEK]
+    _buttons, texts, _records, _calls, _view = _draw(replace(state, transition_message=None))
+    assert texts.count("WEEK 10") == 3  # header, hero slot, and Bye panel
+    assert any(text.startswith("WEEK 10 SKIPPED") for text in texts)
+    assert any("skipped week 10" in text for text in texts)
+    assert "NO GAME PLAYED" in texts and f"{state.games_played} GAMES PLAYED" in texts

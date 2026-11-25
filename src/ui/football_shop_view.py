@@ -25,7 +25,8 @@ from src.engine.football_shop import (
 )
 from src.engine.football_playoffs import game_label
 from src.ui.coach_art import draw_coach_portrait
-from src.ui.football_ai_team_colors import draw_team_chip, opponent_colors
+from src.ui.football_ai_team_colors import opponent_colors
+from src.ui.football_match_scoreboard import _helmet_sprite
 from src.ui.football_card_art import draw_card_art
 from src.ui.football_card_faces import card_art_name, draw_play_card_face
 from src.ui.football_coach_upgrade_details import (
@@ -110,7 +111,7 @@ def short_unlock_reason(slot: FootballShopSlotState, remaining_ap: int) -> str |
     reason = slot.disabled_reason
     if slot.can_unlock or reason is None:
         return None
-    if reason.startswith("Available after game"):
+    if reason.startswith("Available after week"):
         return reason.removeprefix("Available ").rstrip(".").upper()
     match = re.match(r"Unlock slot (\d+) first\.", reason)
     if match:
@@ -252,7 +253,6 @@ class FootballShopView:
                               topleft=(swatch.right + 8, sub_y - 2))
         blit_text(surface, sub_font, tail, MATCH_MUTED, content, topleft=(name_rect.right, sub_y - 2))
         pygame.draw.rect(surface, accent, (title.right + 10, title.centery - 2, 34, 4), border_radius=2)
-        self._draw_next_opponent(surface, content, title)
 
         number_font = plain_font(40)
         number = str(shop.remaining_ap)
@@ -278,26 +278,51 @@ class FootballShopView:
             pygame.draw.rect(surface, MATCH_GOOD, chip, 2, border_radius=13)
             blit_text(surface, chip_font, text, MATCH_GOOD, chip, center=chip.center)
             right_edge = chip.left - 12
+        card = self._draw_next_game(surface, shop, right_edge, badge)
+        if card is not None:
+            right_edge = card.left - 12
         if message:
             banner = pygame.Rect(content.left + 420, content.top + 2, right_edge - content.left - 420, 50)
             draw_message_banner(surface, banner, message, danger=error)
 
-    def _draw_next_opponent(self, surface: pygame.Surface, content: pygame.Rect,
-                            title: pygame.Rect) -> None:
-        """``NEXT  [chip] RIVAL`` on the title row, left of the message banner area."""
+    NEXT_GAME_WIDTH = 270
+
+    def _draw_next_game(self, surface: pygame.Surface, shop: FootballShopState, right_edge: int,
+                        badge: pygame.Rect) -> pygame.Rect | None:
+        """The next opponent's card left of the AP badge: helmet, week (or round) label, name, color rail."""
         rival = self._run_state.opponent_team if self._run_state is not None else None
         if rival is None:
-            return
-        label_font, name_font = match_font(12), plain_font(18)
-        left = title.right + 58
-        label = blit_text(surface, label_font, "NEXT", MATCH_MUTED, content,
-                          midleft=(left, title.centery + 1))
-        chip = pygame.Rect(0, 0, 18, 14)
-        chip.midleft = (label.right + 8, title.centery)
-        draw_team_chip(surface, chip, opponent_colors(rival))
-        room = content.left + 410 - (chip.right + 8)
-        blit_text(surface, name_font, fit_text(rival.name.upper(), name_font, room), MATCH_TEXT,
-                  content, midleft=(chip.right + 8, title.centery + 1))
+            return None
+        colors = opponent_colors(rival)
+        card = pygame.Rect(0, badge.top, self.NEXT_GAME_WIDTH, badge.height)
+        card.right = right_edge
+        pygame.draw.rect(surface, MATCH_INK, card.move(0, 4), border_radius=12)
+        pygame.draw.rect(surface, MATCH_PANEL, card, border_radius=12)
+        pygame.draw.rect(surface, MATCH_PANEL_EDGE_SOFT, card, 2, border_radius=12)
+
+        helmet = pygame.Rect(card.left + 10, card.top + 5, 50, card.height - 14)
+        sprite = _helmet_sprite(tuple(colors.primary[:3]), 38)
+        if sprite is not None:
+            surface.blit(sprite, sprite.get_rect(center=helmet.center))
+        else:
+            pygame.draw.ellipse(surface, colors.primary, helmet.inflate(-8, -4))
+
+        text_left = helmet.right + 10
+        text_box = pygame.Rect(text_left, card.top, card.right - 14 - text_left, card.height)
+        label = game_label(shop.game_number)
+        blit_text(surface, match_font(12), label, MATCH_MUTED, text_box,
+                  topleft=(text_left, card.top + 7))
+        name_font = plain_font(22)
+        blit_text(surface, name_font, fit_text(rival.name.upper(), name_font, text_box.width),
+                  MATCH_TEXT, text_box, topleft=(text_left, card.top + 21))
+
+        rail = pygame.Rect(card.left + 14, card.bottom - 7, card.width - 28, 3)
+        split = rail.left + rail.width * 2 // 3
+        pygame.draw.rect(surface, colors.accent, (rail.left, rail.top, split - rail.left, rail.height),
+                         border_top_left_radius=2, border_bottom_left_radius=2)
+        pygame.draw.rect(surface, colors.secondary, (split, rail.top, rail.right - split, rail.height),
+                         border_top_right_radius=2, border_bottom_right_radius=2)
+        return card
 
     def _draw_panel(self, surface: pygame.Surface, rect: pygame.Rect, title: str) -> None:
         pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=12)

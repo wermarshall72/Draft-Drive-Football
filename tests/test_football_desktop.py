@@ -1002,7 +1002,7 @@ def test_result_routes_fired_and_game_ten_to_the_playoffs(
         state = controller.state
         if game_number < games:
             assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
-            _activate(desktop, "OPEN NEXT GAME SHOP")
+            _activate(desktop, "OPEN NEXT WEEK SHOP")
             assert controller.state.game_number == game_number + 1
             assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
             _activate(desktop, "FINISH SHOP / START MATCH")
@@ -1023,7 +1023,7 @@ def _win_to_the_playoffs(desktop: DesktopApplication, monkeypatch) -> None:
     for game_number in range(1, 11):
         _play_first_match_card(desktop)
         if game_number < 10:
-            _activate(desktop, "OPEN NEXT GAME SHOP")
+            _activate(desktop, "OPEN NEXT WEEK SHOP")
             _activate(desktop, "FINISH SHOP / START MATCH")
 
 
@@ -1097,7 +1097,7 @@ def test_ready_for_next_game_button_opens_shop_before_the_next_match(
     controller = desktop.football_controller
     assert controller is not None
     assert controller.state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
-    _activate(desktop, "OPEN NEXT GAME SHOP", keyboard=True)
+    _activate(desktop, "OPEN NEXT WEEK SHOP", keyboard=True)
     assert controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
     assert controller.state.shop is not None
     assert controller.state.shop.remaining_ap == 12
@@ -1119,8 +1119,8 @@ def test_result_screen_is_full_screen_with_focused_primary_and_end_run(
     with text_audit() as records:
         desktop.router.draw(_surface())
     texts = [text for text, _, _ in records]
-    assert "GAME 01" in texts and "WIN" in texts and "TEAM STATS" in texts
-    assert [button.label for button in screen.buttons] == ["OPEN NEXT GAME SHOP", "PAUSE"]
+    assert "WEEK 01" in texts and "WIN" in texts and "TEAM STATS" in texts
+    assert [button.label for button in screen.buttons] == ["OPEN NEXT WEEK SHOP", "PAUSE"]
     assert screen.buttons[0].focused
 
     next(button for button in screen.buttons if button.label == "PAUSE").action()
@@ -1146,7 +1146,7 @@ def test_result_return_then_new_run_uses_updated_profile(
     for game_number in range(1, 4):
         _play_first_match_card(desktop)
         if game_number < 3:
-            _activate(desktop, "OPEN NEXT GAME SHOP")
+            _activate(desktop, "OPEN NEXT WEEK SHOP")
             _activate(desktop, "FINISH SHOP / START MATCH")
     assert first_controller.state.phase is FootballRunPhase.FIRED
     _activate(desktop, "RETURN TO MAIN MENU")
@@ -1753,7 +1753,7 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
         screen.buttons[0].action()
     desktop.router.draw(_surface())
     assert any(
-        button.label in {"OPEN NEXT GAME SHOP", "RETURN TO MAIN MENU"}
+        button.label in {"OPEN NEXT WEEK SHOP", "RETURN TO MAIN MENU"}
         for button in screen.buttons
     )
 

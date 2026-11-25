@@ -8,7 +8,7 @@ def coach_upgrade_detail_sections(card: FootballShopCard) -> tuple[str, ...]:
         raise ValueError("Coach upgrade details require a coach-upgrade card.")
 
     if effect.kind is FootballCoachUpgradeKind.BYE_WEEK:
-        duration = "Duration: One scheduled-game skip; no persistent match effect."
+        duration = "Duration: One scheduled-week skip; no persistent match effect."
         uniqueness = "Use: One time per run; this named event cannot be purchased again."
     elif effect.kind is FootballCoachUpgradeKind.FUTURE_SHOP_AP:
         duration = "Duration: Applies to later shops for the remainder of this run."
@@ -37,7 +37,7 @@ COACH_UPGRADE_SHORT_LINES = {
     "iron_lungs": "Defense +10% Stamina",
     "booster_club_drive": "+1 AP in every later shop",
     "facilities_fund": "+1 AP in every later shop",
-    "bye_week": "Skip this game - no win or loss",
+    "bye_week": "Skip this week - no win or loss",
     "tempo_install": "Offensive plays use 10% less clock",
     "huddle_up": "Offensive plays use 10% more clock",
     "vertical_threat": "Deep Pass yardage +10%",

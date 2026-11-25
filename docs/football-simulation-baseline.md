@@ -115,12 +115,12 @@ position; defining a conversion-specific Ball-Hawk effect remains open.
 ## Initial coach-upgrade catalog
 
 The first catalog has 18 run-unique named upgrades. Coach-upgrade shop slots
-unlock after game 3: the first costs 4 AP and the second costs 6 AP. Each
+unlock after week 3: the first costs 4 AP and the second costs 6 AP. Each
 upgrade's purchase cost and rarity are separate from those slot-unlock costs.
 Purchased match effects remain active for later games in the run; future-shop
 AP bonuses apply only to later shops. These initial values are provisional
 gameplay assumptions, not empirically calibrated balance targets.
-Future-shop AP upgrades are offered through scheduled game 9, but not in game
+Future-shop AP upgrades are offered through week 9, but not in week
 10 because no subsequent shop remains.
 
 | Upgrade | Rarity | Cost | Effect |
@@ -133,7 +133,7 @@ Future-shop AP upgrades are offered through scheduled game 9, but not in game
 | Iron Lungs | Uncommon | 3 AP | +0.10 effective defensive stamina after player training; +0.30 total and 1.00 per-player caps |
 | Booster Club Drive | Rare | 4 AP | +1 AP to every later shop this run; does not affect the current shop |
 | Facilities Fund | Rare | 5 AP | +1 AP to every later shop this run; future-shop bonuses cap at +2 AP |
-| Bye Week | Very Rare | 6 AP | Once per run, end the shop and skip its scheduled game without a match or record change |
+| Bye Week | Very Rare | 6 AP | Once per run, end the shop and skip that week's game without a match or record change |
 | Tempo Install | Rare | 3 AP | -10% relative clock for normal offensive card plays; incomplete passes still use 5 seconds, conversions and special teams retain their rules |
 | Huddle Up | Rare | 3 AP | +10% relative clock for normal offensive card plays; incomplete passes still use 5 seconds, conversions and special teams retain their rules |
 | Vertical Threat | Rare | 3 AP | +10% Deep Pass-family result-calculation yards; negative gains become 10% less negative |
@@ -172,9 +172,9 @@ kick, capped at 100%; it does not change the 0.5% block chance or the
 probability of an overall make after accounting for a block. Return-yard bonuses leave return, touchback, and
 touchdown chances unchanged.
 
-A Bye Week preserves the current record and assets, marks one scheduled game
-skipped, and opens the next scheduled game's shop for games 1-9. Skipping
-scheduled game 10 reaches the existing playoffs marker without fabricating a
+A Bye Week preserves the current record and assets, marks one scheduled week
+skipped, and opens the next week's shop for weeks 1-9. Skipping
+week 10 reaches the existing playoffs marker without fabricating a
 match or score; no playable playoff bracket exists yet.
 
 The measured balance uses a 3.5-yard global offensive yardage bonus, a

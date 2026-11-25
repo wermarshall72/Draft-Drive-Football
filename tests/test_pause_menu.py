@@ -381,7 +381,7 @@ def test_continue_mid_match_keeps_the_down_hand_and_score_without_replaying(
     target = match_screen.playback.target
     _esc(desktop)
     _activate(desktop, "RETURN TO MENU")
-    assert "GAME 1 · " in desktop.menu_screen.run_summary()[0]
+    assert "WEEK 1 · " in desktop.menu_screen.run_summary()[0]
     _activate(desktop, "CONTINUE RUN")
     _draw(desktop)
     assert controller.state == before
@@ -402,7 +402,7 @@ def test_continue_returns_to_the_regular_result_screen(tmp_path: Path, monkeypat
     _skip.playback.skip()
     assert desktop.football_controller.state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
     _round_trip(desktop)
-    assert _labels(desktop) == ["OPEN NEXT GAME SHOP", "PAUSE"]
+    assert _labels(desktop) == ["OPEN NEXT WEEK SHOP", "PAUSE"]
 
 
 # -- ended runs and replacing a run -----------------------------------------------------
@@ -415,7 +415,7 @@ def test_ended_runs_are_not_resumable(tmp_path: Path, monkeypatch) -> None:
     for game_number in range(1, 4):
         _play_first_match_card(desktop)
         if game_number < 3:
-            _activate(desktop, "OPEN NEXT GAME SHOP")
+            _activate(desktop, "OPEN NEXT WEEK SHOP")
             _activate(desktop, "FINISH SHOP / START MATCH")
     _draw(desktop)
     desktop.run_screen.match_screen.playback.skip()
@@ -438,7 +438,7 @@ def test_returning_during_a_run_ending_final_replay_clears_the_run(
     for game_number in range(1, 4):
         _play_first_match_card(desktop)
         if game_number < 3:
-            _activate(desktop, "OPEN NEXT GAME SHOP")
+            _activate(desktop, "OPEN NEXT WEEK SHOP")
             _activate(desktop, "FINISH SHOP / START MATCH")
     assert desktop.football_controller.state.phase is FootballRunPhase.FIRED
     # Forced results add no events, so pin the screen on the final replay directly.
@@ -488,7 +488,7 @@ def test_replace_confirmation_text_fits_with_the_run_summary(tmp_path: Path) -> 
     _assert_text_fits(records)
     texts = {text for text, _r, _c in records}
     assert "START A NEW RUN?" in texts
-    assert "Your current run (Game 1 · 0-0 · Standard) will be lost." in texts
+    assert "Your current run (Week 1 · 0-0 · Standard) will be lost." in texts
 
 
 # -- summaries, profile edits -----------------------------------------------------------
@@ -506,13 +506,13 @@ def test_continue_run_summary_text(tmp_path: Path) -> None:
     from src.engine.football_team_builder import PLAYER_DRAFT_ORDER
     for position in PLAYER_DRAFT_ORDER[1:]:
         _activate(desktop, f"DRAFT {position.value}", keyboard=True)
-    assert run_summary(state()) == "GAME 1 · SHOP DAY 1 · 0-0 · HARD"
+    assert run_summary(state()) == "WEEK 1 · SHOP DAY 1 · 0-0 · HARD"
     _activate(desktop, "FINISH SHOP / START MATCH")
     match = state().match
     assert run_summary(state()) == (
-        f"GAME 1 · 1ST HALF · {match.team_a_score}-{match.team_b_score} · HARD"
+        f"WEEK 1 · 1ST HALF · {match.team_a_score}-{match.team_b_score} · HARD"
     )
-    assert replace_run_summary(state()) == "Game 1 · 0-0 · Hard"
+    assert replace_run_summary(state()) == "Week 1 · 0-0 · Hard"
 
 
 def test_continue_run_button_shows_the_summary_and_fits(tmp_path: Path) -> None:
@@ -531,7 +531,7 @@ def test_continue_run_button_shows_the_summary_and_fits(tmp_path: Path) -> None:
 
     menu._draw_continue_button = record
     _draw(desktop)
-    assert summaries == ["GAME 1 · SHOP DAY 1 · 0-0 · STANDARD"]
+    assert summaries == ["WEEK 1 · SHOP DAY 1 · 0-0 · STANDARD"]
     buttons = menu.buttons
     assert [b.label for b in buttons] == [
         "CONTINUE RUN", "START RUN", "EASY", "STANDARD", "HARD", "SETTINGS", "QUIT",

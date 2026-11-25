@@ -977,7 +977,7 @@ class FootballShop:
             return False, f"Unlock slot {current + 1} first."
         if section is FootballShopSection.COACH_UPGRADES and slot_number == 1:
             if self._game_number < 4:
-                return False, "Available after game 3."
+                return False, "Available after week 3."
             if not self._catalogs[section]:
                 return False, "Coach upgrades are not available yet."
         elif section is not FootballShopSection.PLAYER_UPGRADES and not self._catalogs[section]:
@@ -1456,7 +1456,7 @@ def _coach_upgrade_catalog() -> tuple[FootballShopCard, ...]:
         _coach_upgrade_card(
             "bye_week",
             "Bye Week",
-            "Skip this scheduled game without a match result or record change. "
+            "Skip this week's game without a match result or record change. "
             "Immediately end this shop; this one-time event is available once "
             "per run.",
             FootballCoachUpgradeKind.BYE_WEEK,

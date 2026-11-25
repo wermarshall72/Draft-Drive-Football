@@ -180,8 +180,8 @@ def test_damaged_bracket_saves_are_unsupported() -> None:
 @pytest.mark.parametrize(
     ("game", "playoff_round", "label", "short"),
     (
-        (7, None, "GAME 07", "GAME 7"),
-        (10, None, "GAME 10", "GAME 10"),
+        (7, None, "WEEK 07", "WEEK 7"),
+        (10, None, "WEEK 10", "WEEK 10"),
         (11, QF, "QUARTERFINAL", "QUARTERFINAL"),
         (12, SF, "SEMIFINAL", "SEMIFINAL"),
         (13, CH, "CHAMPIONSHIP", "CHAMPIONSHIP"),

@@ -1240,7 +1240,7 @@ def test_bye_week_skips_a_game_without_match_or_ai_rng_and_run_finishes_after_ni
     assert (skipped.wins, skipped.losses) == (3, 0)
     assert skipped.shop is not None and skipped.shop.remaining_ap == ACTION_POINT_BUDGET
     assert skipped.match is prior_match
-    assert "scheduled game 4" in (skipped.transition_message or "")
+    assert "skipped week 4" in (skipped.transition_message or "")
     assert controller._match_seed_rng.getstate() == match_rng_before
     assert controller._ai._rng.getstate() == ai_rng_before
     assert skipped.shop.section(FootballShopSection.COACH_UPGRADES).slots[0].card is None

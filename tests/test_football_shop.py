@@ -682,7 +682,7 @@ def test_three_sections_start_with_requested_slots_and_playbook_cards() -> None:
     assert [slot.unlocked for slot in coaches.slots] == [False, False]
     assert coaches.slots[0].unlock_cost == 4
     assert not coaches.slots[0].can_unlock
-    assert "after game 3" in coaches.slots[0].disabled_reason
+    assert "after week 3" in coaches.slots[0].disabled_reason
     assert coaches.slots[1].unlock_cost == 6 and not coaches.slots[1].can_unlock
 
     unlocked = shop.unlock_slot(FootballShopSection.PLAYS_SCHEMES, 5)
@@ -691,7 +691,7 @@ def test_three_sections_start_with_requested_slots_and_playbook_cards() -> None:
     assert unlocked.section(FootballShopSection.PLAYS_SCHEMES).slots[5].can_unlock
     before = shop.state
     rng_before = shop._rng.getstate()
-    with pytest.raises(ValueError, match="after game 3"):
+    with pytest.raises(ValueError, match="after week 3"):
         shop.unlock_slot(FootballShopSection.COACH_UPGRADES, 1)
     assert shop.state == before
     assert shop._rng.getstate() == rng_before

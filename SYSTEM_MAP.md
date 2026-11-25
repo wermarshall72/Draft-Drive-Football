@@ -237,17 +237,18 @@ covers extracted interaction state.
   result (no shared app header): a compact GAME/round FINAL header, scoreboard
   hero with WIN/LOSS banner and OT label, a verdict ribbon (next shop, FIRED,
   PLAYOFFS, BYE WEEK, ADVANCES, ELIMINATED, or CHAMPIONS), team stats, the
-  10-game season tracker with the 3-strike loss meter (the playoff path once
+  10-week season tracker (WK1-WK10 tiles) with the 3-strike loss meter (the playoff path once
   the bracket exists), and the primary action plus PAUSE [ESC] while the run
   continues; ended playoff runs add VIEW BRACKET. An injectable clock drives a
-  score count-up that never blocks the button; the Bye Week game-10 result
+  score count-up that never blocks the button; the Bye Week week-10 result
   never shows the retained previous match.
   [football_ai_team_colors.py](src/ui/football_ai_team_colors.py) turns an AI
   team's color ids into display colors (`opponent_colors`, neutral steel when
   there is no team) and the two-color `draw_team_chip`; the scoreboard helmet,
   rails, and card backs, the AI end zone and markers, the result hero, stat
   bars, and season-tracker/playoff-path rival tags, the bracket rows, and the
-  shop header's NEXT opponent use it (see
+  shop header's next-opponent card (left of the AP badge, labeled by
+  `game_label`: WEEK 05 or the playoff round) use it (see
   [test_football_ai_team_colors.py](tests/test_football_ai_team_colors.py)).
   [football_playoff_bracket.py](src/ui/football_playoff_bracket.py) draws the
   eight-team bracket; the run screen shows it (`bracket_open`, a UI-only step)
@@ -325,13 +326,15 @@ covers extracted interaction state.
   [test_football_models.py](tests/test_football_models.py).
 - **Run progression:** [football_controller.py](src/engine/football_controller.py)
   connects draft, shop, simulator, AI, results, subsequent shops, and the
-  playoffs (games 11-13).
+  playoffs (weeks 11-13). Player-facing labels come from `game_label` in
+  [football_playoffs.py](src/engine/football_playoffs.py) (WEEK 07, or the
+  round name after week 10); `game_number` is that schedule week.
   It tracks actual games played separately from scheduled games skipped by
   Bye Week, and keeps a read-only per-game `season_history`
   (`FootballSeasonGame`: W/L with score and overtime flag, or BYE). Pending player upgrades are applied to the human match roster and
   cleared only when a match result is recorded, not on a Bye Week;
   [football_result.py](src/ui/football_result.py) renders the
-  game-10 skip without a fabricated score. The playoff bracket
+  week-10 skip without a fabricated score. The playoff bracket
   ([football_playoffs.py](src/engine/football_playoffs.py): seeding,
   pairings, AI-vs-AI results, `game_label`) is created when the regular
   season ends and saved with the run; playoff rivals come from

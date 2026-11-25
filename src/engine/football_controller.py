@@ -527,7 +527,7 @@ class FootballGameController:
     def enter_next_shop(self) -> FootballGameControllerState:
         self._require_phase(FootballRunPhase.READY_FOR_NEXT_GAME)
         if self._game_number >= FINAL_GAME_NUMBER:
-            raise RuntimeError("No scheduled game remains after the championship.")
+            raise RuntimeError("No scheduled week remains after the championship.")
         self._transition_message = None
         self._require_shop().open_next_visit(self._game_number + 1)
         self._game_number += 1
@@ -807,7 +807,7 @@ class FootballGameController:
         if not shop.finished:
             raise RuntimeError("Bye Week must finish the current shop before advancing.")
         if scheduled_game in self._skipped_games:
-            raise RuntimeError("A scheduled game cannot be skipped twice.")
+            raise RuntimeError("A scheduled week cannot be skipped twice.")
         self._skipped_games.append(scheduled_game)
         self._season_history.append(
             FootballSeasonGame(scheduled_game, FootballSeasonOutcome.BYE)
@@ -816,7 +816,7 @@ class FootballGameController:
             self._create_playoffs()
             self._phase = FootballRunPhase.READY_FOR_NEXT_GAME
             self._transition_message = (
-                "Bye Week skipped scheduled game 10 without a match result. "
+                "Bye Week skipped week 10 without a match result. "
                 "The regular season is complete: on to the playoffs."
             )
             return
@@ -826,8 +826,8 @@ class FootballGameController:
         self._game_number = next_game
         self._phase = FootballRunPhase.PRE_MATCH_SHOP
         self._transition_message = (
-            f"Bye Week skipped scheduled game {scheduled_game} without a win or "
-            f"loss. Next up: the shop before scheduled game {next_game}."
+            f"Bye Week skipped week {scheduled_game} without a win or "
+            f"loss. Next up: the shop before week {next_game}."
         )
 
     def _human_decision(

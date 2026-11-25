@@ -69,11 +69,13 @@ def playoff_round_for_game(game_number: int) -> FootballPlayoffRound | None:
 
 
 def game_label(game_number: int, *, padded: bool = True) -> str:
-    """``GAME 07`` (``GAME 7`` unpadded) in the regular season, ``QUARTERFINAL`` etc. after."""
+    """The player-facing schedule slot: ``WEEK 07`` (``WEEK 7`` unpadded) in the regular season,
+    ``QUARTERFINAL`` etc. after week 10. A week is a schedule slot, not a count of matches
+    played: a Bye Week skips one without a game."""
     playoff_round = playoff_round_for_game(game_number)
     if playoff_round is not None:
         return playoff_round.name
-    return f"GAME {game_number:02d}" if padded else f"GAME {game_number}"
+    return f"WEEK {game_number:02d}" if padded else f"WEEK {game_number}"
 
 
 def human_seed_for_losses(losses: int) -> int:

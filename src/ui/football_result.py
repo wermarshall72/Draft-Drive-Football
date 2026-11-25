@@ -2,9 +2,11 @@
 
 Layout on the 1280x720 logical surface (see ``HEADER`` .. ``FOOTER``). One layout
 serves every result: a regular-season win or loss, Run Over (third loss), the
-end of the regular season after game 10 (or its Bye Week, which never shows the
+end of the regular season after week 10 (or its Bye Week, which never shows the
 previous match's score or stats), a playoff win, a playoff loss (Eliminated),
-and the championship. From game 10 on, the season panel adds the playoff path.
+and the championship. From week 10 on, the season panel adds the playoff path.
+The schedule slot is a week (a Bye Week skips one), so the tracker tiles read
+WK1-WK10; "game" means a single match (``N GAMES PLAYED``, ``NO GAME PLAYED``).
 """
 
 from __future__ import annotations
@@ -46,6 +48,8 @@ HERO = pygame.Rect(20, 72, 1240, 190)
 RIBBON = pygame.Rect(20, 274, 1240, 44)
 STATS = pygame.Rect(20, 330, 760, 310)
 SEASON = pygame.Rect(796, 330, 464, 310)
+# Season tracker tiles: WK1-WK10 and the rival tag share the top row.
+TILE_WIDTH, TILE_GAP, TILE_FONT_SIZE = 84, 6, 10
 FOOTER = pygame.Rect(20, 654, 1240, 48)
 PRIMARY_RECT = pygame.Rect(0, 0, 380, 48)
 PRIMARY_RECT.midtop = (FOOTER.centerx, FOOTER.top)
@@ -55,7 +59,7 @@ LOSS_TONE = pygame.Color("#8fa6bf")
 FIRED_RED = pygame.Color("#d9645b")
 COUNT_UP_MS = 700
 
-OPEN_NEXT_SHOP = "OPEN NEXT GAME SHOP"
+OPEN_NEXT_SHOP = "OPEN NEXT WEEK SHOP"
 VIEW_PLAYOFF_BRACKET = "VIEW PLAYOFF BRACKET"
 VIEW_BRACKET = "VIEW BRACKET"
 RETURN_TO_MENU = "RETURN TO MAIN MENU"
@@ -361,7 +365,7 @@ class FootballResultView:
 
         slot = pygame.Rect(HERO.right - 26 - 330, HERO.top + 34, 330, 120)
         _dashed_rect(surface, slot, MATCH_PANEL_EDGE_SOFT)
-        blit_text(surface, plain_font(22), f"GAME {state.game_number}", MATCH_DIM, slot,
+        blit_text(surface, plain_font(22), f"WEEK {state.game_number}", MATCH_DIM, slot,
                   center=(slot.centerx, slot.centery - 14))
         blit_text(surface, match_font(14), "SKIPPED · NO SCORE", MATCH_DIM, slot,
                   center=(slot.centerx, slot.centery + 16))
@@ -382,7 +386,7 @@ class FootballResultView:
         seed = f"#{bracket.human_seed} SEED" if bracket is not None else ""
         gold = False
         if variant is ResultVariant.REGULAR:
-            stamp, line, tone = None, f"NEXT UP · SHOP BEFORE GAME {state.game_number + 1}", MATCH_PANEL_EDGE
+            stamp, line, tone = None, f"NEXT UP · SHOP BEFORE WEEK {state.game_number + 1}", MATCH_PANEL_EDGE
         elif variant is ResultVariant.FIRED:
             stamp, line, tone = "FIRED", f"RUN OVER · 3 LOSSES  ·  FINAL RECORD {record}", FIRED_RED
         elif variant is ResultVariant.SEASON_COMPLETE:
@@ -390,7 +394,7 @@ class FootballResultView:
             line = f"REGULAR SEASON COMPLETE  ·  {record}  ·  {seed}  ·  {next_up}"
         elif variant is ResultVariant.BYE_WEEK:
             stamp, tone = "BYE WEEK", MATCH_MUTED
-            line = f"GAME {state.game_number} SKIPPED  ·  {record}  ·  {seed}  ·  {next_up}"
+            line = f"WEEK {state.game_number} SKIPPED  ·  {record}  ·  {seed}  ·  {next_up}"
         elif variant is ResultVariant.PLAYOFF_WIN:
             stamp, tone, gold = "ADVANCES", MATCH_GOLD, True
             assert state.playoff_round is not None
@@ -506,12 +510,12 @@ class FootballResultView:
     def _draw_bye_panel(self, surface, state, accent: pygame.Color) -> None:
         self._panel(surface, STATS)
         pygame.draw.rect(surface, accent, (STATS.left + 12, STATS.top + 11, 4, 16), border_radius=2)
-        blit_text(surface, plain_font(17), f"GAME {state.game_number}", MATCH_TEXT, STATS,
+        blit_text(surface, plain_font(17), f"WEEK {state.game_number}", MATCH_TEXT, STATS,
                   topleft=(STATS.left + 22, STATS.top + 8))
         blit_text(surface, plain_font(44), "NO GAME PLAYED", MATCH_MUTED, STATS,
                   center=(STATS.centerx, STATS.top + 104))
         message = state.transition_message or (
-            "Bye Week skipped scheduled game 10 without a score or win/loss. "
+            "Bye Week skipped week 10 without a score or win/loss. "
             "The regular season is complete: on to the playoffs."
         )
         blit_wrapped(surface, message, pygame.Rect(STATS.left + 60, STATS.top + 156, STATS.width - 120, 110),
@@ -525,7 +529,8 @@ class FootballResultView:
         blit_text(surface, plain_font(30), f"{state.wins}-{state.losses}", MATCH_TEXT, SEASON,
                   topright=(SEASON.right - 18, SEASON.top + 4))
         history: dict[int, FootballSeasonGame] = {game.game_number: game for game in state.season_history}
-        width, height, gap = 80, 64, 8
+        # 84px tiles fit WK10, the widest abbreviation (WRNG), and the chip without overlap.
+        width, height, gap = TILE_WIDTH, 64, TILE_GAP
         grid_left = SEASON.left + (SEASON.width - (5 * width + 4 * gap)) // 2
         grid_top = SEASON.top + 48
         for number in range(1, 11):
@@ -652,10 +657,10 @@ class FootballResultView:
         pygame.draw.rect(surface, edge, tile, 1 if outcome is None else 2, border_radius=8)
         if current:
             pygame.draw.rect(surface, MATCH_TEXT, tile.inflate(6, 6), 2, border_radius=10)
-        blit_text(surface, match_font(11), f"G{number}", MATCH_MUTED if game else MATCH_DIM, tile,
-                  topleft=(tile.left + 7, tile.top + 4))
+        blit_text(surface, match_font(TILE_FONT_SIZE), f"WK{number}", MATCH_MUTED if game else MATCH_DIM,
+                  tile, topleft=(tile.left + 6, tile.top + 5))
         if rival is not None:
-            _draw_rival_tag(surface, tile, rival, dim=game is None)
+            _draw_rival_tag(surface, tile, rival, dim=game is None, font_size=TILE_FONT_SIZE)
         if outcome is None:
             pygame.draw.circle(surface, MATCH_PANEL_EDGE_SOFT, (tile.centerx, tile.centery + 2), 3)
             return
@@ -680,11 +685,12 @@ class FootballResultView:
         blit_text(surface, font, "ENTER", MATCH_DIM, cap, center=cap.center)
 
 
-def _draw_rival_tag(surface, tile: pygame.Rect, rival: FootballAITeam, *, dim: bool) -> None:
+def _draw_rival_tag(surface, tile: pygame.Rect, rival: FootballAITeam, *, dim: bool,
+                    font_size: int = 11) -> None:
     """The opponent's abbreviation and color chip in a tile's top-right corner."""
-    font = match_font(11)
+    font = match_font(font_size)
     chip = pygame.Rect(0, 0, 12, 9)
-    chip.topright = (tile.right - 7, tile.top + 6)
+    chip.topright = (tile.right - 6, tile.top + 6)
     draw_team_chip(surface, chip, opponent_colors(rival))
     blit_text(surface, font, rival.abbreviation, MATCH_DIM if dim else MATCH_MUTED, tile,
               topright=(chip.left - 4, tile.top + 4))

@@ -146,7 +146,7 @@ or the design changes.
   by drive or team, and an optional playback-speed setting.
 - [x] Add the first named coach-upgrade catalog, run-unique purchase history,
   typed effects in match resolution/estimates, future-shop AP bonuses, and a
-  one-time Bye Week purchase that skips a scheduled game without a match.
+  one-time Bye Week purchase that skips a scheduled week without a match.
 - [x] Make coach-upgrade effects fully inspectable in the shop and Depth Chart,
   preview live normal-play clock values, apply family yardage upgrades in the
   beneficial direction for positive and negative gains, and clarify conditional
@@ -157,12 +157,12 @@ or the design changes.
   the six-family invariants.
 - [ ] Design future player synergies and AP-saving actions. Unspent AP
   currently expires at the end of each shop visit.
-- [x] Implement an eight-team, single-elimination playoff bracket after game
+- [x] Implement an eight-team, single-elimination playoff bracket after week
   10: seeding by regular-season losses, a shop before each round, tougher
   rivals each round, AI-vs-AI results, a bracket screen, CHAMPION and
   ELIMINATED endings, and save format 3.
 - [ ] Tune playoff difficulty. Each round adds +0.25 rival power and one deck
-  card; a Standard AI proxy's win rate fell from about 0.49 (game 10) to 0.41
+  card; a Standard AI proxy's win rate fell from about 0.49 (week 10) to 0.41
   (championship) in a 400-game sample, with wide noise. Revisit after
   playtesting, and decide whether seeds should change rival strength.
 - [ ] Decide whether playoff results should feed a career record, and whether

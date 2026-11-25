@@ -15,10 +15,11 @@ enter a team name, and choose different primary and secondary colors. Use
 select **Save Profile**; canceling leaves the saved profile unchanged. If a
 profile cannot be loaded, the desktop does not overwrite it.
 Start an offline run by choosing a local AI difficulty, selecting a coach, and
-drafting one player at each of the eight positions. Before each game, visit
-the shop with 12 Action Points shared across its sections; unspent points
+drafting one player at each of the eight positions. Each season week opens
+with a shop visit with 12 Action Points shared across its sections; unspent points
 expire when the visit ends. Call offensive plays and defensive schemes during
-matches. Three losses end the run; surviving all ten regular-season games
+matches. Three losses end the run; surviving all ten regular-season weeks (a
+Bye Week can skip one without a game)
 earns a seed in an eight-team, single-elimination playoff bracket, with a shop
 before each round. One playoff loss ends the run; three wins take the title.
 

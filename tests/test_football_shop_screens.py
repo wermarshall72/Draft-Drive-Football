@@ -183,7 +183,7 @@ def test_header_footer_reroll_unlock_and_keyboard_purchase(tmp_path: Path) -> No
     controller = desktop.football_controller
     texts = {text for text, _rect, _container in _texts(desktop)}
     assert {"SHOP", "12", "AP", "PLAYER UPGRADES", "COACH UPGRADES", "PLAYS & SCHEMES", SHORT_HINT} <= texts
-    assert "AFTER GAME 3" in texts
+    assert "AFTER WEEK 3" in texts
     assert not any("THREE SHOPS" in text or "STANDARDIZED NEUTRAL" in text or text == "BUY" for text in texts)
 
     screen = desktop.run_screen
@@ -294,7 +294,7 @@ def _reach_game_four(desktop, monkeypatch, cards):
     for _ in range(3):
         _activate(desktop, "FINISH SHOP / START MATCH")
         _play_first_match_card(desktop)
-        _activate(desktop, "OPEN NEXT GAME SHOP")
+        _activate(desktop, "OPEN NEXT WEEK SHOP")
     return controller
 
 
@@ -330,7 +330,7 @@ def test_coach_unlock_and_bye_week_through_shop_router(
     assert state.wins == 3 and state.losses == 0 and state.shop.remaining_ap == 12
     records = _texts(desktop)
     joined = " ".join(text for text, _r, _c in records)
-    assert "Bye Week skipped scheduled game 4" in joined
+    assert "Bye Week skipped week 4" in joined
     _assert_text_fits(records)
 
 
@@ -622,8 +622,8 @@ def test_every_card_kind_fits_for_long_names_and_team_colors(
     tmp_path: Path, team: str, primary: str, secondary: str,
 ) -> None:
     desktop = _shop_desktop(tmp_path, team_name=team, primary=primary, secondary=secondary)
-    message = ("Bye Week skipped scheduled game 6 without a win or loss. "
-               "Next up: the shop before scheduled game 7.")
+    message = ("Bye Week skipped week 6 without a win or loss. "
+               "Next up: the shop before week 7.")
     _every_kind(desktop, message=message)
     _assert_text_fits(_texts(desktop))
     S = FootballShopSection.PLAYS_SCHEMES
@@ -1098,7 +1098,7 @@ def test_review_escape_cancels_pending_removal_without_spending_ap(tmp_path: Pat
     assert desktop.run_screen.shop_review.mode is None and not desktop.run_screen.pause.is_open
 
 
-def test_header_names_the_next_opponent_without_reaching_the_banner(tmp_path: Path) -> None:
+def test_next_game_card_names_the_opponent_beside_the_ap_badge(tmp_path: Path) -> None:
     from src.engine.football_ai_teams import AI_TEAM_CATALOG
     from src.ui.football_ui_kit import plain_font
 
@@ -1106,14 +1106,63 @@ def test_header_names_the_next_opponent_without_reaching_the_banner(tmp_path: Pa
     screen = desktop.run_screen
     rival = screen.state.opponent_team
     assert rival is not None and rival is screen.state.regular_season_teams[0]
-    texts = [text for text, _rect, _container in _texts(desktop)]
-    assert "NEXT" in texts and rival.name.upper() in texts
-
-    font = plain_font(18)
-    widest = max(AI_TEAM_CATALOG, key=lambda team: font.size(team.name.upper())[0])
-    screen.state = replace(screen.state, opponent_team=widest,
-                           transition_message="A long message banner fills the header.")
     records = _texts(desktop)
-    title = next(rect for text, rect, _c in records if text == "SHOP")
-    name = next(rect for text, rect, _c in records if text.startswith(widest.name.upper()[:6]))
-    assert name.right <= title.left + 420
+    texts = [text for text, _rect, _container in records]
+    assert "WEEK 01" in texts and rival.name.upper() in texts
+    ap = next(rect for text, rect, _c in records if text == "AP")
+    name = next(rect for text, rect, _c in records if text == rival.name.upper())
+    assert name.right < ap.left
+
+    font = plain_font(22)
+    widest = max(AI_TEAM_CATALOG, key=lambda team: font.size(team.name.upper())[0])
+    message = "A long message banner fills the header."
+    screen.state = replace(screen.state, opponent_team=widest, transition_message=message)
+    records = _texts(desktop)
+    name = next((rect, c) for text, rect, c in records if text.startswith(widest.name.upper()[:6]))
+    assert name[1].contains(name[0])
+    texts = [text for text, _rect, _container in records]
+    assert widest.name.upper() in texts  # the widest name still fits uncut
+
+
+def test_week_labels_follow_the_schedule_after_an_earlier_bye_week(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A week-4 Bye Week: week 5 is the 4th match, so every label says WEEK 5, not game 4."""
+    desktop = _new_desktop(tmp_path)
+    _start_run(desktop)
+    controller = _reach_game_four(desktop, monkeypatch, (COACHES["bye_week"],))
+    _draw(desktop)
+    unlock = next(b for b in desktop.run_screen.buttons
+                  if isinstance(b, ShopCardButton) and b.section is FootballShopSection.COACH_UPGRADES
+                  and b.slot_number == 1)
+    _click(desktop, unlock.hit_rect.center)
+    _draw(desktop)
+    bye = next(b for b in desktop.run_screen.buttons
+               if isinstance(b, ShopCardButton) and b.card_id == "bye_week")
+    for _ in range(2):
+        _click(desktop, bye.hit_rect.center)
+    state = controller.state
+    assert (state.game_number, state.games_played, state.skipped_games) == (5, 3, (4,))
+
+    records = _texts(desktop)
+    texts = [text for text, _r, _c in records]
+    assert any("WEEK 5" in text and "DAY 1" in text for text in texts)  # shop header
+    assert "WEEK 05" in texts  # next-opponent card
+    assert not any("GAME 5" in text or "GAME 4" in text for text in texts)
+    _assert_text_fits(records)
+
+    _activate(desktop, "FINISH SHOP / START MATCH")
+    with text_audit() as records:
+        _draw(desktop)
+    assert "WEEK 05  ·  RECORD 3-0" in [text for text, _r, _c in records]  # scoreboard
+
+    _play_first_match_card(desktop)
+    state = controller.state
+    assert state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
+    assert (state.game_number, state.games_played) == (5, 4)
+    records = _texts(desktop)
+    texts = [text for text, _r, _c in records]
+    assert "WEEK 05" in texts and "WEEK 04" not in texts
+    assert "NEXT UP · SHOP BEFORE WEEK 6" in texts
+    assert all(f"WK{number}" in texts for number in range(1, 11)) and "BYE" in texts
+    _assert_text_fits(records)
