@@ -445,7 +445,7 @@ def test_hard_ai_scores_exact_hand_variants_and_uses_clock_tempo() -> None:
         )
 
 
-def test_hard_offense_uses_active_scheme_and_selects_only_legal_hand_cards() -> None:
+def test_hard_offense_ignores_the_secret_scheme_and_selects_only_legal_hand_cards() -> None:
     ai = _ai(FootballAIDifficulty.HARD)
     offense = _roster(
         "Home",
@@ -499,7 +499,8 @@ def test_hard_offense_uses_active_scheme_and_selects_only_legal_hand_cards() -> 
 
     run_scheme_score = ai._hard_play_score(run_scheme_state, OffensivePlayAction.RB_RUN)
     pass_scheme_score = ai._hard_play_score(pass_scheme_state, OffensivePlayAction.RB_RUN)
-    assert pass_scheme_score != run_scheme_score
+    # The rival's defense call is secret: the AI's offense scores against its deck.
+    assert pass_scheme_score == run_scheme_score
     chosen = ai.choose_action(pass_scheme_state)
     assert chosen in (OffensivePlayAction.RB_RUN, OffensivePlayAction.DEEP_PASS)
     assert chosen is not OffensivePlayAction.SHORT_PASS

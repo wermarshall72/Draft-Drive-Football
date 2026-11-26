@@ -17,6 +17,7 @@ from src.engine.football import (
 from src.engine.football_decks import OFFENSIVE_PLAY_CATALOG
 from src.engine.football_perk_context import perk_history
 from src.engine.football_simulator import (
+    calculate_blind_play_estimate,
     calculate_match_play_estimate,
     calculate_play_estimate,
     field_goal_success_probability,
@@ -460,7 +461,8 @@ def test_hard_ai_scores_plays_with_the_same_perk_estimate() -> None:
     snap(sim, "deep_pass", randoms=(0.0,))
     ai = FootballAI(B, FootballAIDifficulty.HARD, 3)
     score = ai._hard_play_score(sim.state, P.SHORT_PASS)
-    estimate = calculate_match_play_estimate(sim.state, P.SHORT_PASS, offense_side=B)
+    # AI offense is blind to the rival's call: the deck-weighted estimate, perks included.
+    estimate = calculate_blind_play_estimate(sim.state, P.SHORT_PASS, offense_side=B)
     assert K.CHECKDOWN in [a.kind for a in estimate.player_perks]
     expected = (
         ai._situational_play_score(sim.state, P.SHORT_PASS)

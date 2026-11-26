@@ -187,8 +187,9 @@ one run should take 15-30 minutes, so defense stays light.
   before the call, every pass family misses about 29% of the time (so Deep
   Pass is the biggest number with no extra risk), runs average 3.7 yards
   against 6.0 for a countered Deep Pass, and cards show no risk. (Risk is now
-  shown: a hand card's hover/focus tooltip gives the miss or fumble chance, and
-  stopped cards carry a STOPPED tag. The balance question remains open.)
+  shown: a hand card's hover/focus tooltip gives the miss or fumble chance. The
+  rival's defense call is now secret, so the call is no longer obvious; the
+  balance question remains open.)
 - [x] Defense is one call per drive followed by watching the AI drive replay
   (up to 9 plays); keep it light, but make the one call clear and informed.
   The strip now reads "PICK ONE DEFENSE FOR THIS DRIVE" with how long it lasts
@@ -213,6 +214,32 @@ one run should take 15-30 minutes, so defense stays light.
   ("OL+RB", "OFF DRAW").
 - [ ] Measure real run length against the 15-30 minute goal (a match has about
   33 offensive calls, 6 defensive calls, and the AI drive replays).
+
+## Secret defense calls and the perk tray (2026-11-25)
+
+- [x] The defense call is secret from the offense (see AGENTS.md): the field,
+  strip, hand, tooltip, Play Log, replays, and perk callouts never reveal the
+  AI's call; previews and AI offense use `calculate_blind_play_estimate` (a
+  deck-weighted average over the defender's owned calls). Read Keys still shows
+  its owner the rival's hand.
+- [x] The perk tray shows every drafted specialist's perk (always-on ones with
+  no status dot) in two rows, with a hover tooltip and a click/Enter rules popup.
+- Balance, `scripts/measure_football_balance.py --skip-plays` (300 games each,
+  Team A Standard against the listed difficulty; both AIs are blind on offense
+  after the change; nothing retuned):
+
+  | Opponent | Team A win rate before → after | Points/game A; B before → after | Combined before → after |
+  |---|---|---|---|
+  | Easy | 0.627 → 0.623 | 19.84; 15.80 → 19.86; 15.62 | 35.64 → 35.48 |
+  | Standard | 0.500 → 0.513 | 19.07; 19.23 → 19.10; 19.08 | 38.30 → 38.19 |
+  | Hard | 0.317 → 0.350 | 17.03; 22.73 → 17.34; 22.30 | 39.76 → 39.64 |
+
+  Scoring is unchanged; Hard loses a little of its edge over Standard (its
+  offense no longer sees the call). The script now takes about 2 minutes
+  instead of 45 seconds because each AI offensive estimate averages over the
+  defender's calls.
+- [ ] Watch whether Hard still feels distinct now that its offense is blind;
+  revisit only after human playtests.
 
 ## Known bugs
 

@@ -552,3 +552,29 @@ almost every half its team plays, so it sits near its new ceiling; Keep Read is
 still the most frequent rare perk after it. Win rates and scoring are unchanged
 within sampling noise. Two-point tries remain above the perks-off rate
 (0.33; 0.35; 0.30).
+
+### Follow-up: the defense call is secret from the offense
+
+The offense never sees the defense's call (AGENTS.md), so perk text that
+depends on the AI's call is hidden from the human. Every perk still works
+exactly as before in the engine; only what the human is shown changed.
+`scheme_keyed_defense` (`src/engine/football_perk_context.py`) decides which
+activations depend on a call.
+
+| Perk | When hidden | Why |
+|---|---|---|
+| D1 Hold the Front, D2 Edge Set, D3 Contain, D6 Stunt Sack, L1 Fit & Shed, C2 Force & Fold, C3 Nickel Lock, C4 Bracket, C5 Deep Lock, S2 Safety Blitz, S3 Downhill Fill, S4 Tip Drill | The AI owns it (strip callout and Play Log entry hidden) | Fires only for the AI's call family or the defenders that call uses |
+| L2 Captain's Adjustment | The AI's standing "+8 rest of drive" effect only; its trigger still shows | The standing effect needs linebackers in the AI's call |
+| Q6 Silent Count | The human owns it | Fires only when the AI's call stops the play |
+| O5 Screen Wall | The human's standing "rival DL −8" effect only; its trigger still shows | Applies only when the AI's call uses its D-line |
+| W1 Hot Route | Never hidden; callout reworded to "SWAPPED A CARD" (was "SWAPPED A STOPPED CARD") | Names neither the call nor its family |
+| Coach perks Coverage, Pressure / Blitz, Run Stop | The AI's coach (Play Log effect line hidden) | Fire only on a play the AI's call stops |
+
+When the human defends, all of these show as before (it is the human's own
+call). Preview notes on the human's cards come from the blind estimate and keep
+only perks whose firing does not depend on the call (for example Motion Jump,
+Pull Lead, Checkdown, Keep Read, Shot Setup, Bait & Jump), so Edge Set, Nickel
+Lock, Downhill Fill, Safety Blitz, Force & Fold, Silent Count, and the standing
+effects of Screen Wall and Captain's Adjustment no longer appear in previews.
+AI offense is blind the same way, so Standard's perk nudge counts only
+call-independent perks.

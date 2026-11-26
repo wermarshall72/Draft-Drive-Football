@@ -403,7 +403,7 @@ def activation_result(activation: FootballPerkActivation) -> str:
         K.OUTLET_REPEAT: lambda: "CARD KEPT",
         K.DOWNHILL: lambda: f"+{_n(value)} YDS",
         K.FALL_FORWARD: lambda: "+1 YARD FLOOR",
-        K.HOT_ROUTE: lambda: "SWAPPED A STOPPED CARD",
+        K.HOT_ROUTE: lambda: "SWAPPED A CARD",
         K.CONTESTED_CATCH: lambda: "REROLL: CAUGHT" if value > 0 else "REROLL: NO CATCH",
         K.MOVE_THE_STICKS: lambda: "FIRST DOWN",
         K.PYLON_REACH: lambda: "TD",

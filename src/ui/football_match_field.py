@@ -364,10 +364,11 @@ def _draw_scheme_tag(
     scheme = match.current_drive_defensive_scheme
     if scheme is None or match.conversion_team is not None:
         return
-    definition = DEFENSIVE_SCHEME_CATALOG[scheme.value]
     human_defending = match.possession is FootballTeamSide.TEAM_B
-    owner = "YOUR DEFENSE" if human_defending else f"{match.team_b.team_name.upper()} DEFENSE"
-    text = f"{owner}: {definition.name.upper()}"
+    if not human_defending:
+        return  # the rival's defense call is secret
+    definition = DEFENSIVE_SCHEME_CATALOG[scheme.value]
+    text = f"YOUR DEFENSE: {definition.name.upper()}"
     fill = MATCH_FOCUS if human_defending and human_highlight else MATCH_PANEL_DEEP
     ink = MATCH_INK if fill == MATCH_FOCUS else MATCH_TEXT
     font_width = geometry.playing.width // 2

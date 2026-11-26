@@ -301,9 +301,15 @@ def test_outcome_wording_for_yards_first_downs_and_conversions() -> None:
 
 def test_scheme_events_and_period_banners() -> None:
     scheme = _scheme(1, A, 25.0)
+    # The rival (Team B) defends: its call stays secret.
     result = outcome(scheme, None, "Home", "Away")
-    assert result.headline == "DEFENSE SET · RUN FIT"
+    assert result.headline == "AWAY SET THEIR DEFENSE"
+    assert "RUN FIT" not in result.headline + result.detail
+    assert "STOPS" not in result.headline + result.detail
     assert result.kind is PlayLineKind.OTHER
+    own = outcome(_scheme(1, B, 25.0), None, "Home", "Away")
+    assert own.headline == "DEFENSE SET · RUN FIT"
+    assert own.detail == "HOME · STOPS RB RUN"
     assert active_scheme((scheme,)) is DefensiveSchemeAction.RB_RUN
     punt = _event(2, FootballFourthDownAction.PUNT, B, 30.0, gross_yards=40.0,
                   return_yards=0.0, clock_seconds_used=10)

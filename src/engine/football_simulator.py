@@ -66,6 +66,7 @@ from src.engine.football_perk_context import (
     FootballPerkEstimateInputs,
     estimate_perk_inputs,
     perk_history,
+    scheme_keyed_defense,
     team_perks,
 )
 from src.engine.football_decks import (
@@ -868,6 +869,122 @@ def calculate_match_play_estimate(
             else state.team_a_coach_upgrades
         ),
     )
+
+
+@dataclass(frozen=True)
+class FootballBlindPlayEstimate:
+    """The offense's expected result when it cannot see the defense's call.
+
+    ``components`` pairs each defense-call family the defending team owns with its
+    share of that team's whole owned defensive deck and the ordinary estimate
+    against that family. Every figure is the weighted average of those estimates.
+    ``player_perks`` keeps only perks whose firing does not depend on the call.
+    """
+
+    family: FootballCardFamily
+    components: tuple[tuple[float, FootballPlayEstimate], ...]
+    player_perks: tuple[FootballPerkActivation, ...] = ()
+    keep_read: bool = False
+
+    def _average(self, value) -> float:
+        return sum(weight * value(estimate) for weight, estimate in self.components)
+
+    @property
+    def expected_yards(self) -> float:
+        return self._average(lambda estimate: estimate.expected_yards)
+
+    @property
+    def yards_on_success(self) -> float:
+        return self._average(lambda estimate: estimate.yards_on_success)
+
+    @property
+    def incomplete_probability(self) -> float:
+        return self._average(lambda estimate: estimate.incomplete_probability)
+
+    @property
+    def turnover_probability(self) -> float:
+        return self._average(lambda estimate: estimate.turnover_probability)
+
+    def first_down_probability(self, yards_to_go: float) -> float:
+        return self._average(lambda estimate: estimate.first_down_probability(yards_to_go))
+
+
+def defense_call_weights(
+    state: FootballMatchState, defense_side: FootballTeamSide
+) -> tuple[tuple[DefensiveSchemeAction, float], ...]:
+    """One representative call per family the defense owns, weighted by its copies.
+
+    Counts every owned scheme copy in the defending team's deck (never its hand or
+    its active call). Without a deck, each family counts once.
+    """
+    deck = getattr(state, f"{defense_side.value}_defense_deck")
+    counts: dict[FootballCardFamily, int] = {}
+    representative: dict[FootballCardFamily, DefensiveSchemeAction] = {}
+    if isinstance(deck, FootballDeckState):
+        for card in deck.owned:
+            definition = DEFENSIVE_SCHEME_CATALOG.get(card.card_id)
+            if definition is None:
+                continue
+            family = DEFENSIVE_SCHEME_FAMILIES[definition.action]
+            counts[family] = counts.get(family, 0) + 1
+            representative.setdefault(family, definition.action)
+    if not counts:
+        for scheme, family in DEFENSIVE_SCHEME_FAMILIES.items():
+            if family not in counts:
+                counts[family] = 1
+                representative[family] = scheme
+    total = sum(counts.values())
+    return tuple(
+        (representative[family], counts[family] / total)
+        for family in FootballCardFamily
+        if family in counts
+    )
+
+
+def calculate_blind_play_estimate(
+    state: FootballMatchState,
+    play: OffensivePlayAction,
+    *,
+    offense_side: FootballTeamSide | None = None,
+    is_conversion: bool = False,
+) -> FootballBlindPlayEstimate:
+    """The offense's estimate without knowing the defense's real call.
+
+    Averages ``calculate_match_play_estimate`` over the defending team's possible
+    calls, weighted by its whole owned defensive deck. It never reads the active
+    call (``current_drive_defensive_scheme``), so changing that call leaves the
+    result unchanged. Previews and AI offense use this; resolution uses the real
+    call.
+    """
+    if not isinstance(state, FootballMatchState):
+        raise ValueError("Play estimate requires a FootballMatchState.")
+    if not isinstance(play, OffensivePlayAction):
+        raise ValueError("Play estimate requires an offensive play.")
+    side = offense_side or state.possession
+    components = tuple(
+        (
+            weight,
+            calculate_match_play_estimate(
+                state, play, scheme=scheme, offense_side=side, is_conversion=is_conversion,
+            ),
+        )
+        for scheme, weight in defense_call_weights(state, _opponent(side))
+    )
+    first = components[0][1]
+    return FootballBlindPlayEstimate(
+        family=first.family,
+        components=components,
+        player_perks=tuple(
+            activation for activation in first.player_perks
+            if scheme_keyed_defense(activation) is None
+        ),
+        keep_read=first.keep_read,
+    )
+
+
+# Coach-perk effect lines that fire only when the defense's call stops the play;
+# the offense must not see them while the defense's call is secret.
+SCHEME_KEYED_COACH_EFFECT_PREFIXES = ("Coverage:", "Pressure / Blitz:", "Run Stop:")
 
 
 def _play_perk_effect_messages(

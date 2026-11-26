@@ -46,7 +46,8 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "Your defense picks one kind of play to stop. If the offense calls that kind, "
         "it's stopped and gains less.",
         "On defense you pick one defense call per drive. It stays until they score, "
-        "punt, or turn it over. On offense, cards marked STOPPED gain less.",
+        "punt, or turn it over. The rival's call is secret: learn what works from "
+        "the yards you gain.",
     )),
     ("Downs and 4th down", (
         "You get four downs to gain 10 yards for a first down.",

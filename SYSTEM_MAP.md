@@ -46,7 +46,7 @@ auto-battler is a separate legacy reference.
   replays. Tips never block input; GOT IT, Esc, or making the decision hides
   them, and only one shows at a time. See
   [test_first_time_help.py](tests/test_first_time_help.py) (also the wording,
-  STOPPED tags, tooltips, scouting, and How to Play; the `tips_seen` fixture in
+  tooltips, scouting, and How to Play; the `tips_seen` fixture in
   [conftest.py](tests/conftest.py) is for Esc-driven tests),
   [test_desktop.py](tests/test_desktop.py),
   [test_profile.py](tests/test_profile.py),
@@ -230,7 +230,8 @@ covers extracted interaction state.
   [football_match_scoreboard.py](src/ui/football_match_scoreboard.py) draws
   badges, scores, clock, situation, and the opponent's face-down hand counts
   (never identities); [football_match_field.py](src/ui/football_match_field.py)
-  draws turf, markers, the active scheme tag, and the latest play line;
+  draws turf, markers, the human's own active defense call tag (never the
+  rival's), and the latest play line;
   [football_match_outcome.py](src/ui/football_match_outcome.py) draws the
   result and the fourth-down, conversion, Challenge, and Skip buttons, plus the
   defense call's prompt, sub-line, and `scouting_line` (the rival's most-owned
@@ -240,10 +241,11 @@ covers extracted interaction state.
   offensive play cards), live yard/clock previews, bonus cards, the ACTIVE
   scheme slot, the basic-run fallback slot whenever the offensive hand has no
   play card, and per-group scrolling that reveals a playable card once per
-  decision. With a live estimate (including two-point tries) offense cards the
-  rival's defense call stops get a red STOPPED chip, and hovering or focusing
-  one shows a compact tooltip over the strip (`tooltip_lines`, from
-  `calculate_match_play_estimate`; `draw_card_tooltip` in the match screen);
+  decision. Live yards (including two-point tries) come from the blind
+  `calculate_blind_play_estimate`, and hovering or focusing an offense card
+  shows a compact tooltip over the strip (`tooltip_lines`: expected yards, miss
+  or fumble chance, clock, "Rival call: secret"; `draw_card_tooltip` in the
+  match screen). The rival's defense call is secret: no card says it is stopped;
   [football_match_piles.py](src/ui/football_match_piles.py) draws draw and
   discard piles; [football_match_popups.py](src/ui/football_match_popups.py)
   draws the in-match Depth Chart (temporary upgrades labeled active this match), the play log,
@@ -319,20 +321,38 @@ covers extracted interaction state.
   [football_perk_context.py](src/engine/football_perk_context.py) rebuilds
   per-team drive/half/game history from events (`perk_history`, `team_perks`)
   and computes estimate perks (`estimate_perk_inputs`: power, counters, yards,
-  odds) that `calculate_match_play_estimate` applies, so resolution, Hard AI,
-  and previews agree. `resolve_offensive_play` applies resolution perks in the
+  odds) that `calculate_match_play_estimate` applies for resolution with the
+  real call. `calculate_blind_play_estimate` (with `defense_call_weights`) in
+  the simulator averages it over the defender's owned calls for previews and
+  AI offense, which never read the opposing active call;
+  `scheme_keyed_defense` marks the perks whose firing depends on a call
+  (blind previews drop them; the match UI hides them when the call is the
+  AI's). `resolve_offensive_play` applies resolution perks in the
   proposal's order (reroll, swaps, yards, spot with the defense last, clock,
   cards); drive-start perks run in `select_defensive_scheme`; kick perks use
   `kick_rush_bonus` and `range_denial_yards`; Green Dog is
   `FootballAwaitedAction.GREEN_DOG_DECISION` / `resolve_green_dog`. AI Read
   Keys, Green Dog, and Keep Read logic are in [football_ai.py](src/engine/football_ai.py).
   Match UI: callouts and Play Log text in
-  [football_match_events.py](src/ui/football_match_events.py), the tray, Read
-  Keys, and Green Dog panels in [football_match_perks.py](src/ui/football_match_perks.py),
-  preview notes in [football_match_hand.py](src/ui/football_match_hand.py).
+  [football_match_events.py](src/ui/football_match_events.py) (`shown_activations`
+  and `shown_perk_effects` hide what would reveal the rival's call; the rival's
+  scheme and Green Dog events read "<RIVAL> SET THEIR DEFENSE" / "CHANGED THEIR
+  DEFENSE"), the tray, Read Keys, and Green Dog panels in
+  [football_match_perks.py](src/ui/football_match_perks.py), preview notes in
+  [football_match_hand.py](src/ui/football_match_hand.py). The tray
+  (`PERK_TRAY_RECT` in the match screen; `tray_perks`, `draw_perk_tray`) shows a
+  chip for every perk the human's roster carries, offense on the top row and
+  defense below, limited perks with a status dot. Chips are focusable buttons
+  after the hand: hover/focus shows `draw_tray_tooltip` under the scoreboard
+  after the inspect delay, and click/Enter toggles `draw_perk_popup` (full
+  rules, partner, limit, status) that takes keys and clicks until Esc, Enter,
+  or a click outside closes it, so it never makes a decision or advances a
+  replay (`FootballMatchScreen.toggle_perk_popup`).
   See [test_football_player_perks.py](tests/test_football_player_perks.py)
   (helpers in [perk_helpers.py](tests/perk_helpers.py)) and
-  [test_football_perk_ui.py](tests/test_football_perk_ui.py). [football_ai.py](src/engine/football_ai.py) generates local
+  [test_football_perk_ui.py](tests/test_football_perk_ui.py), and
+  [test_secret_defense.py](tests/test_secret_defense.py) (no reveal anywhere,
+  blind estimate, blind AI offense, the tray). [football_ai.py](src/engine/football_ai.py) generates local
   opponents and selects actions; AI uses the expanded named catalogs but never
   receives bonus cards. The controller advances AI turns until a human decision
   and pauses for an available turnover Challenge before continuing; it routes

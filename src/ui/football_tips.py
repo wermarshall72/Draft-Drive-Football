@@ -36,7 +36,7 @@ TIP_TWO_POINT = "two_point"
 TIP_TEXT = {
     TIP_SHOP: "Spend AP on upgrades and cards. Unspent AP is lost at kickoff. "
               "Hover any card for details.",
-    TIP_OFFENSE: "Play a card. The defense stops one kind of play; cards marked STOPPED gain less.",
+    TIP_OFFENSE: "Play a card. Their defense call is secret; learn what works from your yards.",
     TIP_DEFENSE: "Pick one defense for the whole drive. It stops one kind of play.",
     TIP_FOURTH_DOWN: "Go for it, punt, or kick a field goal.",
     TIP_TWO_POINT: "Kick for 1, or play a card to try for 2.",

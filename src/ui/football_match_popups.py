@@ -19,6 +19,7 @@ from src.ui.football_match_events import (
     outcome,
     overturned_sequences,
     perk_log_text,
+    shown_perk_effects,
     period_label,
 )
 from src.ui.football_match_outcome import OUTCOME_COLORS
@@ -148,7 +149,7 @@ def draw_log_popup(
     def row_height(kind: str, payload) -> int:
         if kind == "period":
             return 30
-        return LOG_ROW_HEIGHT + (LOG_PERK_LINE if payload[0].perk_activations else 0)
+        return LOG_ROW_HEIGHT + (LOG_PERK_LINE if perk_log_text(payload[0]) else 0)
 
     total_height = 0
     for kind, payload in rows:
@@ -205,8 +206,9 @@ def draw_log_popup(
             pygame.draw.line(surface, MATCH_DIM, (text_left, row.top + 14),
                              (text_left + head_surface.get_width(), row.top + 14), 2)
         detail = result.detail
-        if event.perk_effects:
-            detail = f"{detail} · {'; '.join(event.perk_effects)}" if detail else "; ".join(event.perk_effects)
+        effects = shown_perk_effects(event, previous)
+        if effects:
+            detail = f"{detail} · {'; '.join(effects)}" if detail else "; ".join(effects)
         detail_surface = detail_font.render(fit_text(detail, detail_font, text_width), True, MATCH_MUTED)
         surface.blit(detail_surface, (text_left, row.top + 23))
         perks = perk_log_text(event)

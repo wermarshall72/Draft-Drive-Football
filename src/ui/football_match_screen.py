@@ -41,11 +41,12 @@ from src.ui.football_match_outcome import (
     status_prompt,
 )
 from src.ui.football_match_palette import (
-    MATCH_CANVAS, MATCH_DANGER, MATCH_GOOD, MATCH_INK, MATCH_PANEL, MATCH_PANEL_DEEP,
+    MATCH_CANVAS, MATCH_DANGER, MATCH_INK, MATCH_MUTED, MATCH_PANEL, MATCH_PANEL_DEEP,
     MATCH_PANEL_EDGE, MATCH_TEXT, blit_text, match_font, plain_font,
 )
 from src.ui.football_match_perks import (
-    draw_green_dog_panel, draw_perk_tray, draw_read_keys_panel, has_read_keys,
+    TrayPerk, draw_green_dog_panel, draw_perk_popup, draw_perk_tray, draw_read_keys_panel,
+    draw_tray_tooltip, has_read_keys, tray_perks,
 )
 from src.ui.football_match_piles import draw_pile_panel
 from src.engine.football_controller import FootballHumanDecision
@@ -77,8 +78,12 @@ RIGHT_PILES_RECT = pygame.Rect(1024 + 8, BOTTOM_TOP, 256 - MARGIN - 8, BOTTOM_HE
 POST_REPLAY_NOTE = "HANDS & PILES UPDATE AFTER REPLAY"
 GROUP_NOTE_OFFSET = 120
 PAUSE_RECT = pygame.Rect(SCOREBOARD_RECT.centerx + 94, SCOREBOARD_RECT.top + 10, 84, 26)
-# The human's limited perks (ready / used), under the team name beside the score.
-PERK_TRAY_RECT = pygame.Rect(SCOREBOARD_RECT.left + 196, SCOREBOARD_RECT.top + 56, 244, 26)
+# Every perk the human's roster carries, in the team block between the score and the
+# clock panel: offense chips on the top row, defense chips below.
+PERK_TRAY_RECT = pygame.Rect(SCOREBOARD_RECT.left + 190, SCOREBOARD_RECT.top + 36, 250, 48)
+# The tray's hover tooltip and click popup sit just under the scoreboard, over the field.
+PERK_OVERLAY_TOP = SCOREBOARD_RECT.bottom + 4
+PERK_CHIP_VARIANT = "perk-chip"
 
 
 @dataclass(frozen=True)
@@ -123,6 +128,12 @@ class FootballMatchScreen:
         # Hover/focus tooltip for offense cards, after the shop's inspect delay.
         self.card_tip = InspectState(lambda: self.clock())
         self.card_tip_rect: pygame.Rect | None = None
+        # The perk tray: hover tooltip (same delay) and the click/Enter rules popup.
+        self.perk_tip = InspectState(lambda: self.clock())
+        self.perk_tip_rect: pygame.Rect | None = None
+        self.perk_popup_key: tuple[str, str] | None = None
+        self.perk_popup_rect: pygame.Rect | None = None
+        self._tray: list[tuple[TrayPerk, pygame.Rect]] = []
         self._frozen_at: int | None = None
         self.read_keys_hidden = False
         self._popup_from_pause = False
@@ -133,6 +144,7 @@ class FootballMatchScreen:
 
     def settle(self) -> None:
         """Leave the match for the menu: close popups and finish any replay."""
+        self.close_perk_popup()
         self.close_popups()
         self.interaction.cancel_drag()
         self.pause_menu.reset()
@@ -187,25 +199,68 @@ class FootballMatchScreen:
             self.playback.step_started += self.clock() - self._frozen_at
             self._frozen_at = None
 
+    # -- the perk tray's rules popup ----------------------------------------------
+
+    def toggle_perk_popup(self, key: tuple[str, str]) -> None:
+        """Open a chip's rules popup, or close it when that chip's popup is open."""
+        self.perk_popup_key = None if self.perk_popup_key == key else key
+        self.perk_tip.reset()
+
+    def close_perk_popup(self) -> None:
+        self.perk_popup_key = None
+        self.perk_popup_rect = None
+
+    def _handle_perk_popup_event(self, event: pygame.event.Event) -> HandEvent | None:
+        """While the rules popup is open it takes every key but Tab and every click.
+
+        Esc, Enter, and Space close it; a click on a chip switches to (or closes)
+        that chip's popup; any other click closes it. Nothing reaches the hand or
+        strip, so the popup never makes a match decision or advances a replay.
+        """
+        if self.perk_popup_key is None or self.popup.open:
+            return None
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_TAB:
+                return None
+            if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                self.close_perk_popup()
+            return HandEvent(HandEventKind.HANDLED)
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button != 1:
+                return HandEvent(HandEventKind.HANDLED)
+            chip = next((item for item, rect in self._tray if rect.collidepoint(event.pos)), None)
+            if chip is not None:
+                self.toggle_perk_popup(chip.key)
+            elif self.perk_popup_rect is None or not self.perk_popup_rect.collidepoint(event.pos):
+                self.close_perk_popup()
+            return HandEvent(HandEventKind.HANDLED)
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            return HandEvent(HandEventKind.HANDLED)
+        return None
+
     def open_pause(self) -> None:
+        self.close_perk_popup()
         self._freeze()
         self.interaction.cancel_drag()
         self.popup.show(PAUSE)
         self._popup_from_pause = False
 
     def open_depth_chart(self) -> None:
+        self.close_perk_popup()
         self._freeze()
         self.pause_menu.cancel_quit()
         self._popup_from_pause = self.popup.kind == PAUSE
         self.popup.show(DEPTH)
 
     def open_play_log(self) -> None:
+        self.close_perk_popup()
         self._freeze()
         self.pause_menu.cancel_quit()
         self._popup_from_pause = self.popup.kind == PAUSE
         self.popup.show(LOG)
 
     def open_pile(self, pile_id: str) -> None:
+        self.close_perk_popup()
         self._freeze()
         self.interaction.cancel_drag()
         self._popup_from_pause = False
@@ -233,6 +288,11 @@ class FootballMatchScreen:
 
     def handle_event(self, event: pygame.event.Event) -> HandEvent:
         escape = event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        perk_popup = self._handle_perk_popup_event(event)
+        if perk_popup is not None:
+            return perk_popup
+        if not self.popup.open and self.perk_tip.handle_event(event):
+            return HandEvent(HandEventKind.HANDLED)  # Esc hid a visible perk tooltip
         if not self.popup.open and self.card_tip.handle_event(event):
             return HandEvent(HandEventKind.HANDLED)  # Esc hid a visible card tooltip
         if self.popup.open:
@@ -333,7 +393,6 @@ class FootballMatchScreen:
                 state.opponent_team.abbreviation if state.opponent_team is not None else None
             ),
         )
-        draw_perk_tray(surface, PERK_TRAY_RECT, display)
         decision = state.human_decision
         if not blocked and not self.popup.open:
             if decision is FootballHumanDecision.GREEN_DOG:
@@ -392,6 +451,7 @@ class FootballMatchScreen:
             button for button in hand_buttons if button.variant in ("hand-card", "hand-fallback")
         ]
         buttons.extend(hand_buttons)
+        buttons.extend(self._draw_tray(surface, display, len(buttons), focus_index, hover_index))
 
         offense_deck, defense_deck = match.team_a_offense_deck, match.team_a_defense_deck
         assert offense_deck is not None and defense_deck is not None
@@ -431,6 +491,7 @@ class FootballMatchScreen:
             self._draw_card_tooltip(surface, display, buttons, focus_index, hover_index)
         else:
             self.card_tip.reset()
+        self._draw_perk_overlays(surface, display, buttons, focus_index, hover_index)
 
         if self.popup.open:
             buttons = self._draw_popup(surface, state, display, focus_index, hover_index, pressed_index, actions)
@@ -480,6 +541,67 @@ class FootballMatchScreen:
             draw_popup_button(surface, button, focused=focus_index == index,
                               hovered=hover_index == index, pressed=pressed_index == index)
         return buttons
+
+    def _draw_tray(
+        self, surface: pygame.Surface, display: FootballMatchState, offset: int,
+        focus_index: int, hover_index: int | None,
+    ) -> list[Button]:
+        """The perk chips, focusable right after the hand; each opens its rules popup."""
+        def local(index: int | None) -> int | None:
+            return index - offset if index is not None and index >= offset else None
+
+        keys = [item.key for item in tray_perks(display)]
+        if self.perk_popup_key is not None and self.perk_popup_key not in keys:
+            self.close_perk_popup()
+        open_index = keys.index(self.perk_popup_key) if self.perk_popup_key in keys else None
+        self._tray = draw_perk_tray(
+            surface, PERK_TRAY_RECT, display,
+            focused=local(focus_index), hovered=local(hover_index), open_index=open_index,
+        )
+        return [
+            Button(f"PERK {item.perk.name.upper()}", lambda key=item.key: self.toggle_perk_popup(key),
+                   rect, variant=PERK_CHIP_VARIANT)
+            for item, rect in self._tray
+        ]
+
+    def _draw_perk_overlays(
+        self, surface: pygame.Surface, display: FootballMatchState, buttons: list[Button],
+        focus_index: int, hover_index: int | None,
+    ) -> None:
+        """The tray's open rules popup, or its hover tooltip, just under the scoreboard."""
+        self.perk_tip_rect = None
+        self.perk_popup_rect = None
+        if self.popup.open or not self._tray:
+            self.perk_tip.reset()
+            return
+        by_key = {item.key: (item, rect) for item, rect in self._tray}
+        if self.perk_popup_key is not None:
+            self.perk_tip.reset()
+            item, rect = by_key[self.perk_popup_key]
+            self.perk_popup_rect = draw_perk_popup(
+                surface, item, display, (rect.left - 12, PERK_OVERLAY_TOP),
+            )
+            return
+        chip_keys = {
+            index: item.key
+            for index, (item, _rect) in enumerate(self._tray, start=self._tray_offset(buttons))
+        }
+        shown = self.perk_tip.update(
+            chip_keys.get(hover_index) if hover_index is not None else None,
+            chip_keys.get(focus_index),
+        )
+        self.perk_tip.shown_key = shown
+        if shown is None:
+            return
+        item, rect = by_key[shown]
+        self.perk_tip_rect = draw_tray_tooltip(surface, item, rect, PERK_OVERLAY_TOP)
+
+    @staticmethod
+    def _tray_offset(buttons: list[Button]) -> int:
+        return next(
+            (index for index, button in enumerate(buttons) if button.variant == PERK_CHIP_VARIANT),
+            len(buttons),
+        )
 
     suppress_card_tip = False  # set while a one-time tip occupies the strip
     strip_prompt_width = 0  # this frame's strip prompt width (one-time tips stay clear)
@@ -556,7 +678,7 @@ def draw_card_tooltip(
     """A compact two-by-two tooltip over the outcome strip, above the hovered card.
 
     It sits inside the strip so it never covers the hand or the field, and it never
-    takes clicks. The last line (stopped or open) is colored red or green.
+    takes clicks. The last line (the rival's call is secret) is muted.
     """
     font = plain_font(TOOLTIP_FONT_SIZE, False)
     pad, gap = 14, 22
@@ -584,7 +706,7 @@ def draw_card_tooltip(
         for row, line in enumerate(left_column if column == 0 else right_column):
             color = MATCH_TEXT
             if column == 1 and row == 1:
-                color = MATCH_GOOD if line == "Open" else MATCH_DANGER
+                color = MATCH_MUTED
             box = pygame.Rect(x, top + row * row_height, width, row_height)
             blit_text(surface, font, fit_text(line, font, width), color, box,
                       midleft=(x, box.centery))

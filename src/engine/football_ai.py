@@ -42,6 +42,7 @@ from src.engine.football_player_catalog import (
     player_type_offer,
 )
 from src.engine.football_simulator import (
+    calculate_blind_play_estimate,
     calculate_match_play_estimate,
     field_goal_distance_for_position,
     field_goal_success_probability_for_team,
@@ -465,10 +466,14 @@ class FootballAI:
         )
 
     def _perk_play_bonus(self, state: FootballMatchState, play: OffensivePlayAction) -> float:
-        """Standard's nudge toward plays its own perks improve (Hard sees them in the estimate)."""
-        if not team_perks(state, self.team_side) or state.current_drive_defensive_scheme is None:
+        """Standard's nudge toward plays its own perks improve (Hard sees them in the estimate).
+
+        Blind like every AI offensive choice: only perks that fire whatever the
+        rival's secret defense call is count.
+        """
+        if not team_perks(state, self.team_side):
             return 0.0
-        estimate = calculate_match_play_estimate(
+        estimate = calculate_blind_play_estimate(
             state, play, offense_side=self.team_side,
             is_conversion=state.awaited_action is FootballAwaitedAction.CONVERSION,
         )
@@ -518,13 +523,10 @@ class FootballAI:
     def _hard_play_score(
         self, state: FootballMatchState, play: OffensivePlayAction
     ) -> float:
-        scheme = state.current_drive_defensive_scheme
-        if scheme is None:
-            raise ValueError("Hard offensive evaluation requires the active defensive scheme.")
-        estimate = calculate_match_play_estimate(
+        # The rival's defense call is secret: score against its whole owned deck.
+        estimate = calculate_blind_play_estimate(
             state,
             play,
-            scheme=scheme,
             offense_side=self.team_side,
             is_conversion=(
                 state.awaited_action is FootballAwaitedAction.CONVERSION

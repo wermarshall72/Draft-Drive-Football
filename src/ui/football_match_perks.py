@@ -1,8 +1,9 @@
 """Match-screen perk pieces: the ready/used tray, Read Keys, and the Green Dog panel.
 
 Everything reads the match state and the pure perk history; nothing here changes
-rules. The tray lists the human's limited perks (once per drive, half, or game,
-and charges). The Read Keys panel shows the rival's offensive hand while the
+rules. The tray shows one chip per perk the human's roster carries (limited ones
+with a READY / USED / ARMED / IDLE dot), a hover tooltip, and a click popup with
+the full rules. The Read Keys panel shows the rival's offensive hand while the
 human picks a scheme; the Green Dog panel shows the active scheme and the hand
 schemes it may be swapped for (the decision buttons live in the outcome strip).
 """
@@ -88,37 +89,187 @@ def perk_status_for(match: FootballMatchState | None, side: FootballTeamSide,
     )
 
 
-def draw_perk_tray(surface: pygame.Surface, rect: pygame.Rect, match: FootballMatchState,
-                   side: FootballTeamSide = FootballTeamSide.TEAM_A) -> list[pygame.Rect]:
-    """A compact row of position chips with a status dot; returns the chip rects."""
-    statuses = limited_perk_statuses(match, side)
-    if not statuses:
+# -- the perk tray ---------------------------------------------------------------------
+
+OFFENSE_POSITIONS = (
+    FootballPosition.QB, FootballPosition.RB, FootballPosition.WR, FootballPosition.O_LINE,
+)
+TRAY_LABEL = "PERKS"
+TRAY_CHIP_WIDTH = 46
+TRAY_CHIP_HEIGHT = 22
+TRAY_CHIP_GAP = 5
+TRAY_ROW_GAP = 4
+TRAY_FONT_SIZE = 13
+ALWAYS_ON = "ALWAYS ON"
+
+
+@dataclass(frozen=True)
+class TrayPerk:
+    """One chip: a drafted specialist's perk, with a status when it is limited."""
+
+    position: FootballPosition
+    perk: FootballPlayerPerk
+    status: str | None  # READY, USED, ARMED, or IDLE; None for always-on perks
+
+    @property
+    def key(self) -> tuple[str, str]:
+        return ("perk-chip", self.perk.kind.value)
+
+
+def tray_perks(match: FootballMatchState, side: FootballTeamSide = FootballTeamSide.TEAM_A) -> list[TrayPerk]:
+    """Every perk the team's roster carries, in position order (Basic players have none)."""
+    limited = {item.perk.kind: item.status for item in limited_perk_statuses(match, side)}
+    order = list(FootballPosition)
+    return [
+        TrayPerk(position, perk, limited.get(kind))
+        for kind, (position, perk) in sorted(
+            team_perks(match, side).items(), key=lambda item: order.index(item[1][0])
+        )
+    ]
+
+
+def tray_layout(rect: pygame.Rect, perks: list[TrayPerk]) -> tuple[pygame.Rect, list[pygame.Rect]]:
+    """The PERKS label rect and one chip rect per perk: offense on top, defense below."""
+    label_font = plain_font(10)
+    label = pygame.Rect((0, 0), label_font.size(TRAY_LABEL))
+    label.midleft = (rect.left, rect.centery)
+    left = label.right + 6
+    rows = (rect.top, rect.top + TRAY_CHIP_HEIGHT + TRAY_ROW_GAP)
+    counts = [0, 0]
+    chips = []
+    for item in perks:
+        row = 0 if item.position in OFFENSE_POSITIONS else 1
+        x = left + counts[row] * (TRAY_CHIP_WIDTH + TRAY_CHIP_GAP)
+        counts[row] += 1
+        chips.append(pygame.Rect(x, rows[row], TRAY_CHIP_WIDTH, TRAY_CHIP_HEIGHT))
+    return label, chips
+
+
+def draw_perk_tray(
+    surface: pygame.Surface,
+    rect: pygame.Rect,
+    match: FootballMatchState,
+    side: FootballTeamSide = FootballTeamSide.TEAM_A,
+    *,
+    focused: int | None = None,
+    hovered: int | None = None,
+    open_index: int | None = None,
+) -> list[tuple[TrayPerk, pygame.Rect]]:
+    """Position chips for every perk; limited ones carry a status dot. Returns (perk, rect)."""
+    perks = tray_perks(match, side)
+    if not perks:
         return []
-    label_font = plain_font(9)
-    label = blit_text(surface, label_font, "PERKS", MATCH_MUTED, rect, midleft=(rect.left, rect.centery))
-    chip_font = plain_font(10)
-    x = label.right + 6
-    chips: list[pygame.Rect] = []
-    for index, item in enumerate(statuses):
+    label_rect, chip_rects = tray_layout(rect, perks)
+    blit_text(surface, plain_font(10), TRAY_LABEL, MATCH_MUTED, label_rect.inflate(2, 2),
+              center=label_rect.center)
+    font = plain_font(TRAY_FONT_SIZE)
+    for index, (item, chip) in enumerate(zip(perks, chip_rects)):
         text = POSITION_SHORT[item.position]
-        width = chip_font.size(text)[0] + 22
-        remaining = len(statuses) - index
-        more_width = chip_font.size(f"+{remaining}")[0] + 10
-        if x + width > rect.right - (more_width + 4 if remaining > 1 else 0):
-            more = pygame.Rect(x, rect.centery - 8, more_width, 16)
-            blit_text(surface, chip_font, f"+{remaining}", MATCH_MUTED, more, center=more.center)
-            break
-        chip = pygame.Rect(x, rect.centery - 8, width, 16)
-        color = STATUS_COLORS[item.status]
-        pygame.draw.rect(surface, MATCH_PANEL_DEEP, chip, border_radius=8)
-        pygame.draw.rect(surface, color if item.status in (READY, ARMED) else MATCH_PANEL_EDGE_SOFT,
-                         chip, 1, border_radius=8)
-        pygame.draw.circle(surface, color, (chip.left + 8, chip.centery), 3)
-        blit_text(surface, chip_font, text, MATCH_TEXT if item.status in (READY, ARMED) else MATCH_MUTED,
-                  chip, midleft=(chip.left + 14, chip.centery))
-        chips.append(chip)
-        x = chip.right + 4
-    return chips
+        lit = index in (hovered, open_index)
+        pygame.draw.rect(surface, MATCH_PANEL_HIGH if lit else MATCH_PANEL_DEEP, chip, border_radius=8)
+        if item.status is None:
+            # Always on: a neutral chip, no dot.
+            pygame.draw.rect(surface, MATCH_PANEL_EDGE, chip, 1, border_radius=8)
+            blit_text(surface, font, text, MATCH_TEXT, chip, center=chip.center)
+        else:
+            color = STATUS_COLORS[item.status]
+            live = item.status in (READY, ARMED)
+            pygame.draw.rect(surface, color if live else MATCH_PANEL_EDGE_SOFT, chip, 1, border_radius=8)
+            pygame.draw.circle(surface, color, (chip.left + 11, chip.centery), 4)
+            blit_text(surface, font, text, MATCH_TEXT if live else MATCH_MUTED, chip,
+                      midleft=(chip.left + 19, chip.centery))
+        if index == focused:
+            pygame.draw.rect(surface, MATCH_FOCUS, chip.inflate(4, 4), 2, border_radius=10)
+    return list(zip(perks, chip_rects))
+
+
+def tray_status_text(item: TrayPerk) -> str:
+    return item.status if item.status is not None else ALWAYS_ON
+
+
+def tray_tooltip_lines(item: TrayPerk) -> tuple[str, str, str]:
+    """(perk name, 'QB · WITH RB · 1/DRIVE · READY', card line), all from the wording module."""
+    from src.ui.football_player_perks import limit_label, partner_tag, perk_card_line
+
+    meta = [POSITION_SHORT[item.position]]
+    meta += [text for text in (partner_tag(item.perk), limit_label(item.perk)) if text]
+    meta.append(tray_status_text(item))
+    return item.perk.name.upper(), " · ".join(meta), perk_card_line(item.perk)
+
+
+def draw_tray_tooltip(surface: pygame.Surface, item: TrayPerk, anchor: pygame.Rect, top: int) -> pygame.Rect:
+    """A compact two-row tooltip just under the scoreboard, left-aligned to its chip."""
+    name, meta, line = tray_tooltip_lines(item)
+    name_font, meta_font, line_font = plain_font(14), plain_font(12), plain_font(13, False)
+    gap = 12
+    first = name_font.size(name)[0] + gap + meta_font.size(meta)[0]
+    width = max(first, line_font.size(line)[0]) + 28
+    rect = pygame.Rect(anchor.left - 12, top, width, 50)
+    rect.right = min(rect.right, surface.get_width() - 12)
+    rect.left = max(rect.left, 12)
+    pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=10)
+    pygame.draw.rect(surface, MATCH_PANEL_DEEP, rect, border_radius=10)
+    pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=10)
+    name_rect = blit_text(surface, name_font, name, MATCH_GOLD, rect, topleft=(rect.left + 14, rect.top + 6))
+    color = STATUS_COLORS.get(item.status, MATCH_MUTED) if item.status in (READY, ARMED) else MATCH_MUTED
+    blit_text(surface, meta_font, meta, color, rect, midleft=(name_rect.right + gap, name_rect.centery + 1))
+    blit_text(surface, line_font, line, MATCH_TEXT, rect, topleft=(rect.left + 14, rect.top + 27))
+    return rect
+
+
+PERK_POPUP_WIDTH = 400
+PERK_POPUP_CLOSE = "[ESC] CLOSE"
+
+
+def draw_perk_popup(surface: pygame.Surface, item: TrayPerk, match: FootballMatchState,
+                    topleft: tuple[int, int], side: FootballTeamSide = FootballTeamSide.TEAM_A) -> pygame.Rect:
+    """The full rules, partner, limit, and status, drawn like a Depth Chart card back."""
+    from src.engine.football_player_catalog import player_type_for_id
+    from src.ui.football_display import _POSITION_LABELS, player_partnership_text
+    from src.ui.football_player_draft_view import draw_perk_heading, perk_heading_extra
+    from src.ui.football_player_perks import perk_rules
+    from src.ui.text import wrap_text_lines
+
+    pad_x, pad_y = 12, 10
+    inner_width = PERK_POPUP_WIDTH - pad_x * 2
+    rules_font = plain_font(13, False)
+    lines = wrap_text_lines(perk_rules(item.perk), rules_font, inner_width)
+    extra = perk_heading_extra(item.perk, item.status, inner_width)
+    height = pad_y * 2 + 18 + 18 + extra + 8 + len(lines) * rules_font.get_height() + 10 + 20
+    rect = pygame.Rect(topleft, (PERK_POPUP_WIDTH, height))
+    rect.right = min(rect.right, surface.get_width() - 12)
+    pygame.draw.rect(surface, MATCH_INK, rect.move(0, 3), border_radius=9)
+    pygame.draw.rect(surface, MATCH_PANEL_HIGH, rect, border_radius=9)
+    pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=9)
+    inner = rect.inflate(-pad_x * 2, -pad_y * 2)
+    roster = match.team_a if side is FootballTeamSide.TEAM_A else match.team_b
+    player = roster.players[item.position]
+    player_type = player_type_for_id(player.player_type_id) if player.player_type_id else None
+    owner = player_type.name.upper() if player_type is not None else player.name.upper()
+    header_font = plain_font(11)
+    blit_text(surface, header_font, fit_text(f"{_POSITION_LABELS[item.position]} · {owner}",
+                                             header_font, inner.width - 80),
+              MATCH_MUTED, inner, topleft=inner.topleft)
+    blit_text(surface, plain_font(10), PERK_POPUP_CLOSE, MATCH_DIM, inner, topright=inner.topright)
+    heading = pygame.Rect(inner.left, inner.top + 18, inner.width, 18)
+    y = draw_perk_heading(surface, heading, item.perk, item.status) + 8
+    for index, line in enumerate(lines):
+        blit_text(surface, rules_font, line, MATCH_TEXT, inner,
+                  topleft=(inner.left, y + index * rules_font.get_height()))
+    partner, _ = player_partnership_text(player_type)
+    chip_font = plain_font(11)
+    chips = (f"PARTNER  {partner.removeprefix('Partner: ').upper()}",
+             f"STATUS  {tray_status_text(item)}")
+    x = inner.left
+    for index, text in enumerate(chips):
+        chip = pygame.Rect(x, inner.bottom - 20, chip_font.size(text)[0] + 14, 20)
+        pygame.draw.rect(surface, MATCH_PANEL_DEEP, chip, border_radius=10)
+        color = MATCH_TEXT
+        if index == 1 and item.status is not None:
+            color = STATUS_COLORS[item.status] if item.status in (READY, ARMED) else MATCH_MUTED
+        blit_text(surface, chip_font, text, color, chip.inflate(2, 2), center=chip.center)
+        x = chip.right + 6
+    return rect
 
 
 def _mini_card(surface: pygame.Surface, rect: pygame.Rect, card_id: str, *, offensive: bool,

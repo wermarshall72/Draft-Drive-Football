@@ -24,7 +24,7 @@ from src.engine.football_decks import (
 from src.ui.football_player_perks import activation_preview_note
 from src.engine.football_simulator import (
     adjusted_offensive_play_clock_seconds,
-    calculate_match_play_estimate,
+    calculate_blind_play_estimate,
 )
 from src.ui.football_card_art import (
     bonus_card_art,
@@ -36,7 +36,7 @@ from src.ui.football_match_events import bonus_effect, play_family_kind
 from src.ui.football_match_field import PLAY_LINE_COLORS
 from src.ui.football_match_interaction import MatchInteraction
 from src.ui.football_match_palette import (
-    MATCH_CANVAS, MATCH_DANGER, MATCH_DIM, MATCH_FOCUS, MATCH_GOLD, MATCH_INK, MATCH_MUTED,
+    MATCH_CANVAS, MATCH_DIM, MATCH_FOCUS, MATCH_GOLD, MATCH_INK, MATCH_MUTED,
     MATCH_PANEL, MATCH_PANEL_DEEP, MATCH_PANEL_EDGE, MATCH_PANEL_EDGE_SOFT,
     MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, match_font, mix, plain_font,
 )
@@ -55,8 +55,9 @@ DEFENSE = "defense"
 # catalog ids are both "rb_run"; it is drawn from that definition but never enters a deck.
 FALLBACK_CARD_ID = "rb_run"
 FALLBACK_DISPLAY_ID = "basic-fallback-display"
-# The red corner tag on an offense card whose family the rival's defense call stops.
-STOPPED_TAG = "STOPPED"
+# The tooltip's last line: the rival's defense call is secret, so previews
+# average over every call the rival owns.
+SECRET_DEFENSE_LINE = "Rival call: secret"
 
 
 @dataclass(frozen=True)
@@ -65,9 +66,7 @@ class CardPreview:
     clock: str
     live: bool
     notes: tuple[str, ...] = ()  # player perks the live estimate includes
-    # True when the rival's active defense call stops this card (live previews only).
-    stopped: bool = False
-    # Compact tooltip lines: expected yards, miss/fumble chance, clock, stopped/open.
+    # Compact tooltip lines: expected yards, miss/fumble chance, clock, secret call.
     tooltip: tuple[str, ...] = ()
 
 
@@ -79,13 +78,9 @@ def _percent(probability: float) -> str:
     return f"{value:.1f}".rstrip("0").rstrip(".") + "%"
 
 
-def _possessive(name: str) -> str:
-    return f"{name}'" if name.endswith("S") else f"{name}'S"
-
-
 def preview_is_live(match: FootballMatchState) -> bool:
     """A live estimate exists while the human has the ball (or a two-point try) and
-    the rival's defense call is known."""
+    the rival has set its (secret) defense call."""
     if match.current_drive_defensive_scheme is None or match.status.value == "completed":
         return False
     if match.conversion_team is not None:
@@ -94,21 +89,18 @@ def preview_is_live(match: FootballMatchState) -> bool:
 
 
 def tooltip_lines(match: FootballMatchState, estimate, seconds: int | None) -> tuple[str, ...]:
-    """One short line each: expected yards, miss or fumble chance, clock, stopped or open."""
+    """One short line each: expected yards, miss or fumble chance, clock, secret call.
+
+    ``estimate`` is the blind estimate: it never says whether the rival's call
+    stops the card.
+    """
     fumble = estimate.family is FootballCardFamily.RB_RUN or estimate.keep_read
     risk = (
         f"~{_percent(estimate.turnover_probability)} fumble" if fumble
         else f"~{_percent(estimate.incomplete_probability)} incomplete"
     )
     clock = f"{seconds}s clock" if seconds is not None else "No clock on a 2-pt try"
-    scheme = match.current_drive_defensive_scheme
-    if estimate.matchup.scheme_matches_play and scheme is not None:
-        rival = match.team_b.team_name.strip().upper()
-        defense = DEFENSIVE_SCHEME_CATALOG[scheme.value].name.upper()
-        stop = f"Stopped by {_possessive(rival)} {defense}"
-    else:
-        stop = "Open"
-    return (f"~{estimate.expected_yards:.1f} yds expected", risk, clock, stop)
+    return (f"~{estimate.expected_yards:.1f} yds expected", risk, clock, SECRET_DEFENSE_LINE)
 
 
 @dataclass(frozen=True)
@@ -216,7 +208,6 @@ class HandView:
     # Button index -> (copy id, card id, card rect) for offense cards with a live
     # estimate this frame; the match screen shows their tooltip after a short hover.
     tooltip_targets: dict | None = None
-    _stop_tags: bool = True
 
     def draw(
         self,
@@ -241,8 +232,7 @@ class HandView:
         if offense_deck is None or defense_deck is None:
             raise RuntimeError("The controller did not provide the human's match decks.")
         active = active_group(state, input_blocked=input_blocked)
-        # Replays show post-replay hands, so they never carry STOPPED tags or tooltips.
-        self._stop_tags = not input_blocked
+        # Replays show post-replay hands, so they never carry tooltips.
         self.tooltip_targets = {}
         live = not input_blocked and preview_is_live(display_match)
         offense_fallback = needs_offense_fallback(state, input_blocked=input_blocked)
@@ -454,7 +444,8 @@ class HandView:
         # keeps its match and is used only for that very object.
         if cached is None or cached[0] is not match:
             conversion = match.conversion_team is not None
-            estimate = calculate_match_play_estimate(
+            # The rival's call is secret: average over every call it owns.
+            estimate = calculate_blind_play_estimate(
                 match, definition.action, offense_side=FootballTeamSide.TEAM_A,
                 is_conversion=conversion,
             )
@@ -470,7 +461,6 @@ class HandView:
             notes = tuple(activation_preview_note(activation) for activation in ordered)
             cached = (match, CardPreview(
                 f"~{estimate.expected_yards:.1f}", f"{seconds or 0}s", True, notes,
-                stopped=estimate.matchup.scheme_matches_play,
                 tooltip=tooltip_lines(match, estimate, seconds),
             ))
             self._estimate_cache[key] = cached
@@ -643,12 +633,6 @@ class HandView:
                 blit_text(surface, counter_font, line, band, stats, midbottom=(stats.centerx, bottom))
                 bottom -= line_height
 
-        if (
-            group == OFFENSE and bonus is None and self._stop_tags
-            and self.card_preview(match, card.card_id).stopped
-        ):
-            draw_stopped_tag(surface, rect)
-
         if not selectable and not active_slot:
             veil = pygame.Surface(rect.size, pygame.SRCALPHA)
             veil.fill((*MATCH_CANVAS[:3], 120))
@@ -791,14 +775,3 @@ class HandView:
             pygame.draw.polygon(surface, color, ((cx + heading * 4, cy), (cx - heading * 3, cy - 5),
                                                  (cx - heading * 3, cy + 5)))
         return buttons
-
-
-def draw_stopped_tag(surface: pygame.Surface, card: pygame.Rect) -> pygame.Rect:
-    """A small red chip in the card's top-right corner, over the art tile."""
-    font = plain_font(9)
-    chip = pygame.Rect((0, 0), font.size(STOPPED_TAG)).inflate(10, 2)
-    chip.topright = (card.right - 5, card.top + 9)
-    pygame.draw.rect(surface, MATCH_INK, chip.inflate(2, 2), border_radius=8)
-    pygame.draw.rect(surface, MATCH_DANGER, chip, border_radius=7)
-    blit_text(surface, font, STOPPED_TAG, MATCH_INK, chip.inflate(2, 2), center=chip.center)
-    return chip

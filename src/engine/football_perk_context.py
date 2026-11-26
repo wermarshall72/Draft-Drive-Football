@@ -250,6 +250,49 @@ def _history(
     )
 
 
+# Perks whose firing depends on the defense's active call (its family or which
+# defensive players contribute). The defense's call is secret from the offense, so
+# these never feed the offense's blind estimate, preview notes, or what the
+# offense is shown. Offensive kinds depend on the rival's call; defensive kinds
+# on their owner's own call. Screen Wall and Captain's Adjustment depend on the
+# call only for their standing (``applied``) effect, not for their trigger.
+OFFENSE_SCHEME_KEYED_PERKS = frozenset((
+    FootballPlayerPerkKind.SILENT_COUNT,
+    FootballPlayerPerkKind.HOT_ROUTE,
+    FootballPlayerPerkKind.SCREEN_WALL,
+))
+DEFENSE_SCHEME_KEYED_PERKS = frozenset((
+    FootballPlayerPerkKind.HOLD_THE_FRONT,
+    FootballPlayerPerkKind.EDGE_SET,
+    FootballPlayerPerkKind.CONTAIN,
+    FootballPlayerPerkKind.STUNT_SACK,
+    FootballPlayerPerkKind.FIT_AND_SHED,
+    FootballPlayerPerkKind.CAPTAINS_ADJUSTMENT,
+    FootballPlayerPerkKind.FORCE_AND_FOLD,
+    FootballPlayerPerkKind.NICKEL_LOCK,
+    FootballPlayerPerkKind.BRACKET,
+    FootballPlayerPerkKind.DEEP_LOCK,
+    FootballPlayerPerkKind.SAFETY_BLITZ,
+    FootballPlayerPerkKind.DOWNHILL_FILL,
+    FootballPlayerPerkKind.TIP_DRILL,
+))
+_APPLIED_ONLY_SCHEME_KEYED = frozenset((
+    FootballPlayerPerkKind.SCREEN_WALL,
+    FootballPlayerPerkKind.CAPTAINS_ADJUSTMENT,
+))
+
+
+def scheme_keyed_defense(activation: FootballPerkActivation) -> FootballTeamSide | None:
+    """The team whose secret defense call this activation depends on, or None."""
+    if activation.kind in _APPLIED_ONLY_SCHEME_KEYED and not activation.applied:
+        return None
+    if activation.kind in OFFENSE_SCHEME_KEYED_PERKS:
+        return opponent(activation.team)
+    if activation.kind in DEFENSE_SCHEME_KEYED_PERKS:
+        return activation.team
+    return None
+
+
 def scheme_family(scheme: DefensiveSchemeAction) -> FootballCardFamily:
     return DEFENSIVE_SCHEME_FAMILIES[scheme]
 

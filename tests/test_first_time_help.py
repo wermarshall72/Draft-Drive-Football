@@ -1,5 +1,6 @@
-"""First-time player help: "stops" wording, STOPPED tags, card tooltips, the
-defense prompt and scouting line, one-time tips, and the How to Play page."""
+"""First-time player help: "stops" wording, card tooltips (blind to the rival's
+secret defense call), the defense prompt and scouting line, one-time tips, and
+the How to Play page."""
 
 from __future__ import annotations
 
@@ -30,11 +31,11 @@ from src.engine.football_controller import FootballHumanDecision, FootballRunPha
 from src.engine.football_decks import DEFENSIVE_SCHEME_CATALOG, OFFENSIVE_PLAY_CATALOG
 from src.engine.football_simulator import (
     adjusted_offensive_play_clock_seconds,
-    calculate_match_play_estimate,
+    calculate_blind_play_estimate,
 )
 from src.profile import TeamProfile, load_profile, save_profile
 from src.ui.application import DesktopApplication
-from src.ui.football_match_hand import STOPPED_TAG
+from src.ui.football_match_hand import SECRET_DEFENSE_LINE
 from src.ui.football_match_outcome import (
     DEFENSE_PROMPT,
     DEFENSE_SUBLINE,
@@ -154,7 +155,8 @@ def test_stops_wording_on_hand_strip_shop_and_playbook(tmp_path: Path) -> None:
     _drive_to(desktop, FootballHumanDecision.OFFENSIVE_PLAY)
     match_texts = _texts(_draw(desktop))
     assert "STOPS" in match_texts and "DEFENSE CALL" in match_texts
-    assert any("· STOPS " in text for text in match_texts)  # "EMBERS · STOPS MEDIUM PASS"
+    # The rival's defense call is secret: the strip never says what it stops.
+    assert not any("· STOPS " in text for text in match_texts)
     for texts in (shop_texts, playbook_texts, match_texts):
         assert not [t for t in texts if "COUNTER" in t.upper() and "COUNTER RUN" not in t.upper()]
 
@@ -167,45 +169,17 @@ def test_shop_scheme_cards_say_stops() -> None:
     assert "Stops" in headings and content.tag == "Defense call"
 
 
-# -- STOPPED tags and the card tooltip ----------------------------------------------
+# -- the card tooltip ---------------------------------------------------------------
 
-def _stopped(match, card_id: str) -> bool:
-    action = OFFENSIVE_PLAY_CATALOG[card_id].action
-    return calculate_match_play_estimate(
-        match, action, offense_side=FootballTeamSide.TEAM_A,
-    ).matchup.scheme_matches_play
-
-
-def test_stopped_tag_marks_exactly_the_stopped_offense_cards(tmp_path: Path) -> None:
+def test_no_stopped_tag_on_offense_cards_and_none_during_replays(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_match(desktop)
     _mark_all_seen(desktop)
     _drive_to(desktop, FootballHumanDecision.OFFENSIVE_PLAY)
-    _set_offense(desktop, DefensiveSchemeAction.DEEP_PASS, ("deep_pass", "rb_run", "short_pass"))
-    records = _draw(desktop)
-    match = desktop.football_controller.state.match
-    cards = {b.label: b.rect for b in desktop.run_screen.buttons if b.variant == "hand-card"}
-    tag_rects = [rect for text, rect, _ in records if text == STOPPED_TAG]
-    expected = {name for name, card_id in (("DEEP PASS", "deep_pass"), ("INSIDE RUN", "rb_run"),
-                                            ("QUICK SLANT", "short_pass")) if _stopped(match, card_id)}
-    assert expected == {"DEEP PASS"}
-    tagged = {name for name, rect in cards.items()
-              if any(rect.inflate(0, 20).contains(tag) for tag in tag_rects)}
-    assert tagged == expected
-    assert len(tag_rects) == len(expected)
-    # Defense cards never carry the tag.
-    defense = [b.rect for b in desktop.run_screen.buttons if b.variant == "hand-card"
-               and b.label not in cards]
-    assert not any(rect.colliderect(tag) for rect in defense for tag in tag_rects)
-    _assert_text_fits(records)
-
-
-def test_no_stopped_tags_during_replays(tmp_path: Path) -> None:
-    desktop = _new_desktop(tmp_path)
-    _start_match(desktop)
-    _drive_to(desktop, FootballHumanDecision.OFFENSIVE_PLAY)
     _set_offense(desktop, DefensiveSchemeAction.DEEP_PASS, ("deep_pass", "deep_pass", "rb_run"))
-    assert STOPPED_TAG in _texts(_draw(desktop))
+    records = _draw(desktop)
+    assert "STOPPED" not in _texts(records)
+    _assert_text_fits(records)
     screen = desktop.run_screen.match_screen
     state = desktop.football_controller.state
     with text_audit() as records:
@@ -214,11 +188,11 @@ def test_no_stopped_tags_during_replays(tmp_path: Path) -> None:
             focus_index=0, hover_index=None, pressed_index=None, button_offset=0,
             choose_card=lambda _copy_id: None, choose_fallback=lambda _offensive: None,
         )
-    assert STOPPED_TAG not in _texts(records)
+    assert "STOPPED" not in _texts(records)
     assert screen.hand.tooltip_targets == {}
 
 
-def test_card_tooltip_lines_match_the_engine_estimate(tmp_path: Path) -> None:
+def test_card_tooltip_lines_match_the_blind_estimate(tmp_path: Path) -> None:
     desktop = _new_desktop(tmp_path)
     _start_match(desktop)
     _drive_to(desktop, FootballHumanDecision.OFFENSIVE_PLAY)
@@ -226,11 +200,9 @@ def test_card_tooltip_lines_match_the_engine_estimate(tmp_path: Path) -> None:
     desktop.router.draw(_surface())
     match = desktop.football_controller.state.match
     hand = desktop.run_screen.match_screen.hand
-    rival = match.team_b.team_name.upper()
-    possessive = f"{rival}'" if rival.endswith("S") else f"{rival}'S"
     for card_id in ("deep_pass", "rb_run", "short_pass"):
         definition = OFFENSIVE_PLAY_CATALOG[card_id]
-        estimate = calculate_match_play_estimate(match, definition.action)
+        estimate = calculate_blind_play_estimate(match, definition.action)
         seconds = adjusted_offensive_play_clock_seconds(
             definition.clock_seconds, match.team_a_coach_upgrades)
         lines = hand.card_tooltip(match, card_id)
@@ -242,11 +214,7 @@ def test_card_tooltip_lines_match_the_engine_estimate(tmp_path: Path) -> None:
         else:
             assert lines[1] == f"~{estimate.incomplete_probability * 100:.0f}% incomplete"
         assert lines[2] == f"{seconds}s clock"
-        if estimate.matchup.scheme_matches_play:
-            assert lines[3] == f"Stopped by {possessive} DEEP SHELL".replace(
-                "DEEP SHELL", DEFENSIVE_SCHEME_CATALOG["deep_pass"].name.upper())
-        else:
-            assert lines[3] == "Open"
+        assert lines[3] == SECRET_DEFENSE_LINE
 
 
 def test_card_tooltip_appears_after_a_short_hover_over_the_strip_only(tmp_path: Path) -> None:
@@ -268,7 +236,8 @@ def test_card_tooltip_appears_after_a_short_hover_over_the_strip_only(tmp_path: 
     rect = screen.card_tip_rect
     assert rect is not None and STRIP_RECT.contains(rect)
     assert not rect.colliderect(HAND_RECT) and not rect.colliderect(FIELD_RECT)
-    assert any(text.startswith("Stopped by") for text in texts)
+    assert SECRET_DEFENSE_LINE in texts
+    assert not any(text.startswith("Stopped by") or text == "Open" for text in texts)
     # Esc hides the tooltip before it can pause.
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
     _draw(desktop)

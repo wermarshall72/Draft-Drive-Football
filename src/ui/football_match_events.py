@@ -24,10 +24,13 @@ from src.engine.football import (
     FootballMatchState,
     FootballMatchStatus,
     FootballPerkDecision,
+    FootballPlayerPerkKind,
     FootballTeamSide,
     FootballTurnoverType,
     OffensivePlayAction,
 )
+from src.engine.football_perk_context import scheme_keyed_defense
+from src.engine.football_simulator import SCHEME_KEYED_COACH_EFFECT_PREFIXES
 from src.ui.football_player_perks import activation_callout, activation_log_text
 from src.engine.football_decks import (
     BONUS_CARD_CATALOG,
@@ -35,6 +38,9 @@ from src.engine.football_decks import (
     OFFENSIVE_PLAY_CATALOG,
 )
 
+# The human always plays Team A; the rival's defense call is secret from them.
+HUMAN_SIDE = FootballTeamSide.TEAM_A
+RIVAL_SIDE = FootballTeamSide.TEAM_B
 KICKOFF_SPOT = 35.0
 CONVERSION_SPOT = 98.0
 SAFETY_POINTS = 2
@@ -348,17 +354,48 @@ def outcome(
     return replace(base, callouts=callouts) if callouts else base
 
 
+def shown_activations(event: FootballMatchEvent) -> tuple:
+    """The event's perk activations the human may see.
+
+    Perks whose firing depends on the rival's secret defense call (its own
+    defensive perks keyed to its call, and the human's Silent Count or Screen
+    Wall's standing effect against it) still work but are never shown. Hot Route
+    stays: its callout names no call.
+    """
+    return tuple(
+        activation for activation in event.perk_activations
+        if activation.kind is FootballPlayerPerkKind.HOT_ROUTE
+        or scheme_keyed_defense(activation) is not RIVAL_SIDE
+    )
+
+
+def shown_perk_effects(
+    event: FootballMatchEvent, previous: FootballMatchEvent | None
+) -> tuple[str, ...]:
+    """Coach-perk effect lines, without those that reveal a stop by the rival's defense."""
+    if not event.perk_effects:
+        return ()
+    defense = opponent(offense_side(event, previous))
+    if defense is not RIVAL_SIDE:
+        return tuple(event.perk_effects)
+    return tuple(
+        effect for effect in event.perk_effects
+        if not effect.startswith(SCHEME_KEYED_COACH_EFFECT_PREFIXES)
+    )
+
+
 def perk_callouts(event: FootballMatchEvent) -> tuple[str, ...]:
     """Triggered perks first, then standing effects that applied (both teams)."""
-    ordered = sorted(event.perk_activations, key=lambda activation: activation.applied)
+    ordered = sorted(shown_activations(event), key=lambda activation: activation.applied)
     return tuple(activation_callout(activation) for activation in ordered)
 
 
 def perk_log_text(event: FootballMatchEvent) -> str:
     """'Perks: Pylon Reach (td), Last Line (stopped at the 1)' or ''."""
-    if not event.perk_activations:
+    shown = shown_activations(event)
+    if not shown:
         return ""
-    return "Perks: " + ", ".join(activation_log_text(activation) for activation in event.perk_activations)
+    return "Perks: " + ", ".join(activation_log_text(activation) for activation in shown)
 
 
 def _base_outcome(
@@ -369,7 +406,15 @@ def _base_outcome(
 ) -> Outcome:
     action = event.action
     if isinstance(action, FootballPerkDecision):
-        defense = team_name(opponent(event.possession), team_a, team_b).upper()
+        defense_side = opponent(event.possession)
+        defense = team_name(defense_side, team_a, team_b).upper()
+        if defense_side is RIVAL_SIDE:
+            # The rival's call stays secret: say only whether it changed.
+            if action is FootballPerkDecision.GREEN_DOG_SWAP:
+                return Outcome("GREEN DOG · DEFENSE CHANGED",
+                               f"{defense} CHANGED THEIR DEFENSE", PlayLineKind.OTHER)
+            return Outcome("GREEN DOG · DEFENSE KEPT",
+                           f"{defense} KEPT THEIR DEFENSE", PlayLineKind.OTHER)
         if action is FootballPerkDecision.GREEN_DOG_SWAP and event.card_id in DEFENSIVE_SCHEME_CATALOG:
             scheme = DEFENSIVE_SCHEME_CATALOG[event.card_id]
             return Outcome(
@@ -382,7 +427,14 @@ def _base_outcome(
         return _offensive_outcome(event, previous, team_a, team_b)
     if isinstance(action, DefensiveSchemeAction):
         scheme = DEFENSIVE_SCHEME_CATALOG[action.value]
-        defense = team_name(opponent(event.possession), team_a, team_b)
+        defense_side = opponent(event.possession)
+        defense = team_name(defense_side, team_a, team_b)
+        if defense_side is RIVAL_SIDE:
+            return Outcome(
+                f"{defense.upper()} SET THEIR DEFENSE",
+                "THEIR CALL IS SECRET · WATCH YOUR YARDS",
+                PlayLineKind.OTHER,
+            )
         return Outcome(
             f"DEFENSE SET · {scheme.name.upper()}",
             f"{defense.upper()} · STOPS {scheme.family.label.upper()}",
