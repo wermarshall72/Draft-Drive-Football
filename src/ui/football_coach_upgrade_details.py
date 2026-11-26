@@ -41,7 +41,7 @@ COACH_UPGRADE_SHORT_LINES = {
     "tempo_install": "Offensive plays use 10% less clock",
     "huddle_up": "Offensive plays use 10% more clock",
     "vertical_threat": "Deep Pass yardage +10%",
-    "pattern_match": "-10% Medium Pass yards allowed (matching scheme)",
+    "pattern_match": "-10% Medium Pass yards allowed when stopped",
     "ball_security_clinic": "-20% interception chance",
     "field_goal_lab": "+5% field goal accuracy",
     "clean_pocket_protection": "-25% punt & FG block chance",

@@ -8,6 +8,8 @@ from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_panel, draw_text, draw_wrapped_text
 
 SaveProfile = Callable[[str, str, str], None]
+RESET_TIPS = "RESET TIPS"
+TIPS_RESET_NOTE = "Tips will show again."
 
 
 class ProfileScreen(Screen):
@@ -20,10 +22,14 @@ class ProfileScreen(Screen):
         navigate: Navigate,
         quit_application: Quit,
         save_profile: SaveProfile,
+        *,
+        reset_tips: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(theme, navigate, quit_application)
         self.profile = profile
         self.save_profile = save_profile
+        self.reset_tips = reset_tips
+        self.tips_reset = False
         self.name = ""
         self.primary_color_id = "crimson"
         self.secondary_color_id = "navy"
@@ -36,6 +42,7 @@ class ProfileScreen(Screen):
         self.secondary_color_id = self.profile.secondary_color_id if self.profile else "navy"
         self.selected_side = "primary"
         self.error = None
+        self.tips_reset = False
         self.focus_index = 0
         self.hover_index = None
         self.pressed_index = None
@@ -82,6 +89,11 @@ class ProfileScreen(Screen):
             self.save_profile(self.name, self.primary_color_id, self.secondary_color_id)
         except (ProfileError, OSError) as error:
             self.error = str(error)
+
+    def _reset_tips(self) -> None:
+        if self.reset_tips is not None:
+            self.reset_tips()
+            self.tips_reset = True
 
     def draw(self, surface: pygame.Surface) -> None:
         title = "Edit team profile" if self.profile else "Create team profile"
@@ -158,6 +170,13 @@ class ProfileScreen(Screen):
                 ),
             )
         )
+        if self.profile is not None and self.reset_tips is not None:
+            # Appended last so the name field and color buttons keep their indexes.
+            reset = pygame.Rect(panel.left + 24, panel.bottom - 55, 160, 36)
+            buttons.append(Button(RESET_TIPS, self._reset_tips, reset, variant="quiet"))
+            if self.tips_reset:
+                draw_text(surface, TIPS_RESET_NOTE, (reset.right + 14, reset.top + 9),
+                          self._small_font, self.theme.muted)
         self._set_buttons(buttons)
         self._draw_buttons(surface)
         for index, color in enumerate(COLOR_CHOICES):

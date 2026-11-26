@@ -85,7 +85,9 @@ def test_keyboard_and_mouse_press_release_leave_and_redraw(
     _draw(desktop)
     assert not active_labels
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_TAB))
-    assert menu.focus_index == 5
+    assert menu.focus_index == 5 and menu.buttons[5].label == "HOW TO PLAY"
+    desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_TAB))
+    assert menu.focus_index == 6
     desktop.running = True
     desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_RETURN))
     assert not desktop.running

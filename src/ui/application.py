@@ -15,6 +15,8 @@ from src.profile import ProfileError, TeamProfile, validate_team_name
 from src.ui.football_run_screen import ENDED_PHASES, FootballRunScreen
 from src.ui.football_ui_kit import match_font, plain_font
 from src.ui.football_run_summary import replace_run_summary, run_summary
+from src.ui.football_tips import TipState
+from src.ui.how_to_play import HowToPlayScreen
 from src.ui.layout import LOGICAL_SIZE
 from src.ui.main_menu import FootballMainMenuScreen, MenuSaveNotice
 from src.ui.main_menu_art import draw_menu_stadium
@@ -93,9 +95,14 @@ class DesktopApplication:
         )
         self.router.register("main_menu", self.menu_screen)
         self.profile_screen = ProfileScreen(
-            self.theme, self.profile, navigate, self.quit, self.save_profile
+            self.theme, self.profile, navigate, self.quit, self.save_profile,
+            reset_tips=self.reset_tips,
         )
         self.router.register("settings", self.profile_screen)
+        self.router.register("how_to_play", HowToPlayScreen(self.theme, navigate, self.quit))
+        self.tips = TipState(
+            self.profile.seen_tips if self.profile is not None else (), self._remember_tip,
+        )
         self.run_screen = FootballRunScreen(
             self.theme,
             team_name,
@@ -103,6 +110,7 @@ class DesktopApplication:
             self.quit,
             on_run_discarded=self._forget_run,
             on_save_point=self.save_run,
+            tips=self.tips,
         )
         self.router.register("football_run", self.run_screen)
         if self.profile is not None:
@@ -218,6 +226,34 @@ class DesktopApplication:
         self.run_screen.theme = self.theme
         self.run_screen.match_screen.theme = self.theme
         self.navigate("main_menu")
+
+    # -- one-time tips (remembered in the profile's seen_tips) -----------------------
+
+    def _remember_tip(self, tip_id: str) -> None:
+        if self.profile is None or tip_id in self.profile.seen_tips:
+            return
+        self._store_seen_tips(self.profile.seen_tips + (tip_id,))
+
+    def reset_tips(self) -> None:
+        """Settings > RESET TIPS: forget every seen tip so each shows again."""
+        self.tips.reset_seen()
+        if self.profile is not None:
+            self._store_seen_tips(())
+
+    def _store_seen_tips(self, seen: tuple[str, ...]) -> None:
+        assert self.profile is not None
+        profile = replace(self.profile, seen_tips=seen)
+        try:
+            self.controller.save_profile(profile)
+        except (OSError, ProfileError) as error:
+            # Tips are a convenience; a failed save only means a tip may show again.
+            LOGGER.warning("Could not save seen tips: %s", error)
+            return
+        self.profile = profile
+        self.profile_screen.profile = profile
+        if self.menu_state is not None:
+            self.menu_state = replace(self.menu_state, profile=profile)
+            self.menu_screen.menu_state = self.menu_state
 
     def start_new_run(self, difficulty: FootballAIDifficulty) -> None:
         if self.menu_state is None:

@@ -105,6 +105,8 @@ class TeamProfile:
     team_name: str
     primary_color_id: str
     secondary_color_id: str
+    # One-time tip ids already shown (optional in profile.json; older files omit it).
+    seen_tips: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -118,6 +120,10 @@ class TeamProfile:
             raise ProfileError("Unknown secondary color.")
         if self.primary_color_id == self.secondary_color_id:
             raise ProfileError("Primary and secondary colors must be different.")
+        if not isinstance(self.seen_tips, tuple) or not all(
+            isinstance(tip, str) for tip in self.seen_tips
+        ):
+            raise ProfileError("Seen tips must be a tuple of tip ids.")
 
     @property
     def primary_color(self) -> TeamColor:
@@ -175,11 +181,19 @@ def load_profile(
             team_name=data["team_name"],
             primary_color_id=data["primary_color_id"],
             secondary_color_id=data["secondary_color_id"],
+            seen_tips=_seen_tips(data.get("seen_tips", [])),
         )
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
         raise ProfileError(
             f"Unable to load team profile from {path}: {error}"
         ) from error
+
+
+def _seen_tips(value: object) -> tuple[str, ...]:
+    """Tip ids from profile.json; a missing or malformed list just means none seen."""
+    if not isinstance(value, list):
+        return ()
+    return tuple(dict.fromkeys(tip for tip in value if isinstance(tip, str)))
 
 
 def save_profile(
@@ -192,6 +206,7 @@ def save_profile(
             "team_name": profile.team_name,
             "primary_color_id": profile.primary_color_id,
             "secondary_color_id": profile.secondary_color_id,
+            "seen_tips": list(profile.seen_tips),
         },
         indent=2,
     )

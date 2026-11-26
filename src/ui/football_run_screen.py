@@ -23,11 +23,15 @@ from src.ui.football_shop_view import FootballShopView
 from src.ui.football_player_draft_view import FootballPlayerDraftView
 from src.ui.football_coach_view import FootballCoachView
 from src.ui.football_match_interaction import HandEventKind, MatchInteraction
-from src.ui.football_match_screen import FootballMatchScreen, MatchActions
+from src.ui.football_match_screen import STRIP_RECT, FootballMatchScreen, MatchActions
 from src.ui.football_draft_interaction import CoachInspection, PlayerInspection
 from src.ui.football_inspect import InspectState
 from src.ui.football_shop_review import ShopReviewInteraction
 from src.ui.football_pause_menu import PauseMenu, draw_pause_button, draw_pause_menu
+from src.ui.football_match_outcome import STRIP_HEIGHT
+from src.ui.football_tips import (
+    TIP_DEFENSE, TIP_FOURTH_DOWN, TIP_OFFENSE, TIP_SHOP, TIP_TWO_POINT, TipState,
+)
 from src.ui.football_ui_kit import draw_message_banner, stadium_backdrop
 from src.ui.layout import Layout
 from src.ui.screens import Navigate, Quit, Screen
@@ -52,6 +56,16 @@ COACH_ERROR_RECT = pygame.Rect(640, 18, 484, 52)
 # A failed save shows this small banner at the top of the run for a few seconds.
 SAVE_NOTICE_RECT = pygame.Rect(430, 4, 480, 30)
 SAVE_NOTICE_MS = 6000
+# One-time tips: the shop's header message spot, and the left of the match strip.
+SHOP_TIP_RECT = pygame.Rect(440, 18, 412, 52)
+MATCH_TIP_LEFT = 20
+MATCH_TIP_MIN_WIDTH = 300
+MATCH_TIPS = {
+    FootballHumanDecision.OFFENSIVE_PLAY: TIP_OFFENSE,
+    FootballHumanDecision.DEFENSIVE_SCHEME: TIP_DEFENSE,
+    FootballHumanDecision.FOURTH_DOWN: TIP_FOURTH_DOWN,
+    FootballHumanDecision.CONVERSION: TIP_TWO_POINT,
+}
 
 
 class FootballRunScreen(Screen):
@@ -67,8 +81,11 @@ class FootballRunScreen(Screen):
         clock: Callable[[], int] = pygame.time.get_ticks,
         on_run_discarded: Callable[[], None] = lambda: None,
         on_save_point: Callable[[], None] = lambda: None,
+        tips: TipState | None = None,
     ) -> None:
         super().__init__(theme, navigate, quit_application)
+        # One-time tips; the application loads and saves which ones were seen.
+        self.tips = tips or TipState()
         self.team_name = team_name
         self.controller: FootballGameController | None = None
         self.state: FootballGameControllerState | None = None
@@ -178,6 +195,8 @@ class FootballRunScreen(Screen):
                 return
             super().handle_event(event)
             return
+        if not self.match_screen.popup.open and self.tips.handle_event(event):
+            return  # GOT IT or Esc dismissed a tip; every other event passes through
         if self._match_screen_active(state):
             self._handle_match_event(event)
             return
@@ -292,6 +311,7 @@ class FootballRunScreen(Screen):
                 draw_message_banner(surface, SAVE_NOTICE_RECT, self.save_notice, danger=True)
 
     def _draw_run(self, surface: pygame.Surface) -> None:
+        self.tips.begin_frame()
         if not self.pause.is_open:
             self._draw_screen(surface)
             return
@@ -429,6 +449,7 @@ class FootballRunScreen(Screen):
             )
         self._set_buttons(self.buttons)
         self._draw_buttons(surface)
+        self._draw_shop_tip(surface, state, shop_landing)
         if shop_landing and not self.pause.is_open:
             self._shop_view().draw_overlay(surface)
         if playbook_review and not self.pause.is_open:
@@ -453,6 +474,51 @@ class FootballRunScreen(Screen):
                 self._small_font,
                 self.theme.danger,
             )
+
+    def _draw_shop_tip(
+        self, surface: pygame.Surface, state: FootballGameControllerState, shop_landing: bool,
+    ) -> None:
+        """The first shop visit's tip, in the header spot used for shop messages."""
+        if state.phase is not FootballRunPhase.PRE_MATCH_SHOP or state.shop is None:
+            self.tips.update(None)
+            return
+        if self.pause.is_open:
+            self.tips.update(None, hold=True)
+            return
+        message = self.last_error or state.transition_message
+        offered = TIP_SHOP if shop_landing and not message else None
+        key = (state.game_number, state.shop.day, state.shop.remaining_ap)
+        if self.tips.update(offered, key) is not None:
+            self.tips.draw(surface, SHOP_TIP_RECT)
+
+    def _match_tip(self, state: FootballGameControllerState) -> None:
+        """Offer this decision's tip before the match draws (the tip hides the card tooltip)."""
+        screen = self.match_screen
+        if state.match is not None:
+            screen.sync_playback(state.match)  # a replay starting this frame blocks the tip
+        if screen.popup.open:
+            self.tips.update(None, hold=True)
+        elif screen.input_blocked() or state.phase is not FootballRunPhase.MATCH:
+            self.tips.update(None)
+        else:
+            match = state.match
+            key = (len(match.match_events) if match is not None else 0, state.human_decision)
+            self.tips.update(MATCH_TIPS.get(state.human_decision), key)
+        screen.suppress_card_tip = self.tips.current is not None
+
+    def _draw_match_tip(self, surface: pygame.Surface, buttons: list[Button],
+                        prompt_width: int) -> None:
+        """Over the outcome strip's headline area, clear of its prompt and buttons."""
+        if self.tips.current is None or self.match_screen.popup.open:
+            return
+        strip_lefts = [b.rect.left for b in buttons if b.variant.startswith("strip")]
+        right = min(strip_lefts, default=STRIP_RECT.right - 10) - 14
+        if prompt_width:
+            right -= prompt_width + 18
+        # Cover the whole headline area so no half-hidden headline peeks out.
+        width = max(MATCH_TIP_MIN_WIDTH, right - MATCH_TIP_LEFT)
+        rect = pygame.Rect(MATCH_TIP_LEFT, STRIP_RECT.top + 4, width, STRIP_HEIGHT - 8)
+        self.tips.draw(surface, rect)
 
     def _draw_result_screen(
         self,
@@ -503,12 +569,14 @@ class FootballRunScreen(Screen):
             return_to_menu=self._return_to_menu,
             quit_run=self._quit_run,
         )
+        self._match_tip(state)
         buttons = self.match_screen.draw(
             surface, state, actions,
             focus_index=self.focus_index, hover_index=self.hover_index,
             pressed_index=self.pressed_index, error=self.last_error,
         )
         self._set_buttons(buttons)
+        self._draw_match_tip(surface, buttons, self.match_screen.strip_prompt_width)
 
     def _submit_match_hand_card(self, copy_id: str) -> None:
         state = self._current_state()

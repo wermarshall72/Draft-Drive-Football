@@ -148,7 +148,7 @@ def _mini_card(surface: pygame.Surface, rect: pygame.Rect, card_id: str, *, offe
     if offensive and card_id in OFFENSIVE_PLAY_CATALOG:
         family = OFFENSIVE_PLAY_CATALOG[card_id].family.label.upper()
     elif not offensive:
-        family = f"COUNTERS {DEFENSIVE_SCHEME_CATALOG[card_id].family.label.upper()}"
+        family = f"STOPS {DEFENSIVE_SCHEME_CATALOG[card_id].family.label.upper()}"
     else:
         family = "BONUS CARD"
     small = plain_font(9, False)

@@ -90,10 +90,10 @@ _WORDING = {
                   f"tries), your QB gets +{_n(v['power'])} power. Lasts the rest of the drive.",
     ),
     K.SILENT_COUNT: (
-        lambda v: "3rd/4th down vs a counter: ignore it (1/half)",
-        lambda v: "On a 3rd- or 4th-down snap where the active scheme counters your play, the "
-                  "snap is treated as not countered (no power, yardage, or risk penalty). "
-                  "Coach perks keyed to matching still apply. Once per half.",
+        lambda v: "3rd/4th down when stopped: ignore it (1/half)",
+        lambda v: "On a 3rd- or 4th-down snap where the rival's defense call stops your play, the "
+                  "snap is treated as not stopped (no power, yardage, or risk penalty). "
+                  "Coach perks keyed to stopped plays still apply. Once per half.",
     ),
     K.CHECKDOWN: (
         lambda v: f"After a QB incompletion: next RB play +{_n(v['yards'])} yards",
@@ -132,9 +132,9 @@ _WORDING = {
                   "Once per drive.",
     ),
     K.HOT_ROUTE: (
-        lambda v: "Drive start: swap your weakest countered card",
-        lambda v: "At your first offensive decision of each drive, if the active scheme "
-                  "counters a card in your hand, the countered card with the lowest expected "
+        lambda v: "Drive start: swap your weakest stopped card",
+        lambda v: "At your first offensive decision of each drive, if the rival's defense call "
+                  "stops a card in your hand, the stopped card with the lowest expected "
                   "yards is discarded and replaced from your draw pile. Once per drive.",
     ),
     K.CONTESTED_CATCH: (
@@ -237,7 +237,7 @@ _WORDING = {
         lambda v: f"Rival gains {_n(v['yards'])} or less: draw a scheme (1/drive)",
         lambda v: f"When a rival non-turnover snap gains {_yd(v['yards'])} or less "
                   "(incompletions count) while your linebackers contribute, draw "
-                  f"{_n(v['cards'])} defensive scheme. Once per rival drive.",
+                  f"{_n(v['cards'])} defense call. Once per rival drive.",
     ),
     K.CAPTAINS_ADJUSTMENT: (
         lambda v: f"Rival run first down: LB +{_n(v['power'])} power rest of drive",
@@ -253,7 +253,7 @@ _WORDING = {
     ),
     K.READ_KEYS: (
         lambda v: "See the rival's play hand when you pick a scheme",
-        lambda v: "Whenever you choose a defensive scheme, the rival's whole offensive hand is "
+        lambda v: "Whenever you choose a defense call, the rival's whole offensive hand is "
                   "shown to you. Every rival drive.",
     ),
     K.SHORT_FIELD: (
@@ -273,8 +273,8 @@ _WORDING = {
                   f"+{_n(v['seconds'])} seconds of clock. Every such play.",
     ),
     K.FORCE_AND_FOLD: (
-        lambda v: "Your Screen schemes also counter RB Runs",
-        lambda v: "A rival RB Run against your Screen-family scheme counts as countered: "
+        lambda v: "Your Screen defenses also stop RB Runs",
+        lambda v: "A rival RB Run against your Screen-family defense call counts as stopped: "
                   "defense power ×1.12, offense ×0.96, −0.5 yards, and +0.5% fumble "
                   "chance. Every such snap.",
     ),
@@ -396,14 +396,14 @@ def activation_result(activation: FootballPerkActivation) -> str:
         K.OPTION_LEDGER: lambda: f"DREW {_n(value)}",
         K.HURRY_UP_CAPTAIN: lambda: f"CLOCK {_n(value)}s",
         K.SHOT_SETUP: lambda: f"{MINUS}{_pct(perk.value('incompletion'))} INCOMPLETE",
-        K.SILENT_COUNT: lambda: "COUNTER IGNORED",
+        K.SILENT_COUNT: lambda: "STOP IGNORED",
         K.CHECKDOWN: lambda: f"+{_n(value)} YDS",
         K.KEEP_READ: lambda: "NO INC / INT ROLL",
         K.ORBIT_BREAKAWAY: lambda: f"+{_n(value)} YDS",
         K.OUTLET_REPEAT: lambda: "CARD KEPT",
         K.DOWNHILL: lambda: f"+{_n(value)} YDS",
         K.FALL_FORWARD: lambda: "+1 YARD FLOOR",
-        K.HOT_ROUTE: lambda: "SWAPPED A COUNTERED CARD",
+        K.HOT_ROUTE: lambda: "SWAPPED A STOPPED CARD",
         K.CONTESTED_CATCH: lambda: "REROLL: CAUGHT" if value > 0 else "REROLL: NO CATCH",
         K.MOVE_THE_STICKS: lambda: "FIRST DOWN",
         K.PYLON_REACH: lambda: "TD",
@@ -423,7 +423,7 @@ def activation_result(activation: FootballPerkActivation) -> str:
         K.SHORT_FIELD: lambda: f"+{_n(value)} YDS FIELD",
         K.GREEN_DOG: lambda: "SCHEME SWAPPED",
         K.KEEP_IT_INBOUNDS: lambda: f"+{_n(value)}s CLOCK",
-        K.FORCE_AND_FOLD: lambda: "RUN COUNTERED",
+        K.FORCE_AND_FOLD: lambda: "RUN STOPPED",
         K.BRACKET: lambda: "RIVAL DISCARDS",
         K.DEEP_LOCK: lambda: f"CAPPED AT {_n(perk.value('cap'))}",
         K.BAIT_AND_JUMP: lambda: f"+{_pct(perk.value('interception'))} INT",
@@ -477,7 +477,7 @@ def activation_preview_note(activation: FootballPerkActivation) -> str:
     if kind is K.KEEP_READ:
         return f"No inc/INT {name}"
     if kind is K.SILENT_COUNT:
-        return f"No counter {name}"
+        return f"Not stopped {name}"
     if kind is K.FORCE_AND_FOLD:
-        return f"Countered {name}"
+        return f"Stopped {name}"
     return name

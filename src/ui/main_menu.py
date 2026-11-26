@@ -23,6 +23,13 @@ START_NEW_RUN = "START NEW RUN"
 CANCEL = "CANCEL"
 REPLACE_TITLE = "START A NEW RUN?"
 ABANDON_SAVE = "ABANDON SAVE"
+HOW_TO_PLAY = "HOW TO PLAY"
+# Half-width buttons (SETTINGS beside HOW TO PLAY) show a shorter detail line.
+_SHORT_DETAILS = {
+    "SETTINGS": "Team name and colors",
+    "CREATE PROFILE": "Create your team",
+    HOW_TO_PLAY: "The rules in one page",
+}
 
 
 @dataclass(frozen=True)
@@ -210,10 +217,15 @@ class FootballMainMenuScreen(Screen):
                             151, 38 if continuing else 42),
                 variant="primary" if difficulty is self.difficulty else "quiet",
             ))
+        half = (settings_rect.width - 12) // 2
         buttons.extend((
             Button("SETTINGS" if self.menu_state else "CREATE PROFILE",
-                   lambda: self.navigate("settings"), settings_rect,
+                   lambda: self.navigate("settings"),
+                   pygame.Rect(settings_rect.left, settings_rect.top, half, settings_rect.height),
                    enabled=self.profile_error is None),
+            Button(HOW_TO_PLAY, lambda: self.navigate("how_to_play"),
+                   pygame.Rect(settings_rect.right - half, settings_rect.top, half,
+                               settings_rect.height)),
             Button("QUIT", self.quit_application, quit_rect),
         ))
         notice = self.save_notice() if self.menu_state is not None else None
@@ -226,7 +238,7 @@ class FootballMainMenuScreen(Screen):
                 variant="abandon",
             ))
         if self.focus_index == 0 and self.menu_state is None:
-            self.focus_index = 4 if self.profile_error is None else 5
+            self.focus_index = 4 if self.profile_error is None else 6
         if not self.confirm_replace:
             self._set_buttons(buttons)
         else:
@@ -248,6 +260,7 @@ class FootballMainMenuScreen(Screen):
             ),
             ABANDON_SAVE: "Set the saved run aside (its file is kept) and start fresh.",
             "SETTINGS": "Edit your team name and colors.",
+            HOW_TO_PLAY: "Learn the basics: the run, the shop, offense vs defense, and players.",
             "CREATE PROFILE": "Create a team before starting a run.",
             "QUIT": "Exit the game.",
         }
@@ -372,7 +385,10 @@ class FootballMainMenuScreen(Screen):
         if active and button.enabled:
             pygame.draw.rect(surface, readable_ink(fill), rect.inflate(-4, -4), 3, border_radius=5)
             pygame.draw.rect(surface, self.theme.primary, rect.inflate(-10, -10), 2, border_radius=4)
-        if self.keyboard_focus and button.focused and button.enabled:
+        narrow = rect.width < 300
+        if narrow:
+            detail = _SHORT_DETAILS.get(button.label, detail)
+        if self.keyboard_focus and button.focused and button.enabled and not narrow:
             focus_label = self.small_font.render("FOCUS", True, text)
             surface.blit(focus_label, (rect.right - focus_label.get_width() - 18,
                                        rect.top + (8 if compact else 13)))

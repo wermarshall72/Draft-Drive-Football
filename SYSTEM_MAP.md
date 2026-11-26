@@ -28,11 +28,26 @@ auto-battler is a separate legacy reference.
   ABANDON SAVE and make START RUN confirm first. [main_menu_art.py](src/ui/main_menu_art.py)
   draws its procedural stadium and tints the user-supplied helmet layers in
   `src/ui/assets/menu_helmet_*.png` to the team's primary color.
-  [profile_screen.py](src/ui/profile_screen.py) creates or edits the profile.
+  The main menu's HOW TO PLAY button (beside SETTINGS) opens
+  [how_to_play.py](src/ui/how_to_play.py), one read-only page of short sections
+  (`SECTIONS`) in the navy match style; Esc and BACK return to the menu.
+  [profile_screen.py](src/ui/profile_screen.py) creates or edits the profile and
+  offers RESET TIPS (`DesktopApplication.reset_tips`).
   Saving flows through `DesktopApplication` and the profile methods of
   [ApplicationController](src/application.py) to validation and JSON storage
   in [profile.py](src/profile.py); the application refreshes the theme and
-  screen data; a remembered run keeps its own team name. See
+  screen data; a remembered run keeps its own team name. `profile.json` has an
+  optional `seen_tips` list (`TeamProfile.seen_tips`; missing or malformed means
+  none seen). One-time tips live in [football_tips.py](src/ui/football_tips.py)
+  (`TipState`, `TIP_TEXT`): the application builds one `TipState` from the
+  profile and saves each newly shown tip id; the run screen offers the shop tip
+  in the shop header's message spot and the offense, defense, 4th-down, and
+  two-point tips over the outcome strip's headline (`MATCH_TIPS`), never during
+  replays. Tips never block input; GOT IT, Esc, or making the decision hides
+  them, and only one shows at a time. See
+  [test_first_time_help.py](tests/test_first_time_help.py) (also the wording,
+  STOPPED tags, tooltips, scouting, and How to Play; the `tips_seen` fixture in
+  [conftest.py](tests/conftest.py) is for Esc-driven tests),
   [test_desktop.py](tests/test_desktop.py),
   [test_profile.py](tests/test_profile.py),
   [test_main_menu.py](tests/test_main_menu.py), and
@@ -217,13 +232,18 @@ covers extracted interaction state.
   (never identities); [football_match_field.py](src/ui/football_match_field.py)
   draws turf, markers, the active scheme tag, and the latest play line;
   [football_match_outcome.py](src/ui/football_match_outcome.py) draws the
-  result and the fourth-down, conversion, Challenge, and Skip buttons;
+  result and the fourth-down, conversion, Challenge, and Skip buttons, plus the
+  defense call's prompt, sub-line, and `scouting_line` (the rival's most-owned
+  offensive family from its whole deck, never its hand);
   [football_match_hand.py](src/ui/football_match_hand.py) draws both hands
   (only the group for the current decision is selectable; two-point tries use
   offensive play cards), live yard/clock previews, bonus cards, the ACTIVE
   scheme slot, the basic-run fallback slot whenever the offensive hand has no
   play card, and per-group scrolling that reveals a playable card once per
-  decision;
+  decision. With a live estimate (including two-point tries) offense cards the
+  rival's defense call stops get a red STOPPED chip, and hovering or focusing
+  one shows a compact tooltip over the strip (`tooltip_lines`, from
+  `calculate_match_play_estimate`; `draw_card_tooltip` in the match screen);
   [football_match_piles.py](src/ui/football_match_piles.py) draws draw and
   discard piles; [football_match_popups.py](src/ui/football_match_popups.py)
   draws the in-match Depth Chart (temporary upgrades labeled active this match), the play log,

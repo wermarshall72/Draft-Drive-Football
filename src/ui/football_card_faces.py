@@ -80,7 +80,7 @@ def draw_play_card_face(
     elif isinstance(definition, FootballPlayDefinition):
         name, family, fill = definition.name.upper(), definition.family.label.upper(), MATCH_PANEL_HIGH
     else:
-        name, family, fill = definition.name.upper(), "DEFENSIVE SCHEME", MATCH_PANEL_HIGH
+        name, family, fill = definition.name.upper(), "DEFENSE CALL", MATCH_PANEL_HIGH
     tile_height = max(64, min(90, rect.height - 160))
     inner, tile, stats = draw_card_shell(
         surface, rect, art=card_art_name(definition), band=band, fill=fill,
@@ -107,7 +107,7 @@ def draw_play_card_face(
         draw_two_cells(surface, stats, ((f"~{yards:.1f}", "EST YDS"),
                                         (f"{definition.clock_seconds}s", "CLOCK")))
     elif isinstance(definition, FootballSchemeDefinition):
-        blit_text(surface, plain_font(9), "COUNTERS", MATCH_MUTED, stats, midtop=(stats.centerx, stats.top + 4))
+        blit_text(surface, plain_font(9), "STOPS", MATCH_MUTED, stats, midtop=(stats.centerx, stats.top + 4))
         font, lines = fit_wrapped(definition.family.label.upper(), stats.width - 6, (14, 13, 12, 11), 1)
         blit_text(surface, font, lines[0], band, stats, midbottom=(stats.centerx, stats.bottom - 3))
     else:

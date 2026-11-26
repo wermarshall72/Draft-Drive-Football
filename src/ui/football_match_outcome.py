@@ -7,8 +7,11 @@ from dataclasses import dataclass
 
 import pygame
 
+from collections import Counter
+
 from src.engine.football import (
     FootballBonusCardAction,
+    FootballCardFamily,
     FootballConversionAction,
     FootballFourthDownAction,
 )
@@ -144,8 +147,45 @@ def status_prompt(state: FootballGameControllerState) -> str:
     if decision is FootballHumanDecision.OFFENSIVE_PLAY:
         return "YOUR BALL · PLAY AN OFFENSE CARD"
     if decision is FootballHumanDecision.DEFENSIVE_SCHEME:
-        return "SET YOUR DEFENSE FOR THIS DRIVE"
+        return DEFENSE_PROMPT
     return ""
+
+
+DEFENSE_PROMPT = "PICK ONE DEFENSE FOR THIS DRIVE"
+DEFENSE_SUBLINE = "It stays until they score, punt, or turn it over"
+
+
+def scouting_line(match) -> str | None:
+    """'SCOUTING · HOUNDS LEAN DEEP PASS' from the rival's whole owned offensive deck.
+
+    Counts every owned play copy (never the current hand alone): the family with the
+    most copies, or the two tied for most. Three or more tied show no lean; an empty
+    deck shows nothing.
+    """
+    deck = match.team_b_offense_deck if match is not None else None
+    if deck is None:
+        return None
+    counts = Counter(
+        OFFENSIVE_PLAY_CATALOG[card.card_id].family
+        for card in deck.owned if card.card_id in OFFENSIVE_PLAY_CATALOG
+    )
+    if not counts:
+        return None
+    rival = match.team_b.team_name.strip().upper()
+    most = max(counts.values())
+    leaders = [family for family in FootballCardFamily if counts.get(family) == most]
+    if len(leaders) > 2:
+        return f"SCOUTING · {rival} SHOW NO CLEAR LEAN"
+    lean = " OR ".join(family.label.upper() for family in leaders)
+    return f"SCOUTING · {rival} LEAN {lean}"
+
+
+def prompt_lines(state: FootballGameControllerState) -> tuple[str, ...]:
+    """Lines stacked under the strip prompt: the defense call's sub-line and scouting."""
+    if state.human_decision is not FootballHumanDecision.DEFENSIVE_SCHEME:
+        return ()
+    scouting = scouting_line(state.match)
+    return (DEFENSE_SUBLINE,) + ((scouting,) if scouting else ())
 
 
 CALLOUT_CYCLE_MS = 1400
@@ -169,8 +209,13 @@ def draw_outcome_strip(
     actions: list[StripAction],
     playback_label: str | None,
     elapsed_ms: int,
+    sub_lines: tuple[str, ...] = (),
 ) -> list[pygame.Rect]:
-    """Draw the strip and return one rect per entry in ``actions``."""
+    """Draw the strip and return one rect per entry in ``actions``.
+
+    ``sub_lines`` stack under the prompt (smaller, right-aligned); the second one is
+    skipped when it would not fit.
+    """
     emphasis = outcome.emphasis if outcome is not None else OutcomeEmphasis.NORMAL
     color = OUTCOME_COLORS[outcome.kind] if outcome is not None else OUTCOME_OTHER
     edge = {
@@ -207,11 +252,20 @@ def draw_outcome_strip(
         max_width = max(140, right - (bar.right + 14) - 360)
         text = fit_text(text, font, max_width)
         prompt_box = pygame.Rect(right - max_width, rect.top, max_width, rect.height)
+        extra = [] if playback_label else _sub_lines(sub_lines, max_width, rect.height - 8 - font.get_height())
+        height = font.get_height() + sum(line_font.get_height() for _line, line_font, _c in extra)
+        y = rect.centery - height // 2
         prompt_rect = blit_text(
             surface, font, text, MATCH_FOCUS if prompt and not playback_label else MATCH_MUTED,
-            prompt_box, midright=(right, rect.centery),
+            prompt_box, topright=(right, y),
         )
-        right = prompt_rect.left - 18
+        left_edge = prompt_rect.left
+        y = prompt_rect.bottom
+        for line, line_font, color in extra:
+            drawn = blit_text(surface, line_font, line, color, prompt_box, topright=(right, y))
+            left_edge = min(left_edge, drawn.left)
+            y = drawn.bottom
+        right = left_edge - 18
 
     left = bar.right + 14
     headline_width = max(60, right - left)
@@ -257,6 +311,18 @@ def draw_outcome_strip(
         blit_text(surface, detail_font, detail, MATCH_MUTED, headline_box,
                   topleft=(left + 1, rect.bottom - 23))
     return button_rects
+
+
+def _sub_lines(lines: tuple[str, ...], width: int, room: int) -> list[tuple[str, pygame.font.Font, pygame.Color]]:
+    """(text, font, color) for the prompt's sub-lines that fit ``width`` and ``room``."""
+    fitted: list[tuple[str, pygame.font.Font, pygame.Color]] = []
+    for index, line in enumerate(lines):
+        font = plain_font(12, index > 0)
+        if font.size(line)[0] > width or font.get_height() > room:
+            continue  # skip rather than truncate (scouting is optional)
+        fitted.append((line, font, MATCH_MUTED if index == 0 else MATCH_TEXT))
+        room -= font.get_height()
+    return fitted
 
 
 def _action_width(action: StripAction) -> int:

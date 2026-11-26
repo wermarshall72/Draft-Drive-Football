@@ -27,6 +27,7 @@ from src.ui.football_match_events import (
     snapshot_state,
 )
 from src.ui.football_match_field import FIELD_HEIGHT, FieldOverlay, draw_match_field
+from src.ui.football_inspect import InspectState
 from src.ui.football_match_hand import HandView
 from src.ui.football_match_interaction import HandEvent, HandEventKind, MatchInteraction
 from src.ui.football_match_outcome import (
@@ -36,11 +37,12 @@ from src.ui.football_match_outcome import (
     decision_actions,
     draw_outcome_strip,
     draw_strip_button,
+    prompt_lines,
     status_prompt,
 )
 from src.ui.football_match_palette import (
-    MATCH_CANVAS, MATCH_DANGER, MATCH_INK, MATCH_PANEL,
-    MATCH_PANEL_EDGE, MATCH_TEXT, blit_text, match_font,
+    MATCH_CANVAS, MATCH_DANGER, MATCH_GOOD, MATCH_INK, MATCH_PANEL, MATCH_PANEL_DEEP,
+    MATCH_PANEL_EDGE, MATCH_TEXT, blit_text, match_font, plain_font,
 )
 from src.ui.football_match_perks import (
     draw_green_dog_panel, draw_perk_tray, draw_read_keys_panel, has_read_keys,
@@ -118,6 +120,9 @@ class FootballMatchScreen:
         self.interaction = MatchInteraction()
         self.popup = PopupState()
         self.hand = HandView()
+        # Hover/focus tooltip for offense cards, after the shop's inspect delay.
+        self.card_tip = InspectState(lambda: self.clock())
+        self.card_tip_rect: pygame.Rect | None = None
         self._frozen_at: int | None = None
         self.read_keys_hidden = False
         self._popup_from_pause = False
@@ -148,6 +153,20 @@ class FootballMatchScreen:
         if not self.popup.open:
             self.playback.sync(match, self.clock(), force_replay=True)
         return self.playback.blocking() or self.playback.target < len(match.match_events)
+
+    def sync_playback(self, match: FootballMatchState) -> int:
+        """Start or advance this frame's replay; returns the (frozen) time used.
+
+        Idempotent within a frame, so callers can sync before drawing (one-time
+        tips must know whether a replay is about to block input).
+        """
+        now = self.clock()
+        if not self.popup.open:
+            self.playback.sync(
+                match, now, force_replay=match.status is FootballMatchStatus.COMPLETED
+            )
+            return now
+        return self._frozen_at if self._frozen_at is not None else now
 
     def input_blocked(self) -> bool:
         return self.playback.blocking()
@@ -214,6 +233,8 @@ class FootballMatchScreen:
 
     def handle_event(self, event: pygame.event.Event) -> HandEvent:
         escape = event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
+        if not self.popup.open and self.card_tip.handle_event(event):
+            return HandEvent(HandEventKind.HANDLED)  # Esc hid a visible card tooltip
         if self.popup.open:
             if escape:
                 self.back_from_popup()
@@ -266,13 +287,7 @@ class FootballMatchScreen:
         match = state.match
         if match is None:
             raise RuntimeError("The controller did not provide an active match state.")
-        now = self.clock()
-        if not self.popup.open:
-            self.playback.sync(
-                match, now, force_replay=match.status is FootballMatchStatus.COMPLETED
-            )
-        else:
-            now = self._frozen_at if self._frozen_at is not None else now
+        now = self.sync_playback(match)
         display = self.display_match(match)
         kicking_next = (
             kickoff_pending(match, self.playback.shown)
@@ -344,14 +359,19 @@ class FootballMatchScreen:
             prompt, strip_actions = decision_actions(state, callbacks)
             prompt = prompt or status_prompt(state)
             playback_label = None
+        sub_lines = () if blocked else prompt_lines(state)
         current_outcome = (
             outcome(events[-1], events[-2] if len(events) > 1 else None,
                     match.team_a.team_name, match.team_b.team_name)
             if events else None
         )
+        self.strip_prompt_width = max(
+            [match_font(14).size(prompt)[0] if prompt else 0]
+            + [plain_font(12).size(line)[0] for line in sub_lines]
+        )
         rects = draw_outcome_strip(
             surface, STRIP_RECT, current_outcome, prompt=prompt, actions=strip_actions,
-            playback_label=playback_label, elapsed_ms=elapsed,
+            playback_label=playback_label, elapsed_ms=elapsed, sub_lines=sub_lines,
         )
         buttons: list[Button] = [
             Button(action.label, action.callback, rect, enabled=action.enabled, variant=action.variant)
@@ -406,6 +426,11 @@ class FootballMatchScreen:
             self._draw_post_replay_marks(surface, opponent_hand_rect)
         if error:
             self._draw_error(surface, error)
+        self.card_tip_rect = None
+        if not blocked and not self.popup.open and not self.suppress_card_tip:
+            self._draw_card_tooltip(surface, display, buttons, focus_index, hover_index)
+        else:
+            self.card_tip.reset()
 
         if self.popup.open:
             buttons = self._draw_popup(surface, state, display, focus_index, hover_index, pressed_index, actions)
@@ -456,6 +481,37 @@ class FootballMatchScreen:
                               hovered=hover_index == index, pressed=pressed_index == index)
         return buttons
 
+    suppress_card_tip = False  # set while a one-time tip occupies the strip
+    strip_prompt_width = 0  # this frame's strip prompt width (one-time tips stay clear)
+
+    def _draw_card_tooltip(
+        self,
+        surface: pygame.Surface,
+        display: FootballMatchState,
+        buttons: list[Button],
+        focus_index: int,
+        hover_index: int | None,
+    ) -> None:
+        targets = self.hand.tooltip_targets or {}
+
+        def key(index: int | None):
+            target = targets.get(index) if index is not None else None
+            return target[0] if target is not None else None
+
+        shown = self.card_tip.update(key(hover_index), key(focus_index))
+        self.card_tip.shown_key = shown
+        if shown is None:
+            return
+        _copy_id, card_id, anchor = next(
+            target for target in targets.values() if target[0] == shown
+        )
+        lines = self.hand.card_tooltip(display, card_id)
+        if not lines:
+            return
+        strip_buttons = [b.rect for b in buttons if b.variant.startswith("strip")]
+        limit = min((rect.left for rect in strip_buttons), default=STRIP_RECT.right) - 8
+        self.card_tip_rect = draw_card_tooltip(surface, lines, anchor, right_limit=limit)
+
     @staticmethod
     def _draw_post_replay_marks(surface: pygame.Surface, opponent_hand: pygame.Rect) -> None:
         """Events carry no deck snapshots, so mid-replay hands, piles, and opponent
@@ -485,3 +541,51 @@ class FootballMatchScreen:
         plate.midtop = (HAND_RECT.centerx, STRIP_RECT.bottom - 4)
         pygame.draw.rect(surface, MATCH_DANGER, plate, border_radius=8)
         surface.blit(rendered, rendered.get_rect(center=plate.center))
+
+
+TOOLTIP_FONT_SIZE = 13
+
+
+def draw_card_tooltip(
+    surface: pygame.Surface,
+    lines: tuple[str, ...],
+    anchor: pygame.Rect,
+    *,
+    right_limit: int = STRIP_RECT.right,
+) -> pygame.Rect:
+    """A compact two-by-two tooltip over the outcome strip, above the hovered card.
+
+    It sits inside the strip so it never covers the hand or the field, and it never
+    takes clicks. The last line (stopped or open) is colored red or green.
+    """
+    font = plain_font(TOOLTIP_FONT_SIZE, False)
+    pad, gap = 14, 22
+    left_column = (lines[0], lines[1])
+    right_column = tuple(lines[2:4])
+    max_width = max(200, right_limit - STRIP_RECT.left - 8)
+    left_width = max(font.size(line)[0] for line in left_column)
+    right_width = min(
+        max(font.size(line)[0] for line in right_column),
+        max_width - left_width - gap - pad * 2,
+    )
+    rect = pygame.Rect(0, 0, pad * 2 + left_width + gap + right_width, STRIP_RECT.height - 8)
+    rect.centerx = anchor.centerx
+    rect.centery = STRIP_RECT.centery
+    rect.right = min(rect.right, right_limit)
+    rect.left = max(rect.left, STRIP_RECT.left + 4)
+    pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=10)
+    pygame.draw.rect(surface, MATCH_PANEL_DEEP, rect, border_radius=10)
+    pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=10)
+    row_height = font.get_height() + 4
+    top = rect.centery - row_height
+    for column, (x, width) in enumerate(
+        ((rect.left + pad, left_width), (rect.left + pad + left_width + gap, right_width))
+    ):
+        for row, line in enumerate(left_column if column == 0 else right_column):
+            color = MATCH_TEXT
+            if column == 1 and row == 1:
+                color = MATCH_GOOD if line == "Open" else MATCH_DANGER
+            box = pygame.Rect(x, top + row * row_height, width, row_height)
+            blit_text(surface, font, fit_text(line, font, width), color, box,
+                      midleft=(x, box.centery))
+    return rect

@@ -29,6 +29,9 @@ from test_football_desktop import (
     _surface,
 )
 
+# Esc-driven tests: a visible first-time tip would take Esc first.
+pytestmark = pytest.mark.usefixtures("tips_seen")
+
 PAUSE_LABELS = ["KEEP PLAYING", "RETURN TO MENU", "QUIT RUN"]
 MATCH_PAUSE_LABELS = ["KEEP PLAYING", "DEPTH CHART", "PLAY LOG", "RETURN TO MENU", "QUIT RUN"]
 
@@ -534,9 +537,10 @@ def test_continue_run_button_shows_the_summary_and_fits(tmp_path: Path) -> None:
     assert summaries == ["WEEK 1 · SHOP DAY 1 · 0-0 · STANDARD"]
     buttons = menu.buttons
     assert [b.label for b in buttons] == [
-        "CONTINUE RUN", "START RUN", "EASY", "STANDARD", "HARD", "SETTINGS", "QUIT",
+        "CONTINUE RUN", "START RUN", "EASY", "STANDARD", "HARD", "SETTINGS", "HOW TO PLAY", "QUIT",
     ]
-    assert all(buttons[i].rect.bottom < buttons[i + 1].rect.top for i in (0, 1, 4, 5))
+    assert all(buttons[i].rect.bottom < buttons[i + 1].rect.top for i in (0, 1, 4, 6))
+    assert buttons[5].rect.top == buttons[6].rect.top and buttons[5].rect.right < buttons[6].rect.left
     assert buttons[-1].rect.bottom < 642
 
 

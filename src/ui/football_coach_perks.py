@@ -50,19 +50,19 @@ _PERK_WORDING = {
                   "Not used on conversions.",
     ),
     FootballCoachPerkKind.MATCHED_RUN_YARDS_REDUCTION: (
-        lambda v: f"Matched RB Runs: \u2212{_yards(v)}",
-        lambda v: f"When the opponent runs an RB Run into your RB Run scheme, the play loses "
-                  f"{_yard_words(v)} unless it is a turnover. Applies on every matching snap.",
+        lambda v: f"Stopped RB Runs: \u2212{_yards(v)}",
+        lambda v: f"When your RB Run defense call stops the opponent's RB Run, the play loses "
+                  f"{_yard_words(v)} unless it is a turnover. Applies on every stopped snap.",
     ),
     FootballCoachPerkKind.MATCHED_PASS_INTERCEPTION_BONUS: (
-        lambda v: f"Matched passes: +{_percent(v)} INT chance",
-        lambda v: f"When your scheme matches the opponent's pass play, that pass gets "
-                  f"+{_percent(v)} interception chance. Applies on every matching pass.",
+        lambda v: f"Stopped passes: +{_percent(v)} INT chance",
+        lambda v: f"When your defense call stops the opponent's pass play, that pass gets "
+                  f"+{_percent(v)} interception chance. Applies on every stopped pass.",
     ),
     FootballCoachPerkKind.MATCHED_PASS_INCOMPLETE_BONUS: (
-        lambda v: f"Matched passes: +{_percent(v)} incompletion",
-        lambda v: f"When your scheme matches the opponent's pass play, that pass gets "
-                  f"+{_percent(v)} incompletion chance. Applies on every matching pass.",
+        lambda v: f"Stopped passes: +{_percent(v)} incompletion",
+        lambda v: f"When your defense call stops the opponent's pass play, that pass gets "
+                  f"+{_percent(v)} incompletion chance. Applies on every stopped pass.",
     ),
     FootballCoachPerkKind.INTERCEPTION_RETURN_YARDS: (
         lambda v: f"INT returns: +{_yards(v)}, can score",

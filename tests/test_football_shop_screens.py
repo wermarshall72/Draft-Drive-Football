@@ -43,6 +43,9 @@ from test_football_desktop import (
     _surface,
 )
 
+# Esc-driven tests: a visible first-time tip would take Esc first.
+pytestmark = pytest.mark.usefixtures("tips_seen")
+
 PLAYS = _play_scheme_catalog()
 PLAY_CARDS = [card for card in PLAYS if card.card_id.startswith("play:")]
 SCHEME_CARDS = [card for card in PLAYS if card.card_id.startswith("scheme:")]
@@ -495,7 +498,7 @@ def test_inspect_content_has_full_rules_for_each_card_type(tmp_path: Path) -> No
         _player_card(FootballPosition.LINEBACKERS, FootballUpgradeStat.VOLATILITY,
                      FootballShopRarity.RARE).card_id: ("rest of the run", "cannot drop below 0%"),
         PLAY_CARDS[0].card_id: ("standardized neutral estimate", "Contributors", PLAY_CARDS[0].description[:20]),
-        SCHEME_CARDS[5].card_id: ("Counters", SCHEME_CARDS[5].description[:20]),
+        SCHEME_CARDS[5].card_id: ("Stops", SCHEME_CARDS[5].description[:20]),
         BONUS_CARDS[5].card_id: (BONUS_CARDS[5].description[:20],),
         REMOVAL.card_id: ("exact copy", "at least 4"),
     }

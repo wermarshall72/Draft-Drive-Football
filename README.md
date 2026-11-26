@@ -17,11 +17,15 @@ profile cannot be loaded, the desktop does not overwrite it.
 Start an offline run by choosing a local AI difficulty, selecting a coach, and
 drafting one player at each of the eight positions. Each season week opens
 with a shop visit with 12 Action Points shared across its sections; unspent points
-expire when the visit ends. Call offensive plays and defensive schemes during
-matches. Three losses end the run; surviving all ten regular-season weeks (a
+expire when the visit ends. Call offensive plays and one defense call per
+drive during matches. Three losses end the run; surviving all ten regular-season weeks (a
 Bye Week can skip one without a game)
 earns a seed in an eight-team, single-elimination playoff bracket, with a shop
 before each round. One playoff loss ends the run; three wins take the title.
+New players can open **How to Play** from the main menu for a one-page summary
+of the run, the shop, offense vs defense, downs, players, and coaches. Small
+one-time tips also appear the first time you shop, call a play, pick a defense,
+reach 4th down, or score a touchdown; **Settings > Reset Tips** shows them again.
 
 Each coach pair shows both coaches' team-colored portraits, position
 modifiers, and active perks inline; hover a pair or use Tab / arrow keys to

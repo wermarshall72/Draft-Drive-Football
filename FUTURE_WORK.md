@@ -172,6 +172,48 @@ or the design changes.
 - [ ] Revisit asynchronous opponents, accounts, and career history after the
   offline-first game loop is established.
 
+## First-time player evaluation (2026-11-25)
+
+A fresh playthrough of the desktop app plus 360 simulated runs (random,
+"biggest number", and Hard-AI-logic players; shop choices were random). Goal:
+one run should take 15-30 minutes, so defense stays light.
+
+- [ ] Difficulty: simulated players rarely survive (Standard: 0/40 random,
+  0/40 "biggest number", 3/40 expert runs reached the playoffs), but a human
+  playtester reached the playoffs on the first try. The simulation's random
+  shopping likely understates real players. Don't retune until more human
+  playtests; consider a quick "try again" on the Fired screen.
+- [ ] Play calling often has one obvious answer: the rival's defense is visible
+  before the call, every pass family misses about 29% of the time (so Deep
+  Pass is the biggest number with no extra risk), runs average 3.7 yards
+  against 6.0 for a countered Deep Pass, and cards show no risk. (Risk is now
+  shown: a hand card's hover/focus tooltip gives the miss or fumble chance, and
+  stopped cards carry a STOPPED tag. The balance question remains open.)
+- [x] Defense is one call per drive followed by watching the AI drive replay
+  (up to 9 plays); keep it light, but make the one call clear and informed.
+  The strip now reads "PICK ONE DEFENSE FOR THIS DRIVE" with how long it lasts
+  and a scouting line from the rival's whole deck.
+- [x] No onboarding: no how-to-play or first-time hints. Unexplained terms
+  include counters, "matched passes", "+20% QB", volatility, stamina, AP, Day,
+  partner, and PAT. Added a How to Play page, five one-time tips, and "stops" /
+  "stopped" / "defense call" wording in place of counters and matched passes.
+  "PAT" still appears in the conversion prompt and scoreboard (the two-point tip
+  says "Kick for 1").
+- [ ] Draft: prospects at a position have identical stats, so the perkless
+  Basic player is always the worst pick.
+- [x] Cards switched from "YDS LIVE" to "BASE YDS" on two-point tries; they now
+  keep the live estimate.
+- [ ] Smaller UI issues: two of three coach pairs share a coach; temporary and
+  permanent upgrades look alike apart from a small icon; result-screen bar colors mix
+  run/pass and team colors; no halftime moment; the "Hands & piles update
+  after replay" notice covers the hand.
+- [ ] Visual polish: the profile screen still uses the old grey style; the
+  title says "COLLEGE FOOTBALL" while the app is "Draft Drive Football"; a
+  "FOCUS" tag shows on the main menu; play and bonus card art is text codes
+  ("OL+RB", "OFF DRAW").
+- [ ] Measure real run length against the 15-30 minute goal (a match has about
+  33 offensive calls, 6 defensive calls, and the AI drive replays).
+
 ## Known bugs
 
 - [x] Opponent Discard (Rare) and Offensive Draw & Discard (Very Rare) resolved

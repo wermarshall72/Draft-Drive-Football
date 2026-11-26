@@ -1568,7 +1568,7 @@ def test_opponent_hand_shows_counts_without_revealing_card_identities(tmp_path: 
 
 
 def test_pause_menu_opens_depth_chart_and_play_log_and_quit_needs_confirmation(
-    tmp_path: Path,
+    tmp_path: Path, tips_seen: None,
 ) -> None:
     desktop = _new_desktop(tmp_path)
     _start_match(desktop)
@@ -2329,7 +2329,7 @@ def test_empty_defense_hand_fallback_is_drawn_as_run_fit_card(tmp_path: Path, mo
     assert any(name == scheme_card_art(FootballCardFamily.RB_RUN) and fallback.rect.contains(rect)
                for name, rect in art)
     inside = [text for text, rect, _ in records if fallback.rect.contains(rect)]
-    assert "RUN FIT" in inside and "COUNTERS" in inside and "RB RUN" in inside
+    assert "RUN FIT" in inside and "STOPS" in inside and "RB RUN" in inside
     assert any(text in ("BASIC FALLBACK", "FALLBACK") for text in inside)
     _assert_text_fits(records)
 

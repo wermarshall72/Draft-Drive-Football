@@ -374,7 +374,7 @@ def _base_outcome(
             scheme = DEFENSIVE_SCHEME_CATALOG[event.card_id]
             return Outcome(
                 f"GREEN DOG · {scheme.name.upper()}",
-                f"{defense} · NOW COUNTERS {scheme.family.label.upper()}",
+                f"{defense} · NOW STOPS {scheme.family.label.upper()}",
                 PlayLineKind.OTHER,
             )
         return Outcome("GREEN DOG · SCHEME KEPT", f"{defense} · NO SWAP", PlayLineKind.OTHER)
@@ -385,7 +385,7 @@ def _base_outcome(
         defense = team_name(opponent(event.possession), team_a, team_b)
         return Outcome(
             f"DEFENSE SET · {scheme.name.upper()}",
-            f"{defense.upper()} · COUNTERS {scheme.family.label.upper()}",
+            f"{defense.upper()} · STOPS {scheme.family.label.upper()}",
             PlayLineKind.OTHER,
         )
     if isinstance(action, FootballBonusCardAction):

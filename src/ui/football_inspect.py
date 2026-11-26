@@ -336,11 +336,11 @@ def play_inspect(definition: FootballPlayDefinition, rarity: object | None, cost
 def scheme_inspect(definition: FootballSchemeDefinition, rarity: object | None, cost: int | None,
                    art: ArtPainter | None = None, extra: tuple[tuple[str, str], ...] = ()) -> InspectContent:
     return InspectContent(definition.name, rarity, cost, (
-        ("Scheme", definition.description),
-        ("Counters", f"{definition.family.label} plays"),
+        ("Defense call", definition.description),
+        ("Stops", f"{definition.family.label} plays"),
         ("Contributors", _contributors(definition)),
         *extra,
-    ), art, tag="Defensive scheme")
+    ), art, tag="Defense call")
 
 
 def bonus_inspect(definition: FootballBonusCardDefinition, rarity: object | None, cost: int | None,
