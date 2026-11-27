@@ -2,8 +2,9 @@
 
 One look everywhere: the navy veil, the match popup panel, and stacked 340x48
 popup buttons. ``PauseMenu`` holds only transient UI state (open flag, saved
-focus, and the two-step Quit Run timer); the run screen decides what each
-entry does.
+focus, the two-step Quit Run timer, and whether the AUDIO view is showing);
+the run screen decides what each entry does. The AUDIO view shows the shared
+volume sliders (``volume_slider``) over the application's audio settings.
 """
 
 from __future__ import annotations
@@ -16,10 +17,14 @@ import pygame
 from src.ui import football_ui_kit
 from src.ui.football_ui_kit import (
     MATCH_DANGER, MATCH_FOCUS, MATCH_INK, MATCH_PANEL, MATCH_PANEL_EDGE,
-    MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, draw_popup_button, draw_popup_panel,
-    draw_veil, match_font,
+    MATCH_PANEL_HIGH, MATCH_TEXT, blit_text, draw_popup_button,
+    draw_popup_panel, draw_veil, match_font,
 )
 from src.ui.text import fit_text
+from src.ui.volume_slider import (
+    BLOCK_HEIGHT, AudioBinding, SliderInput, audio_sliders, local_audio_binding,
+    match_slider_palette,
+)
 from src.ui.widgets import Button
 
 KEEP_PLAYING = "KEEP PLAYING"
@@ -27,6 +32,10 @@ RETURN_TO_MENU = "RETURN TO MENU"
 QUIT_RUN = "QUIT RUN"
 CONFIRM_QUIT = "CONFIRM QUIT"
 DEPTH_CHART = "DEPTH CHART"
+AUDIO = "AUDIO"
+AUDIO_TITLE = "AUDIO"
+AUDIO_SUBTITLE = "Esc to go back"
+BACK = "BACK"
 PLAY_LOG = "PLAY LOG"
 PAUSE_TITLE = "PAUSED"
 PAUSE_SUBTITLE = "Esc to keep playing"
@@ -41,6 +50,8 @@ BUTTON_STRIDE = 64
 BUTTONS_TOP = 98
 PANEL_BOTTOM_PAD = 42
 CONFIRM_VARIANT = "popup-confirm"
+AUDIO_SLIDER_GAP = 18
+AUDIO_BACK_GAP = 30
 
 
 @dataclass(frozen=True)
@@ -53,26 +64,61 @@ class MenuEntry:
 class PauseMenu:
     """Open/closed state, the focus to restore, and the armed Quit Run deadline."""
 
-    def __init__(self, clock: Callable[[], int] = pygame.time.get_ticks) -> None:
+    def __init__(
+        self, clock: Callable[[], int] = pygame.time.get_ticks,
+        audio: AudioBinding | None = None,
+    ) -> None:
         self.clock = clock
         self.is_open = False
         self.saved_focus = 0
         self._confirm_until: int | None = None
+        # The application's audio settings (replaced by DesktopApplication).
+        self.audio = audio or local_audio_binding()
+        self.audio_open = False
+        self.slider_input = SliderInput()
+        self._audio_index = 1
+        self._focus_request: int | None = None
 
     def show(self, saved_focus: int) -> None:
         self.is_open = True
         self.saved_focus = saved_focus
         self._confirm_until = None
+        self.leave_audio()
 
     def hide(self) -> int:
         self.is_open = False
         self._confirm_until = None
+        self.leave_audio()
         return self.saved_focus
 
     def reset(self) -> None:
         self.is_open = False
         self.saved_focus = 0
         self._confirm_until = None
+        self.leave_audio()
+
+    # -- the AUDIO view ----------------------------------------------------------------
+
+    def open_audio(self) -> None:
+        self._confirm_until = None
+        self.audio_open = True
+        self._focus_request = 0
+
+    def close_audio(self) -> None:
+        """BACK or Esc: return to the list with focus on AUDIO."""
+        self.leave_audio()
+        self._focus_request = self._audio_index
+
+    def leave_audio(self) -> None:
+        """Drop the AUDIO view without moving focus (the menu itself is closing)."""
+        self.slider_input.release()
+        self.audio_open = False
+        self._focus_request = None
+
+    def take_focus_request(self) -> int | None:
+        """The focus index the caller should apply after opening or closing AUDIO."""
+        request, self._focus_request = self._focus_request, None
+        return request
 
     # -- two-step Quit Run -----------------------------------------------------------
 
@@ -111,9 +157,11 @@ class PauseMenu:
         extra: Sequence[MenuEntry] = (),
     ) -> list[MenuEntry]:
         armed = self.confirming
+        self._audio_index = 1 + len(extra)
         return [
             MenuEntry(KEEP_PLAYING, keep_playing, "popup-primary"),
             *extra,
+            MenuEntry(AUDIO, self.open_audio),
             MenuEntry(RETURN_TO_MENU, return_to_menu),
             MenuEntry(
                 CONFIRM_QUIT if armed else QUIT_RUN,
@@ -192,6 +240,47 @@ def draw_pause_menu(
         focus_index=focus_index, hover_index=hover_index, pressed_index=pressed_index,
         confirm_fraction=menu.remaining_fraction(),
     )
+
+
+def audio_panel_rect(surface_size: tuple[int, int], width: int = PANEL_WIDTH) -> pygame.Rect:
+    height = (BUTTONS_TOP + BLOCK_HEIGHT * 2 + AUDIO_SLIDER_GAP + AUDIO_BACK_GAP
+              + BUTTON_HEIGHT + PANEL_BOTTOM_PAD)
+    rect = pygame.Rect(0, 0, width, height)
+    rect.center = (surface_size[0] // 2, surface_size[1] // 2)
+    return rect
+
+
+def draw_pause_audio(
+    surface: pygame.Surface,
+    menu: PauseMenu,
+    *,
+    focus_index: int,
+    hover_index: int | None,
+    pressed_index: int | None,
+) -> list[Button]:
+    """The pause panel's AUDIO view: Music, Sound effects, and BACK, in that order."""
+    draw_veil(surface)
+    rect = audio_panel_rect(surface.get_size())
+    draw_popup_panel(surface, rect, AUDIO_TITLE, AUDIO_SUBTITLE)
+    top = rect.top + BUTTONS_TOP - 8
+    left = rect.centerx - BUTTON_WIDTH // 2
+    music = pygame.Rect(left, top, BUTTON_WIDTH, BLOCK_HEIGHT)
+    effects = music.move(0, BLOCK_HEIGHT + AUDIO_SLIDER_GAP)
+    buttons: list[Button] = list(audio_sliders(
+        menu.audio, music, effects, match_slider_palette(), dragging=menu.slider_input.dragging,
+    ))
+    back_rect = pygame.Rect(left, effects.bottom + AUDIO_BACK_GAP, BUTTON_WIDTH, BUTTON_HEIGHT)
+    buttons.append(Button(BACK, menu.close_audio, back_rect, variant="popup"))
+    for index, button in enumerate(buttons):
+        button.focused = focus_index == index
+        focused, hovered, pressed = (
+            focus_index == index, hover_index == index, pressed_index == index,
+        )
+        if button.label == BACK:
+            draw_popup_button(surface, button, focused=focused, hovered=hovered, pressed=pressed)
+        else:
+            button.draw(surface, None, None, hovered=hovered, pressed=pressed)
+    return buttons
 
 
 def _draw_confirm_button(

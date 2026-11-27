@@ -7,6 +7,9 @@ import secrets
 import pygame
 
 from src.application import ApplicationController
+from src.audio_settings import (
+    SETTINGS_FILE_NAME, AudioSettings, load_audio_settings, save_audio_settings,
+)
 from src.engine.football_ai import FootballAIDifficulty
 from src.engine.football_controller import FootballGameController, FootballRunPhase
 from src.engine.football_appearance import FootballPlayerAppearance
@@ -24,6 +27,7 @@ from src.ui.navigation import ScreenManager
 from src.ui.profile_screen import ProfileScreen
 from src.ui.player_art import draw_draft_player
 from src.ui.theme import Theme
+from src.ui.volume_slider import AudioBinding
 
 EventSource = Callable[[], Iterable[pygame.event.Event]]
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +70,10 @@ class DesktopApplication:
         self.seed_factory = seed_factory or (lambda: secrets.randbits(64))
         self.football_controller: FootballGameController | None = None
         self.running = False
+        # Music/effects volumes from settings.json beside the profile and run save.
+        # Nothing plays sound yet; future audio code reads audio_settings or the gains.
+        self.audio_settings: AudioSettings = load_audio_settings(self.settings_path)
+        self.audio_binding = AudioBinding(lambda: self.audio_settings, self.update_audio_settings)
         self.profile: TeamProfile | None = None
         self.profile_error: str | None = None
         try:
@@ -96,7 +104,7 @@ class DesktopApplication:
         self.router.register("main_menu", self.menu_screen)
         self.profile_screen = ProfileScreen(
             self.theme, self.profile, navigate, self.quit, self.save_profile,
-            reset_tips=self.reset_tips,
+            reset_tips=self.reset_tips, audio=self.audio_binding,
         )
         self.router.register("settings", self.profile_screen)
         self.router.register("how_to_play", HowToPlayScreen(self.theme, navigate, self.quit))
@@ -112,6 +120,7 @@ class DesktopApplication:
             on_save_point=self.save_run,
             tips=self.tips,
         )
+        self.run_screen.pause.audio = self.audio_binding
         self.router.register("football_run", self.run_screen)
         if self.profile is not None:
             self._load_saved_run()
@@ -121,6 +130,33 @@ class DesktopApplication:
         """Window close or QUIT: save the run first so it resumes on this decision."""
         self.save_run()
         self.running = False
+
+    # -- audio settings (settings.json) ----------------------------------------------
+
+    @property
+    def settings_path(self) -> Path:
+        return self.run_store.directory / SETTINGS_FILE_NAME
+
+    @property
+    def music_gain(self) -> float:
+        """Music volume as 0.0-1.0, for future audio playback."""
+        return self.audio_settings.music_gain
+
+    @property
+    def effects_gain(self) -> float:
+        """Sound-effects volume as 0.0-1.0, for future audio playback."""
+        return self.audio_settings.effects_gain
+
+    def update_audio_settings(self, settings: AudioSettings, commit: bool = True) -> None:
+        """Settings and the pause AUDIO view: keep the value; ``commit`` also saves it."""
+        self.audio_settings = settings
+        if not commit:
+            return
+        try:
+            save_audio_settings(settings, self.settings_path)
+        except OSError as error:
+            # Volumes are a convenience: keep the in-memory value and try again next change.
+            LOGGER.warning("Could not save audio settings: %s", error)
 
     # -- the saved run ---------------------------------------------------------------
 
@@ -235,7 +271,7 @@ class DesktopApplication:
         self._store_seen_tips(self.profile.seen_tips + (tip_id,))
 
     def reset_tips(self) -> None:
-        """Settings > RESET TIPS: forget every seen tip so each shows again."""
+        """Settings > SHOW TIPS AGAIN: forget every seen tip so each shows again."""
         self.tips.reset_seen()
         if self.profile is not None:
             self._store_seen_tips(())

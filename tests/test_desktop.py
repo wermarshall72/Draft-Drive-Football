@@ -240,7 +240,7 @@ def test_create_profile_in_desktop_and_start_run(tmp_path: Path) -> None:
     desktop.router.draw(pygame.Surface(LOGICAL_SIZE))
     _type_name(desktop, "New Owls")
     _click(desktop, "GOLD")
-    _click(desktop, "SECONDARY  /  NAVY")
+    _click(desktop, "SECONDARY · NAVY")
     _click(desktop, "BLUE")
     _click(desktop, "SAVE PROFILE")
 
@@ -301,7 +301,17 @@ def test_profile_validation_and_cancel_do_not_change_saved_profile(tmp_path: Pat
     original = controller.create_profile("Safe Team", "crimson", "gold")
     desktop = DesktopApplication(controller)
     _click(desktop, "SETTINGS")
-    _click(desktop, "GOLD")
+    # The secondary color's swatch can't be picked for the primary side...
+    desktop.router.draw(pygame.Surface(LOGICAL_SIZE))
+    gold = next(button for button in desktop.profile_screen.buttons if button.label == "GOLD")
+    assert not gold.enabled
+    for event_type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+        desktop.router.handle_event(
+            pygame.event.Event(event_type, {"pos": gold.rect.center, "button": 1})
+        )
+    assert desktop.profile_screen.primary_color_id == "crimson"
+    # ...but the save still validates a matching pair.
+    desktop.profile_screen._select_color("gold")
     _click(desktop, "SAVE PROFILE")
     assert desktop.router.current_id == "settings"
     assert desktop.profile_screen.error == "Primary and secondary colors must be different."
@@ -321,7 +331,7 @@ def test_profile_keyboard_entry_validation_and_navigation(tmp_path: Path) -> Non
     _click(desktop, "SAVE PROFILE")
     assert desktop.profile_screen.error == "Team name cannot be empty."
     assert not path.exists()
-    _click(desktop, "TYPE TEAM NAME")
+    _click(desktop, "Type a team name")
     _type_name(desktop, "Keyboard Team")
     desktop.router.handle_event(
         pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_TAB})

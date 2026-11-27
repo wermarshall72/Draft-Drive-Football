@@ -64,7 +64,7 @@ class TipState:
         self._pointer: tuple[int, int] | None = None
 
     def reset_seen(self) -> None:
-        """Settings > RESET TIPS: every tip shows again."""
+        """Settings > SHOW TIPS AGAIN: every tip shows again."""
         self.seen.clear()
         self.dismiss()
 

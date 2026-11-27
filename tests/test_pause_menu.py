@@ -32,8 +32,8 @@ from test_football_desktop import (
 # Esc-driven tests: a visible first-time tip would take Esc first.
 pytestmark = pytest.mark.usefixtures("tips_seen")
 
-PAUSE_LABELS = ["KEEP PLAYING", "RETURN TO MENU", "QUIT RUN"]
-MATCH_PAUSE_LABELS = ["KEEP PLAYING", "DEPTH CHART", "PLAY LOG", "RETURN TO MENU", "QUIT RUN"]
+PAUSE_LABELS = ["KEEP PLAYING", "AUDIO", "RETURN TO MENU", "QUIT RUN"]
+MATCH_PAUSE_LABELS = ["KEEP PLAYING", "DEPTH CHART", "PLAY LOG", "AUDIO", "RETURN TO MENU", "QUIT RUN"]
 
 
 class FakeClock:
@@ -280,7 +280,7 @@ def test_quit_run_from_the_match_by_keyboard_clears_the_run(tmp_path: Path) -> N
     _draw(desktop)
     _esc(desktop)
     _draw(desktop)
-    for _ in range(4):
+    for _ in range(5):
         _key(desktop, pygame.K_DOWN)
     _key(desktop, pygame.K_RETURN)
     assert _labels(desktop)[-1] == "CONFIRM QUIT"

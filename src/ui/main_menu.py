@@ -26,7 +26,7 @@ ABANDON_SAVE = "ABANDON SAVE"
 HOW_TO_PLAY = "HOW TO PLAY"
 # Half-width buttons (SETTINGS beside HOW TO PLAY) show a shorter detail line.
 _SHORT_DETAILS = {
-    "SETTINGS": "Team name and colors",
+    "SETTINGS": "Team, colors, and audio",
     "CREATE PROFILE": "Create your team",
     HOW_TO_PLAY: "The rules in one page",
 }
@@ -259,7 +259,7 @@ class FootballMainMenuScreen(Screen):
                 else "Draft your team and begin a new run."
             ),
             ABANDON_SAVE: "Set the saved run aside (its file is kept) and start fresh.",
-            "SETTINGS": "Edit your team name and colors.",
+            "SETTINGS": "Edit your team, colors, and audio volume.",
             HOW_TO_PLAY: "Learn the basics: the run, the shop, offense vs defense, and players.",
             "CREATE PROFILE": "Create a team before starting a run.",
             "QUIT": "Exit the game.",

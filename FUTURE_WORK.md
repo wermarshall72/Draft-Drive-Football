@@ -171,6 +171,12 @@ or the design changes.
   the bracket should be viewable from the pause menu mid-shop.
 - [ ] Revisit asynchronous opponents, accounts, and career history after the
   offline-first game loop is established.
+- [ ] Audio: add a looping song for the intro (main menu) and shop, plus game
+  sound effects. The Music and Sound effects volume sliders (Settings and the
+  pause menu's AUDIO view) and `settings.json` are in place; playback should
+  read `DesktopApplication.audio_settings` (or `music_gain` / `effects_gain`)
+  and then drop the "Sound coming soon" note (`SOUND_NOTE` in
+  `src/ui/profile_screen.py`).
 
 ## First-time player evaluation (2026-11-25)
 

@@ -1126,7 +1126,7 @@ def test_result_screen_is_full_screen_with_focused_primary_and_end_run(
     next(button for button in screen.buttons if button.label == "PAUSE").action()
     desktop.router.draw(_surface())
     assert screen.pause.is_open
-    assert [button.label for button in screen.buttons] == ["KEEP PLAYING", "RETURN TO MENU", "QUIT RUN"]
+    assert [button.label for button in screen.buttons] == ["KEEP PLAYING", "AUDIO", "RETURN TO MENU", "QUIT RUN"]
     _activate(desktop, "KEEP PLAYING")
     assert not screen.pause.is_open
 
@@ -1265,7 +1265,7 @@ def test_escape_opens_the_pause_menu_with_keep_playing_focused(tmp_path: Path) -
     assert desktop.router.current_id == "football_run"
     desktop.router.draw(_surface())
     assert [button.label for button in screen.buttons] == [
-        "KEEP PLAYING", "RETURN TO MENU", "QUIT RUN",
+        "KEEP PLAYING", "AUDIO", "RETURN TO MENU", "QUIT RUN",
     ]
     assert screen.buttons[0].focused
 
@@ -1579,7 +1579,7 @@ def test_pause_menu_opens_depth_chart_and_play_log_and_quit_needs_confirmation(
     desktop.router.handle_event(escape)
     desktop.router.draw(_surface())
     assert [button.label for button in screen.buttons] == [
-        "KEEP PLAYING", "DEPTH CHART", "PLAY LOG", "RETURN TO MENU", "QUIT RUN",
+        "KEEP PLAYING", "DEPTH CHART", "PLAY LOG", "AUDIO", "RETURN TO MENU", "QUIT RUN",
     ]
     assert screen.buttons[0].focused
     _activate(desktop, "DEPTH CHART")

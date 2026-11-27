@@ -27,7 +27,9 @@ from src.ui.football_match_screen import STRIP_RECT, FootballMatchScreen, MatchA
 from src.ui.football_draft_interaction import CoachInspection, PlayerInspection
 from src.ui.football_inspect import InspectState
 from src.ui.football_shop_review import ShopReviewInteraction
-from src.ui.football_pause_menu import PauseMenu, draw_pause_button, draw_pause_menu
+from src.ui.football_pause_menu import (
+    PauseMenu, draw_pause_audio, draw_pause_button, draw_pause_menu,
+)
 from src.ui.football_match_outcome import STRIP_HEIGHT
 from src.ui.football_tips import (
     TIP_DEFENSE, TIP_FOURTH_DOWN, TIP_OFFENSE, TIP_SHOP, TIP_TWO_POINT, TipState,
@@ -186,11 +188,28 @@ class FootballRunScreen(Screen):
         )
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if self.pause.audio_open and self.pause_open:
+            # The pause AUDIO view: the sliders take drags and Left/Right/Home/End first.
+            index = self.pause.slider_input.handle_event(event, self.buttons, self.focus_index)
+            if index is not None:
+                self._focus(index)
+                return
+        self._handle_event(event)
+        request = self.pause.take_focus_request()
+        if request is not None:
+            self.focus_index = request
+            self.buttons = []
+            self.hover_index = None
+            self.pressed_index = None
+
+    def _handle_event(self, event: pygame.event.Event) -> None:
         state = self._current_state()
         escape = event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
         if self.pause.is_open:
             if escape:
-                if not self.pause.cancel_quit():
+                if self.pause.audio_open:
+                    self.pause.close_audio()
+                elif not self.pause.cancel_quit():
                     self._keep_playing()
                 return
             super().handle_event(event)
@@ -325,10 +344,16 @@ class FootballRunScreen(Screen):
             return_to_menu=self._return_to_menu,
             quit_run=self._quit_run,
         )
-        buttons = draw_pause_menu(
-            surface, self.pause, entries, focus_index=self.focus_index,
-            hover_index=self.hover_index, pressed_index=self.pressed_index,
-        )
+        if self.pause.audio_open:
+            buttons = draw_pause_audio(
+                surface, self.pause, focus_index=self.focus_index,
+                hover_index=self.hover_index, pressed_index=self.pressed_index,
+            )
+        else:
+            buttons = draw_pause_menu(
+                surface, self.pause, entries, focus_index=self.focus_index,
+                hover_index=self.hover_index, pressed_index=self.pressed_index,
+            )
         self._set_buttons(buttons)
 
     def _draw_screen(self, surface: pygame.Surface) -> None:

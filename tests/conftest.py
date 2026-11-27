@@ -35,3 +35,17 @@ def tips_seen(monkeypatch: pytest.MonkeyPatch) -> None:
             super().__init__(football_tips.TIP_IDS, on_seen)
 
     monkeypatch.setattr(application, "TipState", SeenTips)
+
+
+@pytest.fixture(autouse=True)
+def fresh_kit_fonts():
+    """Drop cached kit fonts after each test, as ``DesktopApplication.run`` does on quit.
+
+    Some tests call ``pygame.quit()`` themselves; a font cached before that is dead
+    afterwards, and the next screen drawn with kit fonts would fail on it.
+    """
+    yield
+    from src.ui.football_ui_kit import match_font, plain_font
+
+    match_font.cache_clear()
+    plain_font.cache_clear()

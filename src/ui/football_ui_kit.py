@@ -272,6 +272,18 @@ def stadium_backdrop(size: tuple[int, int]) -> pygame.Surface:
     return surface
 
 
+def draw_card(surface: pygame.Surface, rect: pygame.Rect, heading: str,
+              accent: pygame.Color = MATCH_FOCUS) -> None:
+    """A navy titled panel (How to Play sections, Settings cards): ink shadow,
+    2 px edge, a small vertical accent bar, and an uppercase heading."""
+    pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=12)
+    pygame.draw.rect(surface, MATCH_PANEL, rect, border_radius=12)
+    pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=12)
+    pygame.draw.rect(surface, accent, (rect.left + 10, rect.top + 14, 4, 20), border_radius=2)
+    blit_text(surface, plain_font(19), heading.upper(), MATCH_TEXT, rect,
+              topleft=(rect.left + 22, rect.top + 11))
+
+
 def draw_veil(surface: pygame.Surface) -> None:
     overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     overlay.fill((*MATCH_CANVAS[:3], 205))

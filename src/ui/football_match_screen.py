@@ -56,7 +56,8 @@ from src.ui.football_match_popups import (
     draw_pile_popup, draw_popup_button,
 )
 from src.ui.football_pause_menu import (
-    DEPTH_CHART, PLAY_LOG, MenuEntry, PauseMenu, draw_pause_button, draw_pause_menu,
+    DEPTH_CHART, PLAY_LOG, MenuEntry, PauseMenu, draw_pause_audio, draw_pause_button,
+    draw_pause_menu,
 )
 from src.ui.football_match_scoreboard import SCOREBOARD_HEIGHT, draw_scoreboard
 from src.ui.football_ui_kit import stadium_backdrop
@@ -242,6 +243,7 @@ class FootballMatchScreen:
         self.close_perk_popup()
         self._freeze()
         self.interaction.cancel_drag()
+        self.pause_menu.leave_audio()
         self.popup.show(PAUSE)
         self._popup_from_pause = False
 
@@ -268,11 +270,15 @@ class FootballMatchScreen:
 
     def close_popups(self) -> None:
         self.pause_menu.cancel_quit()
+        self.pause_menu.leave_audio()
         self.popup.close()
         self._popup_from_pause = False
         self._thaw()
 
     def back_from_popup(self) -> None:
+        if self.popup.kind == PAUSE and self.pause_menu.audio_open:
+            self.pause_menu.close_audio()
+            return
         if self.popup.kind == PAUSE and self.pause_menu.cancel_quit():
             return
         if self.popup.kind == DEPTH and self.popup.review.team_popup:
@@ -511,6 +517,11 @@ class FootballMatchScreen:
         kind = self.popup.kind
         match = state.match
         assert match is not None
+        if kind == PAUSE and self.pause_menu.audio_open:
+            return draw_pause_audio(
+                surface, self.pause_menu, focus_index=focus_index,
+                hover_index=hover_index, pressed_index=pressed_index,
+            )
         if kind == PAUSE:
             entries = self.pause_menu.entries(
                 keep_playing=self.close_popups,

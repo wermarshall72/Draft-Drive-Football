@@ -191,7 +191,7 @@ def test_cancelled_drag_and_exit_confirmation_block_stale_buttons(tmp_path):
     desktop.router.handle_event(pygame.event.Event(pygame.MOUSEBUTTONUP, pos=first.rect.center, button=1))
     assert desktop.football_controller.state == before
     desktop.router.draw(_surface())
-    assert [button.label for button in screen.buttons] == ["KEEP PLAYING", "RETURN TO MENU", "QUIT RUN"]
+    assert [button.label for button in screen.buttons] == ["KEEP PLAYING", "AUDIO", "RETURN TO MENU", "QUIT RUN"]
 
 
 def test_hover_then_enter_in_same_frame_chooses_highlighted_pair(tmp_path):

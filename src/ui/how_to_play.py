@@ -9,14 +9,11 @@ from __future__ import annotations
 import pygame
 
 from src.ui.football_ui_kit import (
-    MATCH_FOCUS,
-    MATCH_INK,
     MATCH_MUTED,
-    MATCH_PANEL,
-    MATCH_PANEL_EDGE,
     MATCH_PANEL_EDGE_SOFT,
     MATCH_TEXT,
     blit_text,
+    draw_card,
     draw_kit_button,
     kit_button,
     match_font,
@@ -111,12 +108,7 @@ class HowToPlayScreen(Screen):
 
 def draw_section(surface: pygame.Surface, rect: pygame.Rect, heading: str,
                  paragraphs: tuple[str, ...]) -> None:
-    pygame.draw.rect(surface, MATCH_INK, rect.move(0, 4), border_radius=12)
-    pygame.draw.rect(surface, MATCH_PANEL, rect, border_radius=12)
-    pygame.draw.rect(surface, MATCH_PANEL_EDGE, rect, 2, border_radius=12)
-    pygame.draw.rect(surface, MATCH_FOCUS, (rect.left + 10, rect.top + 14, 4, 20), border_radius=2)
-    blit_text(surface, plain_font(19), heading.upper(), MATCH_TEXT, rect,
-              topleft=(rect.left + 22, rect.top + 11))
+    draw_card(surface, rect, heading)
     body = pygame.Rect(rect.left + 22, rect.top + 44, rect.width - 40, rect.height - 52)
     for size in (16, 15, 14, 13):
         font = match_font(size, False)

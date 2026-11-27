@@ -31,8 +31,24 @@ auto-battler is a separate legacy reference.
   The main menu's HOW TO PLAY button (beside SETTINGS) opens
   [how_to_play.py](src/ui/how_to_play.py), one read-only page of short sections
   (`SECTIONS`) in the navy match style; Esc and BACK return to the menu.
-  [profile_screen.py](src/ui/profile_screen.py) creates or edits the profile and
-  offers RESET TIPS (`DesktopApplication.reset_tips`).
+  [profile_screen.py](src/ui/profile_screen.py) (route `settings`) creates or
+  edits the profile in the `football_ui_kit` stadium style shared with the run
+  screens and How to Play (`stadium_backdrop`, the coach-select header, navy
+  `draw_card` panels, kit buttons, `draw_message_banner` for save errors), in
+  three cards: TEAM (a live helmet preview from
+  [team_helmet.py](src/ui/team_helmet.py), which caches the tinted menu helmet
+  and draws the initial in the secondary color clear of the facemask; the name
+  field; the PRIMARY/SECONDARY toggle; and 30 swatches, the other side's color
+  disabled), AUDIO, and GAMEPLAY (Help tips: SHOW TIPS AGAIN, `DesktopApplication.reset_tips`,
+  only once a profile exists). Name and colors change only on SAVE PROFILE.
+  The Music and Sound effects sliders are one shared widget,
+  [volume_slider.py](src/ui/volume_slider.py) (`VolumeSlider`, `SliderInput`,
+  `AudioBinding`, and `match_slider_palette`, the one slider look), also used by the pause menu's AUDIO view in
+  [football_pause_menu.py](src/ui/football_pause_menu.py) (`draw_pause_audio`).
+  Both read and update the one `DesktopApplication.audio_settings`
+  (`update_audio_settings`, `music_gain`/`effects_gain`), which saves instantly
+  to `settings.json` beside the profile via [audio_settings.py](src/audio_settings.py)
+  (defaults on a missing or damaged file; never part of the run save).
   Saving flows through `DesktopApplication` and the profile methods of
   [ApplicationController](src/application.py) to validation and JSON storage
   in [profile.py](src/profile.py); the application refreshes the theme and
@@ -49,6 +65,8 @@ auto-battler is a separate legacy reference.
   tooltips, scouting, and How to Play; the `tips_seen` fixture in
   [conftest.py](tests/conftest.py) is for Esc-driven tests),
   [test_desktop.py](tests/test_desktop.py),
+  [test_settings_screen.py](tests/test_settings_screen.py) (helmet, swatches,
+  volumes, `settings.json`, the pause AUDIO view),
   [test_profile.py](tests/test_profile.py),
   [test_main_menu.py](tests/test_main_menu.py), and
   [test_pause_menu.py](tests/test_pause_menu.py).
@@ -67,12 +85,14 @@ regular result, and focus). `_submit` calls `on_save_point` after every
 successful decision, as does Return to Menu; `show_save_notice` draws the
 transient save-failure banner.
 [football_pause_menu.py](src/ui/football_pause_menu.py) owns `PauseMenu`
-(open state, saved focus, and the 3-second two-step QUIT RUN on an injectable
-clock), the shared veil/panel/button drawing, and the PAUSE [ESC] button look.
+(open state, saved focus, the 3-second two-step QUIT RUN on an injectable
+clock, and the AUDIO view's state and focus request), the shared veil/panel/button
+drawing, and the PAUSE [ESC] button look.
 Every run screen shows PAUSE [ESC] and opens the same menu on Esc (KEEP
-PLAYING, RETURN TO MENU, QUIT RUN; the match variant adds DEPTH CHART and PLAY
-LOG); inner popups, visible inspect panels, and a pending removal take Esc
-first. FIRED, ELIMINATED, and CHAMPION runs have ended: no pause, and leaving
+PLAYING, AUDIO, RETURN TO MENU, QUIT RUN; the match variant adds DEPTH CHART
+and PLAY LOG before AUDIO); AUDIO switches the panel to the volume sliders and
+BACK, and Esc/BACK return to the list with focus on AUDIO. Inner popups,
+visible inspect panels, and a pending removal take Esc first. FIRED, ELIMINATED, and CHAMPION runs have ended: no pause, and leaving
 discards them.
 [test_pause_menu.py](tests/test_pause_menu.py) covers the menu, resume, Quit
 Run, and the replace-run confirmation.
@@ -457,6 +477,9 @@ are in [README.md](README.md).
 - **Adjust profile setup:** start in [profile_screen.py](src/ui/profile_screen.py),
   then follow save and validation through `DesktopApplication`,
   `ApplicationController`, and [profile.py](src/profile.py).
+- **Add audio playback:** read `DesktopApplication.audio_settings` (or
+  `music_gain` / `effects_gain`); volumes come from [audio_settings.py](src/audio_settings.py)
+  and the shared slider in [volume_slider.py](src/ui/volume_slider.py).
 - **Add run state or change the save format:** add the field to the owning
   engine object's `to_save_data`/`from_save_data`, bump the schema version and
   add a migration in [migrations.py](src/persistence/migrations.py), then
