@@ -3,6 +3,8 @@ import random
 
 import pytest
 
+from src.engine.football_player_catalog import POWER_SPREAD, player_type_for_id
+
 from src.engine.football import (
     DefensiveSchemeAction,
     FootballAwaitedAction,
@@ -851,7 +853,11 @@ def test_playoff_rivals_get_tougher_each_round(monkeypatch) -> None:
     # Standard caps regular-season extras at 3; each round adds one more.
     assert sizes[9] == 6 + 3 and sizes[10:] == [6 + 4, 6 + 5, 6 + 6]
     final = controller.state.match.team_b
-    assert all(player.power == 50.75 for player in final.players.values())
+    # Each rival player is its type's rolled prospect plus the third round's +0.75.
+    for player in final.players.values():
+        base = player_type_for_id(player.player_type_id).base_power
+        rolled = player.power - 0.75
+        assert rolled == int(rolled) and abs(rolled - base) <= POWER_SPREAD
 
 
 def test_next_shop_resets_ap_and_preserves_upgrades_roster_and_slot_unlocks(

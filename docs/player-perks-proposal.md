@@ -578,3 +578,82 @@ Lock, Downhill Fill, Safety Blitz, Force & Fold, Silent Count, and the standing
 effects of Screen Wall and Captain's Adjustment no longer appear in previews.
 AI offense is blind the same way, so Standard's perk nudge counts only
 call-independent perks.
+
+
+## 9. Player type stats
+
+Every player type has its own base stats (`base_power`, `base_volatility_pct`,
+`base_stamina_pct` on `FootballPlayerType` in
+`src/engine/football_player_catalog.py`); before save format 5 every player was
+50 / 10% / 50%. Each offered prospect rolls a uniform whole-step spread around
+its type's base from the draft's seeded RNG (the AI uses its own): power ±2,
+volatility ±1 percentage point (never below 1%), stamina ±3 percentage points
+(never above 100%). The rolled stats stay with the prospect on its card, when
+drafted, and on the Depth Chart; every other modifier applies on top as before.
+An offer is three distinct types drawn with equal odds from the position's
+seven (six specialists and Basic), in random order.
+
+Overall score, used only to check the rule and never shown:
+`score = power + 40 × stamina − 100 × volatility` (fractions; 50 / 10% / 50%
+scores 60). **Basic is the weakest overall:** the worst specialist roll (base
+minus the full spread in every stat) must beat the best Basic roll, which
+`_validate_catalog` enforces at import. All eight Basics are 46 /
+12% / 45% (score 52.0; best roll 56.2).
+A specialist may still be worse than Basic in its one weak stat (Gap Runner's
+14% volatility is above Basic's 12%).
+
+Archetypes: power or big-play types run high power and volatility with less
+stamina; steady technicians keep volatility low; workhorses carry stamina; the
+rest are balanced. No table value needed adjusting to meet the rule (the
+tightest specialist, by worst roll, still clears the best Basic roll by 1.6).
+
+| Position | Type | Power | Volatility | Stamina | Score | Worst roll |
+|---|---|---|---|---|---|---|
+| QB | Mesh Reader | 52 | 9% | 56% | 65.4 | 61.2 |
+| QB | Option Ledger | 51 | 8% | 55% | 65.0 | 60.8 |
+| QB | Boundary Captain | 52 | 10% | 60% | 66.0 | 61.8 |
+| QB | Vertical Architect | 58 | 14% | 48% | 63.2 | 59.0 |
+| QB | Pocket Anchor | 53 | 7% | 52% | 66.8 | 62.6 |
+| QB | Silent-Count Caller | 52 | 7% | 54% | 66.6 | 62.4 |
+| RB | Checkdown Back | 50 | 8% | 58% | 65.2 | 61.0 |
+| RB | Option Keeper | 53 | 11% | 54% | 63.6 | 59.4 |
+| RB | Orbit Runner | 57 | 15% | 52% | 62.8 | 58.6 |
+| RB | Slot Outlet | 50 | 8% | 56% | 64.4 | 60.2 |
+| RB | Gap Runner | 59 | 14% | 44% | 62.6 | 58.4 |
+| RB | Pull-Guard Back | 55 | 10% | 52% | 65.8 | 61.6 |
+| WR | Route Technician | 51 | 7% | 55% | 66.0 | 61.8 |
+| WR | Field Stretcher | 58 | 15% | 48% | 62.2 | 58.0 |
+| WR | Chain Mover | 52 | 8% | 56% | 66.4 | 62.2 |
+| WR | Motion Receiver | 54 | 10% | 55% | 66.0 | 61.8 |
+| WR | Boundary Route | 56 | 12% | 50% | 64.0 | 59.8 |
+| WR | Release Specialist | 53 | 9% | 57% | 66.8 | 62.6 |
+| O_LINE | Pass-Set Guard | 52 | 7% | 55% | 67.0 | 62.8 |
+| O_LINE | Pocket Tempo | 51 | 8% | 58% | 66.2 | 62.0 |
+| O_LINE | Drive Blocker | 54 | 10% | 60% | 68.0 | 63.8 |
+| O_LINE | Pull Guard | 58 | 13% | 48% | 64.2 | 60.0 |
+| O_LINE | Screen Setter | 52 | 9% | 55% | 65.0 | 60.8 |
+| O_LINE | Space Creator | 55 | 11% | 52% | 64.8 | 60.6 |
+| D_LINE | A-Gap Plug | 57 | 9% | 46% | 66.4 | 62.2 |
+| D_LINE | Edge Setter | 55 | 10% | 54% | 66.6 | 62.4 |
+| D_LINE | Contain End | 52 | 7% | 55% | 67.0 | 62.8 |
+| D_LINE | Rush Contain | 54 | 11% | 54% | 64.6 | 60.4 |
+| D_LINE | Interior Rusher | 58 | 13% | 46% | 63.4 | 59.2 |
+| D_LINE | Stunt Tackle | 56 | 14% | 50% | 62.0 | 57.8 |
+| LINEBACKERS | Front-Fit Back | 54 | 10% | 56% | 66.4 | 62.2 |
+| LINEBACKERS | Run-Fit Captain | 54 | 9% | 54% | 66.6 | 62.4 |
+| LINEBACKERS | Nickel Rover | 51 | 8% | 58% | 66.2 | 62.0 |
+| LINEBACKERS | Hook-Curl Reader | 50 | 7% | 56% | 65.4 | 61.2 |
+| LINEBACKERS | Robber Backer | 53 | 11% | 56% | 64.4 | 60.2 |
+| LINEBACKERS | Green-Dog Blitzer | 58 | 15% | 50% | 63.0 | 58.8 |
+| CORNERBACKS | Edge Corner | 52 | 8% | 56% | 66.4 | 62.2 |
+| CORNERBACKS | Force Corner | 55 | 10% | 52% | 65.8 | 61.6 |
+| CORNERBACKS | Nickel Matcher | 53 | 9% | 55% | 66.0 | 61.8 |
+| CORNERBACKS | Underneath Bracket | 51 | 7% | 54% | 65.6 | 61.4 |
+| CORNERBACKS | Deep-Half Corner | 54 | 8% | 50% | 66.0 | 61.8 |
+| CORNERBACKS | Trail Corner | 57 | 15% | 50% | 62.0 | 57.8 |
+| SAFETIES | Post Safety | 51 | 7% | 55% | 66.0 | 61.8 |
+| SAFETIES | Blitz Safety | 58 | 14% | 48% | 63.2 | 59.0 |
+| SAFETIES | Box Safety | 57 | 11% | 50% | 66.0 | 61.8 |
+| SAFETIES | Robber Safety | 54 | 12% | 52% | 62.8 | 58.6 |
+| SAFETIES | Boundary Safety | 52 | 9% | 58% | 66.2 | 62.0 |
+| SAFETIES | Range Safety | 53 | 8% | 54% | 66.6 | 62.4 |

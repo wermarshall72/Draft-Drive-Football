@@ -65,14 +65,10 @@ def test_player_type_validation_rejects_unknown_and_wrong_position_ids() -> None
         )
 
 
-def test_offer_has_two_distinct_specialists_then_guaranteed_basic() -> None:
+def test_offer_has_three_distinct_types_from_the_position() -> None:
     for position in FootballPosition:
         offer = player_type_offer(position, random.Random(23))
-        assert len(offer) == 3
-        assert offer[0].type_id != offer[1].type_id
-        assert all(item.partner_position is not None for item in offer[:2])
-        assert offer[2].partner_position is None
-        assert offer[2].perk is None
+        assert len(offer) == 3 and len({item.type_id for item in offer}) == 3
         assert all(item.position is position for item in offer)
 
 

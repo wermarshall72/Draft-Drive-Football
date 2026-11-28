@@ -14,9 +14,6 @@ from src.engine.football_team_builder import (
 )
 from src.engine.football_coaches import COACH_PAIR_OFFERS
 from src.engine.football_player_catalog import (
-    PLAYER_BASE_POWER,
-    PLAYER_BASE_STAMINA,
-    PLAYER_BASE_VOLATILITY,
     player_type_for_id,
 )
 
@@ -51,20 +48,18 @@ def test_draft_order_offers_three_valid_distinct_players_per_position() -> None:
         assert all(isinstance(candidate, FootballPlayerCandidate) for candidate in offer)
         assert all(candidate.position is position for candidate in offer)
         assert all(candidate.description for candidate in offer)
-        assert all(
-            candidate.player.power == PLAYER_BASE_POWER
-            and candidate.player.volatility == PLAYER_BASE_VOLATILITY
-            and candidate.player.stamina == PLAYER_BASE_STAMINA
-            for candidate in offer
-        )
         offered_types = tuple(
             player_type_for_id(candidate.player.player_type_id)
             for candidate in offer
         )
-        assert all(item.partner_position is not None for item in offered_types[:2])
-        assert offered_types[2].partner_position is None
-        assert offered_types[2].perk is None
-        builder.choose_player(position, offer[0])
+        assert len({item.type_id for item in offered_types}) == 3
+        for candidate, player_type in zip(offer, offered_types):
+            player = candidate.player
+            assert abs(player.power - player_type.base_power) <= 2
+            assert abs(round(player.volatility * 100) - player_type.base_volatility_pct) <= 1
+            assert abs(round(player.stamina * 100) - player_type.base_stamina_pct) <= 3
+        drafted = builder.choose_player(position, offer[0])
+        assert drafted is offer[0].player  # the card's rolled stats are what is drafted
 
     roster = builder.build_roster()
     assert builder.completed

@@ -33,9 +33,6 @@ from src.engine.football_ai import (
     STANDARD_POWER_ADJUSTMENT,
 )
 from src.engine.football_player_catalog import (
-    PLAYER_BASE_POWER,
-    PLAYER_BASE_STAMINA,
-    PLAYER_BASE_VOLATILITY,
     player_type_for_id,
 )
 from src.engine.football_simulator import FootballMatchSimulator
@@ -131,18 +128,21 @@ def test_generated_roster_is_complete_valid_and_keeps_non_player_slots_separate(
 
     assert set(roster.players) == set(FootballPosition)
     assert len(roster.players) == 8
-    expected_power = PLAYER_BASE_POWER + {
+    adjustment = {
         FootballAIDifficulty.EASY: -0.5,
         FootballAIDifficulty.STANDARD: 0.0,
         FootballAIDifficulty.HARD: 0.5,
     }[difficulty]
     for position, player in roster.players.items():
         assert player.position is position
-        assert player.power == expected_power
-        assert player.volatility == PLAYER_BASE_VOLATILITY
-        assert player.stamina == PLAYER_BASE_STAMINA
         assert player.player_type_id is not None
-        assert player_type_for_id(player.player_type_id).position is position
+        player_type = player_type_for_id(player.player_type_id)
+        assert player_type.position is position
+        # The type's base stats with the prospect spread, then the difficulty offset.
+        rolled = player.power - adjustment
+        assert rolled == int(rolled) and abs(rolled - player_type.base_power) <= 2
+        assert abs(round(player.volatility * 100) - player_type.base_volatility_pct) <= 1
+        assert abs(round(player.stamina * 100) - player_type.base_stamina_pct) <= 3
     assert isinstance(roster.coach, FootballCoach)
     assert isinstance(roster.special_teams, FootballSpecialTeams)
     assert roster.coach not in roster.players.values()

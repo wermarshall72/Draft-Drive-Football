@@ -137,6 +137,15 @@ covers extracted interaction state.
   [football_team_builder.py](src/engine/football_team_builder.py), using
   [football_coaches.py](src/engine/football_coaches.py) and
   [football_player_catalog.py](src/engine/football_player_catalog.py).
+  Each offer (`player_type_offer`) is three distinct types drawn with equal
+  odds from the position's seven (six specialists and Basic) in random order;
+  each prospect then rolls its stats once (`roll_prospect`: power ±2, volatility
+  ±1 point, stamina ±3 points around the type's `base_power` /
+  `base_volatility_pct` / `base_stamina_pct`, from the draft RNG, or the AI's
+  own RNG in `generate_opponent_roster`), and the card, the drafted player, and
+  the Depth Chart all show those values. `_validate_catalog` checks at import
+  that every specialist's worst roll beats its position's best Basic roll
+  (`prospect_score_range`); see [test_draft_prospects.py](tests/test_draft_prospects.py).
   For artwork and fonts, see [coach_art.py](src/ui/coach_art.py),
   [player_art.py](src/ui/player_art.py), and
   [coach_fonts.py](src/ui/coach_fonts.py). Player-perk wording has one source,
@@ -447,7 +456,8 @@ checksummed envelope, `run.json`/`run.backup.json` rotation, load fallbacks
 holds `CURRENT_SCHEMA_VERSION` and the `N -> N+1` registry (version 2 added
 the match's `opening_possession` and per-event perk activations; version 4
 replaced `opponent_name` with the run's `ai_teams` draw and the bracket's
-placeholder names with catalog `team_ids`). The engine owns
+placeholder names with catalog `team_ids`; version 5 saves each mid-draft
+prospect's rolled stats in the team builder's `current_offer`). The engine owns
 the payload: `to_save_data`/`from_save_data` on the controller, team builder,
 shop, AI, simulator, and match models in [football.py](src/engine/football.py),
 with shared helpers and `UnsupportedSave` in [save_data.py](src/engine/save_data.py).

@@ -20,6 +20,7 @@ from src.engine.football_player_catalog import (
     FootballPlayerType,
     player_from_type,
     player_type_offer,
+    roll_prospect,
 )
 from src.engine.save_data import (
     UnsupportedSave,
@@ -190,9 +191,11 @@ class FootballTeamBuilder:
     def _player_offer(
         self, position: FootballPosition
     ) -> tuple[FootballPlayerCandidate, ...]:
+        offered = player_type_offer(position, self._rng)
+        # Each prospect's stats are rolled once, here, and stay fixed when drafted.
         return tuple(
-            _candidate_for_type(player_type)
-            for player_type in player_type_offer(position, self._rng)
+            _candidate_for_player(roll_prospect(player_type, self._rng))
+            for player_type in offered
         )
 
     def _build_completed_roster(self) -> FootballRoster:
@@ -211,7 +214,8 @@ class FootballTeamBuilder:
     # -- save data -------------------------------------------------------------
     # Saved: team name, seed, special teams, the exact draft RNG state, the coach
     # offer and chosen pair (by coach IDs), drafted players, the required
-    # position, and the current offer (player candidates by player type ID).
+    # position, and the current offer (each prospect's player type ID and its
+    # rolled power, volatility, and stamina; save format 5).
     # Rebuilt: the completed roster, which is derived from the saved picks the
     # same way ``choose_player`` builds it.
 
@@ -220,7 +224,13 @@ class FootballTeamBuilder:
             current_offer: str | list[str] = "coach_offer"
         else:
             current_offer = [
-                candidate.player.player_type_id for candidate in self._current_offer
+                {
+                    "type_id": candidate.player.player_type_id,
+                    "power": candidate.player.power,
+                    "volatility": candidate.player.volatility,
+                    "stamina": candidate.player.stamina,
+                }
+                for candidate in self._current_offer
             ]
         return {
             "team_name": self.team_name,
@@ -272,8 +282,8 @@ class FootballTeamBuilder:
             builder._current_offer = builder._coach_offer
         elif isinstance(offer, list):
             builder._current_offer = tuple(
-                _candidate_for_type(lookup(PLAYER_TYPES_BY_ID, type_id, "player type"))
-                for type_id in offer
+                _candidate_from_save_data(item)
+                for item in items(offer, "Draft offer")
             )
         else:
             raise UnsupportedSave(f"Unknown draft offer: {offer!r}.")
@@ -310,9 +320,21 @@ class FootballTeamBuilder:
             raise ValueError("The team-building flow is already complete.")
 
 
-def _candidate_for_type(player_type: FootballPlayerType) -> FootballPlayerCandidate:
+def _candidate_from_save_data(data: Any) -> FootballPlayerCandidate:
+    what = "Draft prospect"
+    player_type = lookup(PLAYER_TYPES_BY_ID, required(data, "type_id", str, what), "player type")
+    return _candidate_for_player(build("draft prospect", lambda: player_from_type(
+        player_type,
+        power=required(data, "power", float, what),
+        volatility=required(data, "volatility", float, what),
+        stamina=required(data, "stamina", float, what),
+    )))
+
+
+def _candidate_for_player(player: FootballPlayer) -> FootballPlayerCandidate:
+    player_type = PLAYER_TYPES_BY_ID[player.player_type_id]
     return FootballPlayerCandidate(
-        player=player_from_type(player_type),
+        player=player,
         description=(
             "No partner, partnership bonus, or perk."
             if player_type.partner_position is None

@@ -22,7 +22,7 @@ from typing import Any
 
 from src.engine.save_data import UnsupportedSave
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 Migration = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -192,9 +192,100 @@ def _migrate_3_to_4(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+# Version 5 player-type base stats (power, volatility %, stamina %), frozen here
+# so this step never changes if the catalog is retuned later.
+_V5_BASE_STATS: dict[str, tuple[int, int, int]] = {
+    "qb_rb_mesh_reader": (52, 9, 56),
+    "qb_rb_option_ledger": (51, 8, 55),
+    "qb_wr_boundary_captain": (52, 10, 60),
+    "qb_wr_vertical_architect": (58, 14, 48),
+    "qb_oline_pocket_anchor": (53, 7, 52),
+    "qb_oline_silent_count": (52, 7, 54),
+    "rb_qb_checkdown_back": (50, 8, 58),
+    "rb_qb_option_keeper": (53, 11, 54),
+    "rb_wr_orbit_runner": (57, 15, 52),
+    "rb_wr_slot_outlet": (50, 8, 56),
+    "rb_oline_gap_runner": (59, 14, 44),
+    "rb_oline_pull_guard_back": (55, 10, 52),
+    "wr_qb_route_technician": (51, 7, 55),
+    "wr_qb_vertical_threat": (58, 15, 48),
+    "wr_rb_screen_outlet": (52, 8, 56),
+    "wr_rb_motion_receiver": (54, 10, 55),
+    "wr_oline_boundary_route": (56, 12, 50),
+    "wr_oline_release_specialist": (53, 9, 57),
+    "oline_qb_pass_set_guard": (52, 7, 55),
+    "oline_qb_pocket_tempo": (51, 8, 58),
+    "oline_rb_drive_blocker": (54, 10, 60),
+    "oline_rb_pull_guard": (58, 13, 48),
+    "oline_wr_screen_setter": (52, 9, 55),
+    "oline_wr_space_creator": (55, 11, 52),
+    "dline_lb_a_gap_plug": (57, 9, 46),
+    "dline_lb_edge_setter": (55, 10, 54),
+    "dline_cb_contain_end": (52, 7, 55),
+    "dline_cb_rush_contain": (54, 11, 54),
+    "dline_s_interior_rusher": (58, 13, 46),
+    "dline_s_stunt_tackle": (56, 14, 50),
+    "lb_dline_front_fit_back": (54, 10, 56),
+    "lb_dline_run_fit_captain": (54, 9, 54),
+    "lb_cb_nickel_rover": (51, 8, 58),
+    "lb_cb_hook_curl_reader": (50, 7, 56),
+    "lb_s_robber_backer": (53, 11, 56),
+    "lb_s_green_dog_blitzer": (58, 15, 50),
+    "cb_dline_edge_corner": (52, 8, 56),
+    "cb_dline_force_corner": (55, 10, 52),
+    "cb_lb_nickel_matcher": (53, 9, 55),
+    "cb_lb_underneath_bracket": (51, 7, 54),
+    "cb_s_deep_half_corner": (54, 8, 50),
+    "cb_s_trail_corner": (57, 15, 50),
+    "s_dline_post_safety": (51, 7, 55),
+    "s_dline_blitz_safety": (58, 14, 48),
+    "s_lb_box_safety": (57, 11, 50),
+    "s_lb_robber_safety": (54, 12, 52),
+    "s_cb_boundary_safety": (52, 9, 58),
+    "s_cb_range_safety": (53, 8, 54),
+    "basic_qb": (46, 12, 45),
+    "basic_rb": (46, 12, 45),
+    "basic_wr": (46, 12, 45),
+    "basic_o_line": (46, 12, 45),
+    "basic_d_line": (46, 12, 45),
+    "basic_linebackers": (46, 12, 45),
+    "basic_cornerbacks": (46, 12, 45),
+    "basic_safeties": (46, 12, 45),
+}
+
+
+def _migrate_4_to_5(payload: dict[str, Any]) -> dict[str, Any]:
+    """Player types gained their own base stats (version 5).
+
+    A mid-draft offer was a list of player type ids; each becomes a prospect
+    entry with that type's version 5 base stats and no spread, in the same order
+    (so an old offer keeps its Basic in the last slot). Drafted players already
+    store their stats and keep them (old runs keep 50 / 10% / 50%).
+    """
+    run = payload.get("run")
+    builder = run.get("builder") if isinstance(run, dict) else None
+    offer = builder.get("current_offer") if isinstance(builder, dict) else None
+    if not isinstance(offer, list):
+        return payload  # the coach offer ("coach_offer") or no run
+    entries = []
+    for item in offer:
+        if isinstance(item, dict):
+            entries.append(item)  # already in the version 5 shape
+            continue
+        if item not in _V5_BASE_STATS:
+            raise UnsupportedSave(f"Unknown player type in the saved draft offer: {item!r}.")
+        power, volatility, stamina = _V5_BASE_STATS[item]
+        entries.append({
+            "type_id": item, "power": float(power),
+            "volatility": volatility / 100, "stamina": stamina / 100,
+        })
+    builder["current_offer"] = entries
+    return payload
+
+
 # schema_version N -> function returning the payload at N + 1.
 MIGRATIONS: MutableMapping[int, Migration] = {
-    1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4,
+    1: _migrate_1_to_2, 2: _migrate_2_to_3, 3: _migrate_3_to_4, 4: _migrate_4_to_5,
 }
 
 

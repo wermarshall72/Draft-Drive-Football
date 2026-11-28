@@ -34,12 +34,9 @@ from src.engine.football import (
 from src.engine.football_coaches import COACH_PAIR_OFFERS, FootballCoachPair
 from src.engine.football_perk_context import perk_history, team_perks
 from src.engine.football_player_catalog import (
-    PLAYER_BASE_POWER,
-    PLAYER_BASE_STAMINA,
-    PLAYER_BASE_VOLATILITY,
     FootballPlayerType,
-    player_from_type,
     player_type_offer,
+    roll_prospect,
 )
 from src.engine.football_simulator import (
     calculate_blind_play_estimate,
@@ -161,12 +158,11 @@ class FootballAI:
             weights = [draft_weight(item, drafted, coach_pair) for item in offer]
             selected_type = self._rng.choices(offer, weights)[0]
             drafted.append(selected_type)
-            players[position] = player_from_type(
-                selected_type,
+            # The drafted prospect rolls its spread from the AI's own seeded RNG.
+            players[position] = roll_prospect(
+                selected_type, self._rng,
                 name=f"{name} {selected_type.name}",
-                power=PLAYER_BASE_POWER + power_adjustment,
-                volatility=PLAYER_BASE_VOLATILITY,
-                stamina=PLAYER_BASE_STAMINA,
+                power_adjustment=power_adjustment,
             )
         return FootballRoster(
             team_name=name,

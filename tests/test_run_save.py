@@ -103,7 +103,7 @@ PHASES = {
 
 def test_round_trip_at_every_phase_and_decision() -> None:
     reached: dict[str, int] = {}
-    for seed in range(64):
+    for seed in range(200):
         controller = new_controller(seed)
         rng = random.Random(seed)
         while True:
@@ -670,7 +670,7 @@ def test_unknown_ids_and_bad_shapes_raise_unsupported_save(path, value, fragment
 def test_canonical_checksum_ignores_formatting() -> None:
     payload = {"b": [1, 2], "a": {"z": 1.5, "y": "é"}}
     assert canonical_json(payload) == '{"a":{"y":"é","z":1.5},"b":[1,2]}'.encode()
-    assert migrations.CURRENT_SCHEMA_VERSION == 4
+    assert migrations.CURRENT_SCHEMA_VERSION == 5
 
 
 def test_persistence_package_does_not_import_pygame() -> None:

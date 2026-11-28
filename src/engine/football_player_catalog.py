@@ -11,9 +11,18 @@ from typing import Mapping
 
 from src.engine.football import FootballPlayer, FootballPlayerPerkKind, FootballPosition
 
+# The uniform stats every player had before save format 5 (old saves keep them);
+# still the neutral reference for hand-built test rosters.
 PLAYER_BASE_POWER = 50.0
 PLAYER_BASE_VOLATILITY = 0.10
 PLAYER_BASE_STAMINA = 0.50
+# Each drafted prospect rolls uniformly over whole steps around its type's base.
+POWER_SPREAD = 2  # power points
+VOLATILITY_SPREAD_PCT = 1  # percentage points
+STAMINA_SPREAD_PCT = 3  # percentage points
+MIN_VOLATILITY_PCT = 1
+MAX_STAMINA_PCT = 100
+BASIC_BASE_STATS = (46, 12, 45)  # power, volatility %, stamina %
 PARTNERSHIP_BONUS = 0.10
 MAX_COMBINED_PLAYER_MODIFIER = 1.30
 
@@ -98,10 +107,28 @@ class FootballPlayerType:
     name: str
     partner_position: FootballPosition | None
     perk: FootballPlayerPerk | None
+    base_power: int  # a whole number
+    base_volatility_pct: int  # a whole percent
+    base_stamina_pct: int  # a whole percent
+
+    @property
+    def base_volatility(self) -> float:
+        return self.base_volatility_pct / 100
+
+    @property
+    def base_stamina(self) -> float:
+        return self.base_stamina_pct / 100
 
     def __post_init__(self) -> None:
         if not isinstance(self.type_id, str) or not self.type_id.strip():
             raise ValueError("Player type identifier must be non-empty.")
+        for value, label, low, high in (
+            (self.base_power, "base power", POWER_SPREAD, 1000),
+            (self.base_volatility_pct, "base volatility", MIN_VOLATILITY_PCT, 100),
+            (self.base_stamina_pct, "base stamina", 0, MAX_STAMINA_PCT),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ValueError(f"Player type {label} must be a whole number in range.")
         if not isinstance(self.position, FootballPosition):
             raise ValueError("Player type position must be a FootballPosition.")
         if not isinstance(self.name, str) or not self.name.strip():
@@ -135,13 +162,73 @@ def _specialist(
     partner_required: bool = False,
     **values: float,
 ) -> FootballPlayerType:
+    power, volatility, stamina = _SPECIALIST_BASE_STATS[type_id]
     return FootballPlayerType(
         type_id,
         position,
         name,
         partner,
         FootballPlayerPerk(kind, perk_name, limit, effect_type, partner_required, values),
+        power,
+        volatility,
+        stamina,
     )
+
+
+# Base stats per specialist: power, volatility %, stamina % (see "Player type
+# stats" in docs/player-perks-proposal.md). Power or big-play types run high
+# power and volatility with less stamina; steady technicians keep volatility
+# low; workhorses carry stamina; the rest are balanced.
+_SPECIALIST_BASE_STATS: Mapping[str, tuple[int, int, int]] = MappingProxyType({
+    "qb_rb_mesh_reader": (52, 9, 56),
+    "qb_rb_option_ledger": (51, 8, 55),
+    "qb_wr_boundary_captain": (52, 10, 60),
+    "qb_wr_vertical_architect": (58, 14, 48),
+    "qb_oline_pocket_anchor": (53, 7, 52),
+    "qb_oline_silent_count": (52, 7, 54),
+    "rb_qb_checkdown_back": (50, 8, 58),
+    "rb_qb_option_keeper": (53, 11, 54),
+    "rb_wr_orbit_runner": (57, 15, 52),
+    "rb_wr_slot_outlet": (50, 8, 56),
+    "rb_oline_gap_runner": (59, 14, 44),
+    "rb_oline_pull_guard_back": (55, 10, 52),
+    "wr_qb_route_technician": (51, 7, 55),
+    "wr_qb_vertical_threat": (58, 15, 48),
+    "wr_rb_screen_outlet": (52, 8, 56),
+    "wr_rb_motion_receiver": (54, 10, 55),
+    "wr_oline_boundary_route": (56, 12, 50),
+    "wr_oline_release_specialist": (53, 9, 57),
+    "oline_qb_pass_set_guard": (52, 7, 55),
+    "oline_qb_pocket_tempo": (51, 8, 58),
+    "oline_rb_drive_blocker": (54, 10, 60),
+    "oline_rb_pull_guard": (58, 13, 48),
+    "oline_wr_screen_setter": (52, 9, 55),
+    "oline_wr_space_creator": (55, 11, 52),
+    "dline_lb_a_gap_plug": (57, 9, 46),
+    "dline_lb_edge_setter": (55, 10, 54),
+    "dline_cb_contain_end": (52, 7, 55),
+    "dline_cb_rush_contain": (54, 11, 54),
+    "dline_s_interior_rusher": (58, 13, 46),
+    "dline_s_stunt_tackle": (56, 14, 50),
+    "lb_dline_front_fit_back": (54, 10, 56),
+    "lb_dline_run_fit_captain": (54, 9, 54),
+    "lb_cb_nickel_rover": (51, 8, 58),
+    "lb_cb_hook_curl_reader": (50, 7, 56),
+    "lb_s_robber_backer": (53, 11, 56),
+    "lb_s_green_dog_blitzer": (58, 15, 50),
+    "cb_dline_edge_corner": (52, 8, 56),
+    "cb_dline_force_corner": (55, 10, 52),
+    "cb_lb_nickel_matcher": (53, 9, 55),
+    "cb_lb_underneath_bracket": (51, 7, 54),
+    "cb_s_deep_half_corner": (54, 8, 50),
+    "cb_s_trail_corner": (57, 15, 50),
+    "s_dline_post_safety": (51, 7, 55),
+    "s_dline_blitz_safety": (58, 14, 48),
+    "s_lb_box_safety": (57, 11, 50),
+    "s_lb_robber_safety": (54, 12, 52),
+    "s_cb_boundary_safety": (52, 9, 58),
+    "s_cb_range_safety": (53, 8, 54),
+})
 
 
 _QB, _RB, _WR, _OL = (
@@ -225,7 +312,10 @@ _BASIC_DISPLAY_NAMES = {
 }
 
 BASIC_PLAYER_TYPES = tuple(
-    FootballPlayerType(f"basic_{position.value.lower()}", position, _BASIC_DISPLAY_NAMES[position], None, None)
+    FootballPlayerType(
+        f"basic_{position.value.lower()}", position, _BASIC_DISPLAY_NAMES[position], None, None,
+        *BASIC_BASE_STATS,
+    )
     for position in FootballPosition
 )
 
@@ -279,6 +369,42 @@ def _validate_catalog() -> None:
     kinds = [item.perk.kind for item in _SPECIALISTS if item.perk is not None]
     if len(set(kinds)) != len(kinds) or set(kinds) != set(FootballPlayerPerkKind):
         raise RuntimeError("Every player perk kind must belong to exactly one specialist.")
+    if set(_SPECIALIST_BASE_STATS) != {item.type_id for item in _SPECIALISTS}:
+        raise RuntimeError("Every specialist needs base stats, and only specialists.")
+
+    # Basic is the weakest overall even with the spread: the worst roll of any
+    # specialist must still beat the best roll of its position's Basic.
+    for position, player_types in PLAYER_TYPES_BY_POSITION.items():
+        basic = next(item for item in player_types if item.partner_position is None)
+        best_basic = prospect_score_range(basic)[1]
+        for item in player_types:
+            if item.partner_position is not None and prospect_score_range(item)[0] <= best_basic:
+                raise RuntimeError(
+                    f"{item.name} can roll below the best {basic.name}; Basic must be "
+                    "the weakest overall."
+                )
+
+
+def prospect_score(power: float, volatility: float, stamina: float) -> float:
+    """Overall strength, used only to check that Basic is weakest (never shown)."""
+    return power + 40 * stamina - 100 * volatility
+
+
+def _spread_bounds(base: int, spread: int, low: int, high: int) -> tuple[int, int]:
+    return max(low, base - spread), min(high, base + spread)
+
+
+def prospect_score_range(player_type: FootballPlayerType) -> tuple[float, float]:
+    """(worst, best) score a prospect of this type can roll, clamps included."""
+    power = _spread_bounds(player_type.base_power, POWER_SPREAD, 0, 1000)
+    volatility = _spread_bounds(
+        player_type.base_volatility_pct, VOLATILITY_SPREAD_PCT, MIN_VOLATILITY_PCT, 100
+    )
+    stamina = _spread_bounds(player_type.base_stamina_pct, STAMINA_SPREAD_PCT, 0, MAX_STAMINA_PCT)
+    return (
+        prospect_score(power[0], volatility[1] / 100, stamina[0] / 100),
+        prospect_score(power[1], volatility[0] / 100, stamina[1] / 100),
+    )
 
 
 _validate_catalog()
@@ -313,40 +439,63 @@ def player_types_for_position(
 def player_type_offer(
     position: FootballPosition, rng: random.Random
 ) -> tuple[FootballPlayerType, FootballPlayerType, FootballPlayerType]:
+    """Three different types, drawn with equal odds from the position's seven
+    options (six specialists and Basic), in random order."""
     if not isinstance(position, FootballPosition):
         raise ValueError("Position must be a FootballPosition.")
     if not isinstance(rng, random.Random):
         raise ValueError("Offer generation requires a random.Random instance.")
-    specialists = tuple(
-        item
-        for item in player_types_for_position(position)
-        if item.partner_position is not None
+    first, second, third = rng.sample(player_types_for_position(position), 3)
+    return first, second, third
+
+
+def roll_prospect(
+    player_type: FootballPlayerType,
+    rng: random.Random,
+    *,
+    name: str | None = None,
+    power_adjustment: float = 0.0,
+) -> FootballPlayer:
+    """A prospect of ``player_type`` with its seeded spread around the type's base.
+
+    Power moves up to ``POWER_SPREAD`` whole points, volatility and stamina up to
+    their whole-percent spreads (volatility stays at least 1%, stamina at most
+    100%). ``power_adjustment`` (AI difficulty) is added after the roll.
+    """
+    if not isinstance(rng, random.Random):
+        raise ValueError("Prospect rolls require a random.Random instance.")
+    power = player_type.base_power + rng.randint(-POWER_SPREAD, POWER_SPREAD)
+    volatility = max(
+        MIN_VOLATILITY_PCT,
+        player_type.base_volatility_pct + rng.randint(-VOLATILITY_SPREAD_PCT, VOLATILITY_SPREAD_PCT),
     )
-    basic = next(
-        item
-        for item in player_types_for_position(position)
-        if item.partner_position is None
+    stamina = min(
+        MAX_STAMINA_PCT,
+        max(0, player_type.base_stamina_pct + rng.randint(-STAMINA_SPREAD_PCT, STAMINA_SPREAD_PCT)),
     )
-    first, second = rng.sample(specialists, 2)
-    return first, second, basic
+    return player_from_type(
+        player_type, name=name, power=float(power) + power_adjustment,
+        volatility=volatility / 100, stamina=stamina / 100,
+    )
 
 
 def player_from_type(
     player_type: FootballPlayerType,
     *,
     name: str | None = None,
-    power: float = PLAYER_BASE_POWER,
-    volatility: float = PLAYER_BASE_VOLATILITY,
-    stamina: float = PLAYER_BASE_STAMINA,
+    power: float | None = None,
+    volatility: float | None = None,
+    stamina: float | None = None,
 ) -> FootballPlayer:
+    """A player of ``player_type``; stats left out are the type's base stats."""
     if player_type_for_id(player_type.type_id) is not player_type:
         raise ValueError("Player type must belong to the validated catalog.")
     return FootballPlayer(
         name=player_type.name if name is None else name,
         position=player_type.position,
-        power=power,
-        volatility=volatility,
-        stamina=stamina,
+        power=float(player_type.base_power) if power is None else power,
+        volatility=player_type.base_volatility if volatility is None else volatility,
+        stamina=player_type.base_stamina if stamina is None else stamina,
         player_type_id=player_type.type_id,
     )
 

@@ -127,14 +127,20 @@ def test_continue_run_after_restart_resumes_the_same_match_decision(tmp_path: Pa
 
 
 def test_continue_run_reopens_a_pending_removal_in_the_playbook(tmp_path: Path) -> None:
-    controller = new_controller(2)
-    rng = random.Random(2)
-    while not (
-        controller.state.shop is not None
-        and controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
-        and controller.state.shop.pending_removal is not None
-    ):
-        assert step(controller, rng)
+    for seed in range(2, 40):
+        controller = new_controller(seed)
+        rng = random.Random(seed)
+        while not (
+            controller.state.shop is not None
+            and controller.state.phase is FootballRunPhase.PRE_MATCH_SHOP
+            and controller.state.shop.pending_removal is not None
+        ):
+            if not step(controller, rng):
+                break
+        else:
+            break
+    else:
+        pytest.fail("No seeded run reached a pending removal.")
     tmp_path.mkdir(exist_ok=True)
     RunSaveStore(tmp_path).save(controller)
 

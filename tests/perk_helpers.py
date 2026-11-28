@@ -21,6 +21,9 @@ from src.engine.football import (
     OffensivePlayAction,
 )
 from src.engine.football_player_catalog import (
+    PLAYER_BASE_POWER,
+    PLAYER_BASE_STAMINA,
+    PLAYER_BASE_VOLATILITY,
     PLAYER_TYPES_BY_PERK,
     player_from_type,
     player_types_for_position,
@@ -29,6 +32,11 @@ from src.engine.football_simulator import FootballMatchSimulator, calculate_matc
 
 A, B = FootballTeamSide.TEAM_A, FootballTeamSide.TEAM_B
 K = FootballPlayerPerkKind
+# Perk math is checked on the old uniform 50 / 10% / 50% players, not the per-type stats.
+NEUTRAL_STATS = {
+    "power": PLAYER_BASE_POWER, "volatility": PLAYER_BASE_VOLATILITY,
+    "stamina": PLAYER_BASE_STAMINA,
+}
 BASIC_PLAYS = ("rb_run", "screen_pass", "pa_pass", "short_pass", "medium_pass", "deep_pass")
 BASIC_SCHEMES = BASIC_PLAYS
 
@@ -42,10 +50,14 @@ def roster(name: str, *kinds: FootballPlayerPerkKind) -> FootballRoster:
     players = {}
     for position in FootballPosition:
         basic = next(item for item in player_types_for_position(position) if item.perk is None)
-        players[position] = player_from_type(basic, name=f"{name} {position.value}")
+        players[position] = player_from_type(
+            basic, name=f"{name} {position.value}", **NEUTRAL_STATS,
+        )
     for kind in kinds:
         player_type = PLAYER_TYPES_BY_PERK[kind]
-        players[player_type.position] = player_from_type(player_type, name=f"{name} {player_type.name}")
+        players[player_type.position] = player_from_type(
+            player_type, name=f"{name} {player_type.name}", **NEUTRAL_STATS,
+        )
     return FootballRoster(name, players, FootballCoach(f"{name} Coach"), FootballSpecialTeams())
 
 

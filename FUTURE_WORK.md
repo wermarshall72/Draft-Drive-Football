@@ -4,6 +4,33 @@ This tracker records unfinished redesign work and open decisions. It is not a
 commitment to implement every idea as written. Update it when work is completed
 or the design changes.
 
+## Project plan (agreed 2026-11-27)
+
+Work through these in order; update the list as steps finish or change.
+
+1. [x] Quick polish batch: game name, FOCUS tag, extra-point wording, the
+   "THEIR SCHEME IS HIDDEN" strip line, and the rival drive chart and result
+   box.
+2. [x] Draft fix: every offer slot can be any player type (Basic included)
+   with equal odds; Basic is the weakest on stats; each specialist gets stats
+   that fit its type. ("Draft" item under First-time player evaluation.)
+3. [ ] Kick menu on any down, with a YES/NO confirmation popup (Planned
+   features).
+4. [ ] Play-family rebalance, proposal then build: three runs and three
+   passes, about 10% harder offense (Planned features). Before Transfers, so
+   their perks fit the final play types.
+5. [ ] Transfers, proposal then build (Planned features).
+6. [ ] AI shopping parity, proposal then build, with Transfers included
+   (Planned features).
+7. [ ] Measure real run length (15-30 minute goal), then human playtests,
+   then difficulty tuning (playoffs, Hard AI, rare perks).
+8. [ ] Audio: the looping song and sound effects, once the files exist.
+9. [ ] Visual polish: card art, halftime moment, temporary vs permanent
+   upgrade look, result-screen bar colors, coach pairs sharing a coach.
+10. [ ] More content: plays and schemes, coach upgrades, group upgrades,
+    saving AP between shops.
+11. [ ] Release prep: Steam Cloud and the remaining small decisions.
+
 ## Player redesign
 
 - [x] Propose and approve six specialized player types per position, plus a
@@ -207,8 +234,26 @@ one run should take 15-30 minutes, so defense stays light.
   (Done: "PAT" is gone from player-facing text; the conversion prompt reads
   "KICK FOR 1, OR PLAY A CARD TO GO FOR 2" and the scoreboard "EXTRA POINT /
   2-PT".)
-- [ ] Draft: prospects at a position have identical stats, so the perkless
-  Basic player is always the worst pick.
+- [x] Draft: prospects at a position have identical stats, so the perkless
+  Basic player is always the worst pick. Now each offer is three distinct
+  types drawn with equal odds from the position's seven (Basic in any slot,
+  about 3 offers in 7), every type has its own base stats with a seeded
+  per-prospect spread (power ±2, volatility ±1 point, stamina ±3 points), and
+  Basic (46 / 12% / 45%) is always the weakest overall, checked at import (see
+  docs/player-perks-proposal.md §9; save format 5). No table value needed
+  adjusting. Balance, `scripts/measure_football_balance.py --skip-plays`
+  (300 games each, Team A Standard against the listed difficulty; both teams
+  draft with the new rules; nothing else retuned):
+
+  | Opponent | Team A win rate before → after | Points/game A; B before → after | Combined before → after |
+  |---|---|---|---|
+  | Easy | 0.623 → 0.707 | 19.86; 15.62 → 19.78; 13.87 | 35.48 → 33.65 |
+  | Standard | 0.513 → 0.480 | 19.10; 19.08 → 17.97; 18.48 | 38.19 → 36.45 |
+  | Hard | 0.350 → 0.277 | 17.34; 22.30 → 15.29; 22.35 | 39.64 → 37.64 |
+
+  Scoring drops about 2 points a game (stronger specialists defend too), and
+  the gap between difficulties widens: Easy concedes less to Team A and Hard
+  wins more. Offense difficulty is Project plan step 4.
 - [x] Cards switched from "YDS LIVE" to "BASE YDS" on two-point tries; they now
   keep the live estimate.
 - [ ] Smaller UI issues: two of three coach pairs share a coach; temporary and
@@ -289,6 +334,35 @@ one run should take 15-30 minutes, so defense stays light.
   ends either way), how the AI uses it (if at all), the effect on the clock and
   on fourth-down perks such as Option / Spread, and whether it needs a save
   change.
+- [ ] Rebalance the offensive play families: three runs and three passes,
+  with a harder offense. Today only RB Run is a run (five of six families are
+  passes). The new six families, with their two contributing positions:
+
+  | Contributors | Family | Type | Today |
+  |---|---|---|---|
+  | QB + RB | Toss Run | Run | Play-Action Pass |
+  | QB + O-line | Option | Run | Medium Pass |
+  | QB + WR | Deep Pass | Pass | Deep Pass (unchanged) |
+  | RB + WR | Screen Pass | Pass | Short Pass |
+  | RB + O-line | Inside Run | Run | RB Run (unchanged) |
+  | WR + O-line | Play-Action Pass | Pass | Screen Pass |
+
+  Goals:
+  - Deep Pass still has the highest expected yards, but with more variance.
+  - Option is high risk, high reward: big when the defense isn't stopping it.
+  - Expected results are balanced between runs and passes.
+  - Offense gets about 10% harder for both the human and the AI, so the
+    defense wins more often. Measure it with
+    `scripts/measure_football_balance.py`.
+
+  This touches the core six-family rules in AGENTS.md: card IDs (saves store
+  them, so a migration is needed), the 36 named plays and 24 schemes, the
+  defensive families each scheme stops, coach and player perks keyed to a
+  family (Ground and Pound, Run Stop, Shot Setup, Keep Read, Release Read,
+  and others), the AI, card art codes, and How to Play. Write a proposal first
+  (the new family list, named-card mapping, stats, perk and coach re-keying,
+  and the save migration) for approval, then build it. Do it before the
+  difficulty playtests, since it changes balance.
 
 ## Known bugs
 

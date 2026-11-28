@@ -17,6 +17,7 @@ from src.ui.football_run_summary import replace_run_summary, run_summary
 from src.ui.football_ui_kit import text_audit
 
 from test_football_desktop import (
+    _play_human_decision,
     _activate,
     _assert_text_fits,
     _draft_to_shop,
@@ -375,7 +376,7 @@ def test_continue_mid_match_keeps_the_down_hand_and_score_without_replaying(
     controller = desktop.football_controller
     # Play until an AI replay is in progress, then leave mid-replay.
     for _ in range(20):
-        _play_first_match_card(desktop) if controller.state.human_decision is not None else None
+        _play_human_decision(desktop) if controller.state.human_decision is not None else None
         _draw(desktop)
         if match_screen.playback.blocking():
             break
