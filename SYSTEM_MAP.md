@@ -17,7 +17,10 @@ auto-battler is a separate legacy reference.
   [widgets.py](src/ui/widgets.py), and [theme.py](src/ui/theme.py) provide
   shared screen, layout, input, and visual components.
 - [main_menu.py](src/ui/main_menu.py) presents profile status and selects
-  difficulty to start a run. While `DesktopApplication` remembers an unfinished
+  difficulty to start a run. Its title is the game name (`GAME_NAME` in
+  [screens.py](src/ui/screens.py), also the window caption and the fallback
+  `Screen._header`), sized by `title_font` to fit the left panel; the focused
+  button shows its outline only. While `DesktopApplication` remembers an unfinished
   run it leads with a focused CONTINUE RUN button whose summary comes from
   [football_run_summary.py](src/ui/football_run_summary.py), and START RUN
   opens a replace-run confirmation drawn with the shared pause-menu panel.

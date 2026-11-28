@@ -432,7 +432,7 @@ def _base_outcome(
         if defense_side is RIVAL_SIDE:
             return Outcome(
                 f"{defense.upper()} SET THEIR DEFENSE",
-                "THEIR CALL IS SECRET · WATCH YOUR YARDS",
+                "THEIR SCHEME IS HIDDEN",
                 PlayLineKind.OTHER,
             )
         return Outcome(

@@ -304,6 +304,7 @@ def test_scheme_events_and_period_banners() -> None:
     # The rival (Team B) defends: its call stays secret.
     result = outcome(scheme, None, "Home", "Away")
     assert result.headline == "AWAY SET THEIR DEFENSE"
+    assert result.detail == "THEIR SCHEME IS HIDDEN"
     assert "RUN FIT" not in result.headline + result.detail
     assert "STOPS" not in result.headline + result.detail
     assert result.kind is PlayLineKind.OTHER

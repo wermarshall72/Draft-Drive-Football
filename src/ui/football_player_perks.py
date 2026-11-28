@@ -222,7 +222,7 @@ _WORDING = {
                   "rival drive.",
     ),
     K.KICK_RUSH: (
-        lambda v: f"Rival punts, FGs, and PATs: +{_pct(v['block'])} block chance",
+        lambda v: f"Rival punts, FGs, and extra points: +{_pct(v['block'])} block chance",
         lambda v: f"Rival punts, field goals, and extra points get +{_pct(v['block'])} block "
                   "chance (before the kicker's block-risk reduction on punts and field goals). "
                   "Blocks use the normal recovery and return rules.",

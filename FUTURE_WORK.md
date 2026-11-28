@@ -204,8 +204,9 @@ one run should take 15-30 minutes, so defense stays light.
   include counters, "matched passes", "+20% QB", volatility, stamina, AP, Day,
   partner, and PAT. Added a How to Play page, five one-time tips, and "stops" /
   "stopped" / "defense call" wording in place of counters and matched passes.
-  "PAT" still appears in the conversion prompt and scoreboard (the two-point tip
-  says "Kick for 1").
+  (Done: "PAT" is gone from player-facing text; the conversion prompt reads
+  "KICK FOR 1, OR PLAY A CARD TO GO FOR 2" and the scoreboard "EXTRA POINT /
+  2-PT".)
 - [ ] Draft: prospects at a position have identical stats, so the perkless
   Basic player is always the worst pick.
 - [x] Cards switched from "YDS LIVE" to "BASE YDS" on two-point tries; they now
@@ -215,9 +216,10 @@ one run should take 15-30 minutes, so defense stays light.
   run/pass and team colors; no halftime moment beyond the drive result box's
   HALFTIME. (Done: the "Hands & piles update after replay" notice is gone; a
   rival drive now ends in a drive chart and result box.)
-- [ ] Visual polish: the profile screen still uses the old grey style; the
-  title says "COLLEGE FOOTBALL" while the app is "Draft Drive Football"; a
-  "FOCUS" tag shows on the main menu; play and bonus card art is text codes
+- [ ] Visual polish: (done: the Settings/profile screen now uses the navy
+  stadium style, with a helmet preview and a Help tips row; the main menu,
+  fallback header, and window title say "Draft Drive Football"; the main
+  menu's "FOCUS" tag is gone) play and bonus card art is text codes
   ("OL+RB", "OFF DRAW").
 - [ ] Measure real run length against the 15-30 minute goal (a match has about
   33 offensive calls, 6 defensive calls, and the AI drive replays).
@@ -247,6 +249,46 @@ one run should take 15-30 minutes, so defense stays light.
   defender's calls.
 - [ ] Watch whether Hard still feels distinct now that its offense is blind;
   revisit only after human playtests.
+
+## Planned features (2026-11-27)
+
+- [ ] Transfer player upgrades (Rare and Very Rare): a shop player-upgrade
+  offer that brings in a new player at one position and immediately replaces
+  the current one for the rest of the run. Decisions so far:
+  - Stats: Rare is about +15% over a starting player (power 50 -> 57.5,
+    volatility 10% -> 8.5%, stamina 50% -> 57.5%); Very Rare is about +25%.
+  - Perks: Rare brings one of that position's existing strong perks; Very
+    Rare brings a new transfer-only perk (one per position, eight in all).
+  - Cost: Rare 4 AP, Very Rare 6 AP.
+  - The old player leaves with every upgrade bought for him; the shop card
+    warns what will be lost.
+  - One Transfer per position per run; a position with a Transfer is no longer
+    offered one.
+  - Look: the position's current pixel player with a visor, gold helmet
+    stripe/trim, and a small TRANSFER ribbon, built in code.
+  - AI teams can get Transfers too (see the AI shopping item below).
+  - Process: write a proposal doc first (stats, which existing perks Rare
+    Transfers use, the eight new Very Rare perks, partner links, save format)
+    for approval, then build it.
+- [ ] AI shopping parity: AI teams should be able to get everything the human
+  can buy (player upgrades, Transfers, coach upgrades, plays, schemes, and
+  bonus cards) and make similar shop decisions. Today AI rosters, coaches, and
+  decks are generated fresh for each game, with extra deck cards set by
+  difficulty and playoff round. Parity needs a design decision first: persistent
+  AI teams that shop each week, or a seeded "shopping history" simulated when a
+  rival is generated. It must stay deterministic and save-safe and will change
+  difficulty, so measure it and playtest after it lands.
+- [ ] Kick menu on any down: while on offense, a menu on the outcome strip
+  lets the player choose "Kick FG" or "Punt" on any down, not only fourth down
+  (today PUNT and FIELD GOAL appear only in the fourth-down choice). Choosing
+  one opens a confirmation popup: "Are you sure you want to Kick FG?" or "Are
+  you sure you want to Punt?", with YES and NO buttons inside the popup. NO
+  closes it with nothing spent. This changes engine rules (kicks before fourth
+  down), so decide first: whether field goals are offered only in range, what
+  happens to the down and drive after an early punt or field goal (the drive
+  ends either way), how the AI uses it (if at all), the effect on the clock and
+  on fourth-down perks such as Option / Spread, and whether it needs a save
+  change.
 
 ## Known bugs
 

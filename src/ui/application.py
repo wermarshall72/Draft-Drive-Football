@@ -25,6 +25,7 @@ from src.ui.main_menu import FootballMainMenuScreen, MenuSaveNotice
 from src.ui.main_menu_art import draw_menu_stadium
 from src.ui.navigation import ScreenManager
 from src.ui.profile_screen import ProfileScreen
+from src.ui.screens import GAME_NAME
 from src.ui.player_art import draw_draft_player
 from src.ui.theme import Theme
 from src.ui.volume_slider import AudioBinding
@@ -337,7 +338,7 @@ class DesktopApplication:
     def run(self, event_source: EventSource | None = None) -> None:
         pygame.init()
         try:
-            pygame.display.set_caption("CFB Auto-Battler")
+            pygame.display.set_caption(GAME_NAME)
             window = pygame.display.set_mode(self.window_size, pygame.RESIZABLE)
             pygame.key.start_text_input()
             canvas = pygame.Surface(LOGICAL_SIZE)

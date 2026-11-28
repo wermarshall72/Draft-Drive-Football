@@ -48,7 +48,7 @@ def ball_spot_text(match: FootballMatchState) -> str:
     return f"BALL ON OPP {max(1, round(100 - position))}"
 
 
-CONVERSION_TEXT = "PAT / 2-PT TRY"
+CONVERSION_TEXT = "EXTRA POINT / 2-PT"
 
 
 def is_conversion(match: FootballMatchState) -> bool:

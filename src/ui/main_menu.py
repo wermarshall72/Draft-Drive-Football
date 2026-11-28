@@ -10,7 +10,7 @@ from src.engine.football_ai import FootballAIDifficulty
 from src.ui.coach_fonts import staff_font
 from src.ui.football_pause_menu import MenuEntry, draw_menu_panel
 from src.ui.main_menu_art import draw_menu_stadium
-from src.ui.screens import Navigate, Quit, Screen
+from src.ui.screens import GAME_NAME, Navigate, Quit, Screen
 from src.ui.theme import Theme, readable_ink
 from src.ui.widgets import Button, draw_text
 
@@ -25,6 +25,22 @@ REPLACE_TITLE = "START A NEW RUN?"
 ABANDON_SAVE = "ABANDON SAVE"
 HOW_TO_PLAY = "HOW TO PLAY"
 # Half-width buttons (SETTINGS beside HOW TO PLAY) show a shorter detail line.
+GAME_TITLE = GAME_NAME.upper()
+TITLE_POS = (36, 20)
+TITLE_RULE_RIGHT = 618  # the rule under the title; the title never runs past it
+TITLE_SIZES = (48, 46, 44, 42, 40, 38, 36, 34, 32, 30, 28)
+
+
+def title_font():
+    """The largest title size that fits the left panel (the menu draws at 1280x720 and scales)."""
+    room = TITLE_RULE_RIGHT - TITLE_POS[0]
+    for size in TITLE_SIZES:
+        font = staff_font(size, semibold=True)
+        if font.size(GAME_TITLE)[0] <= room:
+            return font
+    return staff_font(TITLE_SIZES[-1], semibold=True)
+
+
 _SHORT_DETAILS = {
     "SETTINGS": "Team, colors, and audio",
     "CREATE PROFILE": "Create your team",
@@ -97,7 +113,7 @@ class FootballMainMenuScreen(Screen):
         self.on_abandon_save = on_abandon_save
         self.confirm_replace = False
         self.difficulty = FootballAIDifficulty.STANDARD
-        self.title_font = staff_font(48, semibold=True)
+        self.title_font = title_font()
         self.menu_font = staff_font(25, semibold=True)
         self.detail_font = staff_font(17)
         self.badge_font = staff_font(21, semibold=True)
@@ -173,10 +189,10 @@ class FootballMainMenuScreen(Screen):
         surface.blit(self.overlay, (0, 0))
 
     def _draw_overlay(self, surface: pygame.Surface) -> None:
-        draw_text(surface, "COLLEGE FOOTBALL", (36, 20), self.title_font, _TEXT)
+        draw_text(surface, GAME_TITLE, TITLE_POS, self.title_font, _TEXT)
         draw_text(surface, "BUILD YOUR PROGRAM  /  CALL THE GAME", (39, 78),
                   self.detail_font, _MUTED)
-        pygame.draw.line(surface, _EDGE, (39, 107), (618, 107), 2)
+        pygame.draw.line(surface, _EDGE, (39, 107), (TITLE_RULE_RIGHT, 107), 2)
 
         badge = pygame.Rect(855, 25, 389, 68)
         pygame.draw.rect(surface, "#102e4a", badge, border_radius=6)
@@ -388,10 +404,6 @@ class FootballMainMenuScreen(Screen):
         narrow = rect.width < 300
         if narrow:
             detail = _SHORT_DETAILS.get(button.label, detail)
-        if self.keyboard_focus and button.focused and button.enabled and not narrow:
-            focus_label = self.small_font.render("FOCUS", True, text)
-            surface.blit(focus_label, (rect.right - focus_label.get_width() - 18,
-                                       rect.top + (8 if compact else 13)))
         draw_text(surface, button.label, (rect.left + 25, rect.top + (4 if compact else 8)),
                   self.menu_font, text)
         draw_text(surface, detail, (rect.left + 26, rect.top + (34 if compact else 43)),

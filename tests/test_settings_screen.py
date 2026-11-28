@@ -486,7 +486,7 @@ def test_settings_uses_the_run_screen_header_not_the_old_one(tmp_path: Path, mon
     desktop = _open_settings(tmp_path, team_name="Mustangs")
     texts = _texts(desktop)
     assert "SETTINGS" in texts and "MUSTANGS" in texts
-    assert not {"COLLEGE FOOTBALL", "SEASON MODE"} & texts
+    assert not {"DRAFT DRIVE FOOTBALL", "COLLEGE FOOTBALL", "SEASON MODE"} & texts
     desktop.profile_screen.name = ""
     assert "NEW TEAM" in _texts(desktop)
 

@@ -1,5 +1,6 @@
 from dataclasses import replace
 import os
+import re
 from pathlib import Path
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -2157,7 +2158,7 @@ def test_scoreboard_shows_conversion_wording_for_human_and_ai_tries(tmp_path: Pa
             draw_scoreboard(_surface(), SCOREBOARD_RECT_FOR_TESTS, conversion, desktop.run_screen.theme,
                             game_number=1, wins=0, losses=0)
         texts = [text for text, _, _ in records]
-        situation = next(text for text in texts if "PAT / 2-PT TRY" in text)
+        situation = next(text for text in texts if "EXTRA POINT / 2-PT" in text)
         assert "1ST & GOAL" not in situation and "BALL ON" not in situation
         _assert_text_fits(records)
     # Replay snapshots of a touchdown use the same wording.
@@ -2175,7 +2176,7 @@ def test_scoreboard_shows_conversion_wording_for_human_and_ai_tries(tmp_path: Pa
                     possession=FootballTeamSide.TEAM_B)
     full = replace(match, match_events=(touchdown, later), team_a_score=7)
     snapshot = snapshot_state(full, 1)
-    assert down_text(snapshot) == "PAT / 2-PT TRY"
+    assert down_text(snapshot) == "EXTRA POINT / 2-PT"
 
 
 def test_replay_label_counts_real_plays_and_indicator_tracks_blocking(tmp_path: Path) -> None:
@@ -2446,8 +2447,11 @@ def test_match_screen_uses_kickoff_pending_during_replay_and_keeps_conversion_te
                           _recording_actions(), focus_index=0, hover_index=None,
                           pressed_index=None, error=None)
     texts = [text for text, _, _ in records]
-    assert any("PAT / 2-PT TRY" in text for text in texts)
+    assert any("EXTRA POINT / 2-PT" in text for text in texts)
     assert not any("KICKOFF NEXT" in text for text in texts)
+    # No "PAT" in the conversion prompt, the scoreboard, or anywhere on the screen.
+    assert "KICK FOR 1, OR PLAY A CARD TO GO FOR 2" in texts
+    assert not any(re.search(r"\bPAT\b", text) for text in texts)
 
 
 _BIG_PLAY_IDS = tuple(list(OFFENSIVE_PLAY_CATALOG)[::6][:6] + list(OFFENSIVE_PLAY_CATALOG)[1::6])[:9]

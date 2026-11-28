@@ -92,7 +92,7 @@ def decision_actions(
         has_play = deck is not None and any(
             card.card_id in OFFENSIVE_PLAY_CATALOG for card in deck.hand
         )
-        prompt = "KICK THE PAT, OR PLAY A CARD FOR 2"
+        prompt = "KICK FOR 1, OR PLAY A CARD TO GO FOR 2"
         if not has_play:
             prompt = "TOUCHDOWN · CHOOSE THE CONVERSION"
             actions.append(

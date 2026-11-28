@@ -7,6 +7,8 @@ from src.ui.stat_icons import StatIconFont
 from src.ui.theme import Theme
 from src.ui.widgets import Button, draw_text
 
+GAME_NAME = "Draft Drive Football"  # the window caption; screens show it upper-case
+
 Navigate = Callable[[str], None]
 Quit = Callable[[], None]
 
@@ -151,7 +153,7 @@ class Screen:
             )
         draw_text(
             surface,
-            "COLLEGE FOOTBALL",
+            GAME_NAME.upper(),
             (mark.right + 14, header.top + 5),
             self._main_font,
             self.theme.text,

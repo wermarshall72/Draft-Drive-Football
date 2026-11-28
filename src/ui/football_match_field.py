@@ -80,6 +80,9 @@ class FieldOverlay:
     # ``line`` (if any) joins the bottom of the chart as its animating last row.
     chart: tuple[PlayLine, ...] = ()
     chart_mode: bool = False
+    # Rows to lay out: one more than the drive while its possession change is held,
+    # so that play gets its own row below the drive instead of shifting the others.
+    chart_slots: int = 0
 
 
 @lru_cache(maxsize=4)
@@ -266,6 +269,8 @@ def draw_play_line(
 
 
 CHART_MARGIN = 16
+# The possession arrow and its "1ST & 10" tag run along the turf's bottom; rows stay above.
+CHART_BOTTOM_CLEAR = 46
 CHART_MAX_SPACING = 26
 TURNOVER_MARK = pygame.Color("#ff7a59")
 
@@ -275,7 +280,7 @@ def chart_rows(geometry: FieldGeometry, count: int) -> tuple[list[int], float]:
     if count <= 0:
         return [], CHART_MAX_SPACING
     top = geometry.turf.top + CHART_MARGIN
-    bottom = geometry.turf.bottom - CHART_MARGIN
+    bottom = geometry.turf.bottom - CHART_BOTTOM_CLEAR
     spacing = CHART_MAX_SPACING if count == 1 else min(CHART_MAX_SPACING, (bottom - top) / (count - 1))
     return [round(top + spacing * index) for index in range(count)], spacing
 
@@ -286,14 +291,17 @@ def draw_drive_chart(
     rows: tuple[PlayLine, ...],
     current: PlayLine | None,
     progress: float,
+    *,
+    slots: int = 0,
 ) -> tuple[int, int] | None:
     """Every play of a drive stacked top to bottom: lines and symbols only, no text.
 
-    ``current`` (the possession change, while it animates) is the last row. Returns
-    the animating row's tip.
+    ``current`` (the possession change, while it animates) is the last row. ``slots``
+    reserves rows (the held possession change's own row). Returns the animating
+    row's tip.
     """
     lines = list(rows) + ([current] if current is not None else [])
-    ys, spacing = chart_rows(geometry, len(lines))
+    ys, spacing = chart_rows(geometry, max(len(lines), slots))
     width = max(2, min(6, round(spacing * 0.36)))
     tip = None
     for index, (line, y) in enumerate(zip(lines, ys)):
@@ -317,8 +325,8 @@ def _draw_chart_row(
     scale = width / 6
     lengths = [abs(segment.end - segment.start) for segment in line.segments]
     budget = sum(lengths) * max(0.0, min(1.0, progress))
-    # A return sits just under its play, inside the row's own space.
-    step = max(0, min(8, round(spacing * 0.4)))
+    # A return sits just under its play, inside the row's own space (never on the next row).
+    step = max(0, min(8, round(spacing * 0.4), round(spacing / 2 - width)))
     tip: tuple[int, int] | None = None
     for index, (segment, length) in enumerate(zip(line.segments, lengths)):
         if budget <= 0:
@@ -422,7 +430,8 @@ def draw_match_field(
 
     tip = None
     if overlay.chart_mode:
-        tip = draw_drive_chart(surface, geometry, overlay.chart, overlay.line, overlay.line_progress)
+        tip = draw_drive_chart(surface, geometry, overlay.chart, overlay.line, overlay.line_progress,
+                               slots=overlay.chart_slots)
     elif overlay.line is not None:
         tip = draw_play_line(surface, geometry, overlay.line, overlay.line_progress)
     ball_center = (los_x, geometry.ball_y)

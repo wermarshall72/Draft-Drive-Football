@@ -53,6 +53,9 @@ HELMET_HEIGHT = 108
 SWATCH_COLUMNS = 10
 SWATCH_GAP = 8
 ERROR_HEIGHT = 52
+ERROR_MIN_HEIGHT = 40
+ERROR_FOOTER_GAP = 12  # between the error banner and SAVE PROFILE / CANCEL
+ERROR_COLUMN_GAP = 8  # the least room kept below the right column's last card
 # Button order: name field, the two side toggles, then the 30 swatches.
 FIRST_SWATCH = 3
 
@@ -218,10 +221,14 @@ class ProfileScreen(Screen):
             reset, gameplay_card = self._gameplay_card(surface, area, accent)
             buttons.append(reset)
             column_bottom = gameplay_card.bottom
-        self.error_rect = pygame.Rect(
-            column.left, max(column_bottom + GAP, cards_bottom - ERROR_HEIGHT),
-            column.width, ERROR_HEIGHT,
+        # Under the right column, always ERROR_FOOTER_GAP clear of the footer buttons;
+        # on short windows it shrinks (never below ERROR_MIN_HEIGHT) instead of sliding down.
+        error_bottom = footer_top - ERROR_FOOTER_GAP
+        error_top = min(
+            max(column_bottom + ERROR_COLUMN_GAP, error_bottom - ERROR_HEIGHT),
+            error_bottom - ERROR_MIN_HEIGHT,
         )
+        self.error_rect = pygame.Rect(column.left, error_top, column.width, error_bottom - error_top)
         if self.error:
             draw_message_banner(surface, self.error_rect, self.error, danger=True)
 

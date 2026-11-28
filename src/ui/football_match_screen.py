@@ -397,6 +397,7 @@ class FootballMatchScreen:
         line = latest[1] if latest is not None else None
         line_is_current = latest is not None and latest[0] >= playback.current_step_start()
         chart: tuple = ()
+        chart_slots = 0
         chart_mode = playback.chart_visible and playback.match_key == MatchPlayback._key(match)
         if chart_mode:
             # The drive chart: every play of the rival's drive, then the released
@@ -404,6 +405,10 @@ class FootballMatchScreen:
             assert playback.drive is not None
             start, end = playback.chart_range()
             chart = drive_chart_lines(match.match_events, start, end)
+            drive = playback.drive
+            # The held possession change keeps a row of its own below the drive.
+            held = drive_chart_lines(match.match_events, drive.hold, drive.end)[:1]
+            chart_slots = len(drive_chart_lines(match.match_events, start, drive.hold)) + len(held)
             joins = (
                 playback.released and latest is not None and latest[0] >= playback.drive.hold
                 and line_is_current
@@ -426,6 +431,7 @@ class FootballMatchScreen:
             drop_hint=self.interaction.dragging and not blocked,
             chart=chart,
             chart_mode=chart_mode,
+            chart_slots=chart_slots,
         )
         draw_match_field(
             surface, FIELD_RECT, display, self.theme.primary, overlay,
