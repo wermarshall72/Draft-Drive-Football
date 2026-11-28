@@ -344,7 +344,11 @@ class _Match:
     """Just enough of a match for MatchPlayback."""
 
     def __init__(self, events: int, seed: int = 1) -> None:
-        self.match_events = tuple(range(events))
+        # Human-offense snapshots: no rival drive, so no result box.
+        self.match_events = tuple(
+            _event(index + 1, DefensiveSchemeAction.RB_RUN, FootballTeamSide.TEAM_A, 25.0)
+            for index in range(events)
+        )
         self.random_seed = seed
         self.team_a = type("T", (), {"team_name": "Home"})()
         self.team_b = type("T", (), {"team_name": "Away"})()

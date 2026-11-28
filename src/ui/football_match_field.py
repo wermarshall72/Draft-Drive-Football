@@ -76,6 +76,10 @@ class FieldOverlay:
     flash_elapsed_ms: int | None = None
     banner: str | None = None
     drop_hint: bool = False
+    # A drive chart: one fully drawn row per play. When ``chart_mode`` is set,
+    # ``line`` (if any) joins the bottom of the chart as its animating last row.
+    chart: tuple[PlayLine, ...] = ()
+    chart_mode: bool = False
 
 
 @lru_cache(maxsize=4)
@@ -165,20 +169,30 @@ def _casing_line(
 
 
 def _arrow_head(
-    surface: pygame.Surface, tip: tuple[int, int], heading: int, color: pygame.Color
+    surface: pygame.Surface, tip: tuple[int, int], heading: int, color: pygame.Color,
+    *, scale: float = 1.0,
 ) -> None:
     x, y = tip
-    points = ((x + heading * 7, y), (x - heading * 7, y - 9), (x - heading * 7, y + 9))
+
+    def size(value: float) -> int:
+        return max(1, round(value * scale))
+
+    points = ((x + heading * size(7), y), (x - heading * size(7), y - size(9)),
+              (x - heading * size(7), y + size(9)))
     pygame.draw.polygon(surface, PLAY_LINE_CASING, points)
-    inner = ((x + heading * 4, y), (x - heading * 5, y - 6), (x - heading * 5, y + 6))
+    inner = ((x + heading * size(4), y), (x - heading * size(5), y - size(6)),
+             (x - heading * size(5), y + size(6)))
     pygame.draw.polygon(surface, color, inner)
 
 
-def _draw_x(surface: pygame.Surface, center: tuple[int, int], size: int, color: pygame.Color) -> None:
+def _draw_x(
+    surface: pygame.Surface, center: tuple[int, int], size: int, color: pygame.Color,
+    *, width: int = 4,
+) -> None:
     x, y = center
-    for width, shade in ((8, PLAY_LINE_CASING), (4, color)):
-        pygame.draw.line(surface, shade, (x - size, y - size), (x + size, y + size), width)
-        pygame.draw.line(surface, shade, (x - size, y + size), (x + size, y - size), width)
+    for line_width, shade in ((width + 4, PLAY_LINE_CASING), (width, color)):
+        pygame.draw.line(surface, shade, (x - size, y - size), (x + size, y + size), line_width)
+        pygame.draw.line(surface, shade, (x - size, y + size), (x + size, y - size), line_width)
 
 
 def _tag(
@@ -251,6 +265,95 @@ def draw_play_line(
     return tip
 
 
+CHART_MARGIN = 16
+CHART_MAX_SPACING = 26
+TURNOVER_MARK = pygame.Color("#ff7a59")
+
+
+def chart_rows(geometry: FieldGeometry, count: int) -> tuple[list[int], float]:
+    """Row y positions for ``count`` chart rows, top to bottom, compressed to fit the turf."""
+    if count <= 0:
+        return [], CHART_MAX_SPACING
+    top = geometry.turf.top + CHART_MARGIN
+    bottom = geometry.turf.bottom - CHART_MARGIN
+    spacing = CHART_MAX_SPACING if count == 1 else min(CHART_MAX_SPACING, (bottom - top) / (count - 1))
+    return [round(top + spacing * index) for index in range(count)], spacing
+
+
+def draw_drive_chart(
+    surface: pygame.Surface,
+    geometry: FieldGeometry,
+    rows: tuple[PlayLine, ...],
+    current: PlayLine | None,
+    progress: float,
+) -> tuple[int, int] | None:
+    """Every play of a drive stacked top to bottom: lines and symbols only, no text.
+
+    ``current`` (the possession change, while it animates) is the last row. Returns
+    the animating row's tip.
+    """
+    lines = list(rows) + ([current] if current is not None else [])
+    ys, spacing = chart_rows(geometry, len(lines))
+    width = max(2, min(6, round(spacing * 0.36)))
+    tip = None
+    for index, (line, y) in enumerate(zip(lines, ys)):
+        animating = current is not None and index == len(lines) - 1
+        row_progress = progress if animating else 1.0
+        row_tip = _draw_chart_row(surface, geometry, line, y, width, spacing, row_progress)
+        if animating:
+            tip = row_tip
+    return tip
+
+
+def _draw_chart_row(
+    surface: pygame.Surface,
+    geometry: FieldGeometry,
+    line: PlayLine,
+    y: int,
+    width: int,
+    spacing: float,
+    progress: float,
+) -> tuple[int, int] | None:
+    scale = width / 6
+    lengths = [abs(segment.end - segment.start) for segment in line.segments]
+    budget = sum(lengths) * max(0.0, min(1.0, progress))
+    # A return sits just under its play, inside the row's own space.
+    step = max(0, min(8, round(spacing * 0.4)))
+    tip: tuple[int, int] | None = None
+    for index, (segment, length) in enumerate(zip(line.segments, lengths)):
+        if budget <= 0:
+            break
+        row_y = y + index * step
+        drawn = min(length, budget)
+        budget -= drawn
+        heading = 1 if segment.end >= segment.start else -1
+        start_x = geometry.x_for(segment.start)
+        end_x = geometry.x_for(segment.start + heading * drawn)
+        color = PLAY_LINE_COLORS[segment.kind]
+        if index and step:
+            pygame.draw.line(surface, PLAY_LINE_CASING, (start_x, row_y - step), (start_x, row_y), 2)
+        _casing_line(surface, (start_x, row_y), (end_x, row_y), color, width)
+        if index == 0:
+            pygame.draw.circle(surface, PLAY_LINE_CASING, (start_x, row_y), max(2, round(7 * scale)))
+            pygame.draw.circle(surface, color, (start_x, row_y), max(1, round(4 * scale)))
+        if drawn >= length - 0.01 or budget <= 0:
+            _arrow_head(surface, (end_x, row_y), heading, color, scale=max(0.45, scale))
+        tip = (end_x, row_y)
+    if progress >= 0.999:
+        if line.incomplete_at is not None:
+            _draw_x(surface, (geometry.x_for(line.incomplete_at), y), max(3, round(9 * scale)),
+                    PLAY_LINE_PASS, width=width)
+        if line.turnover_at is not None:
+            # The ball changed hands here (a symbol only: the chart has no text tags).
+            center = (geometry.x_for(line.turnover_at), y)
+            pygame.draw.circle(surface, PLAY_LINE_CASING, center, max(3, round(7 * scale)))
+            pygame.draw.circle(surface, TURNOVER_MARK, center, max(2, round(5 * scale)))
+        if line.flash_end_zone is not None:
+            zone = geometry.left_end_zone if line.flash_end_zone <= 0 else geometry.right_end_zone
+            pygame.draw.rect(surface, MATCH_FOCUS, zone, 4)
+    return tip
+
+
 def _draw_ball(surface: pygame.Surface, center: tuple[int, int]) -> None:
     rect = pygame.Rect(0, 0, 30, 18)
     rect.center = center
@@ -318,7 +421,9 @@ def draw_match_field(
         surface.blit(down, down.get_rect(center=marker.center))
 
     tip = None
-    if overlay.line is not None:
+    if overlay.chart_mode:
+        tip = draw_drive_chart(surface, geometry, overlay.chart, overlay.line, overlay.line_progress)
+    elif overlay.line is not None:
         tip = draw_play_line(surface, geometry, overlay.line, overlay.line_progress)
     ball_center = (los_x, geometry.ball_y)
     if overlay.line is not None and overlay.line_progress < 1 and tip is not None:

@@ -212,8 +212,9 @@ one run should take 15-30 minutes, so defense stays light.
   keep the live estimate.
 - [ ] Smaller UI issues: two of three coach pairs share a coach; temporary and
   permanent upgrades look alike apart from a small icon; result-screen bar colors mix
-  run/pass and team colors; no halftime moment; the "Hands & piles update
-  after replay" notice covers the hand.
+  run/pass and team colors; no halftime moment beyond the drive result box's
+  HALFTIME. (Done: the "Hands & piles update after replay" notice is gone; a
+  rival drive now ends in a drive chart and result box.)
 - [ ] Visual polish: the profile screen still uses the old grey style; the
   title says "COLLEGE FOOTBALL" while the app is "Draft Drive Football"; a
   "FOCUS" tag shows on the main menu; play and bonus card art is text codes

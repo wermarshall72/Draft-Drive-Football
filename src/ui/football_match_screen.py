@@ -19,12 +19,17 @@ from src.engine.football import (
 )
 from src.engine.football_controller import FootballGameControllerState, FootballRunPhase
 from src.ui.football_match_events import (
+    drive_chart_lines,
     latest_play_line,
     outcome,
     kickoff_pending,
     period_banner,
     replay_label,
     snapshot_state,
+)
+from src.ui.football_match_drive import (
+    BOX_BUTTON_VARIANT, SKIP_DRIVE_LABEL, SKIP_FONT_SIZE, SKIP_LABEL, SKIP_VARIANT, ScoreSide,
+    box_button_rect, draw_drive_box, skip_button_rect,
 )
 from src.ui.football_match_field import FIELD_HEIGHT, FieldOverlay, draw_match_field
 from src.ui.football_inspect import InspectState
@@ -41,7 +46,7 @@ from src.ui.football_match_outcome import (
     status_prompt,
 )
 from src.ui.football_match_palette import (
-    MATCH_CANVAS, MATCH_DANGER, MATCH_INK, MATCH_MUTED, MATCH_PANEL, MATCH_PANEL_DEEP,
+    MATCH_CANVAS, MATCH_DANGER, MATCH_INK, MATCH_MUTED, MATCH_PANEL_DEEP,
     MATCH_PANEL_EDGE, MATCH_TEXT, blit_text, match_font, plain_font,
 )
 from src.ui.football_match_perks import (
@@ -60,7 +65,7 @@ from src.ui.football_pause_menu import (
     draw_pause_menu,
 )
 from src.ui.football_match_scoreboard import SCOREBOARD_HEIGHT, draw_scoreboard
-from src.ui.football_ui_kit import stadium_backdrop
+from src.ui.football_ui_kit import draw_kit_button, stadium_backdrop
 from src.ui.text import fit_text
 from src.ui.football_ai_team_colors import opponent_colors
 from src.ui.theme import Theme, readable_ink
@@ -76,8 +81,6 @@ BOTTOM_HEIGHT = 720 - 8 - BOTTOM_TOP
 LEFT_PILES_RECT = pygame.Rect(MARGIN, BOTTOM_TOP, 256 - MARGIN - 8, BOTTOM_HEIGHT)
 HAND_RECT = pygame.Rect(256, BOTTOM_TOP, 768, BOTTOM_HEIGHT)
 RIGHT_PILES_RECT = pygame.Rect(1024 + 8, BOTTOM_TOP, 256 - MARGIN - 8, BOTTOM_HEIGHT)
-POST_REPLAY_NOTE = "HANDS & PILES UPDATE AFTER REPLAY"
-GROUP_NOTE_OFFSET = 120
 PAUSE_RECT = pygame.Rect(SCOREBOARD_RECT.centerx + 94, SCOREBOARD_RECT.top + 10, 84, 26)
 # Every perk the human's roster carries, in the team block between the score and the
 # clock panel: offense chips on the top row, defense chips below.
@@ -141,6 +144,7 @@ class FootballMatchScreen:
         self._strip_actions: list[StripAction] = []
         self._selectable_cards: list[Button] = []
         self.buttons: list[Button] = []
+        self._match_events: tuple = ()
         self.pause_menu.reset()
 
     def settle(self) -> None:
@@ -150,7 +154,8 @@ class FootballMatchScreen:
         self.interaction.cancel_drag()
         self.pause_menu.reset()
         if self.playback.blocking():
-            self.playback.skip()
+            # Any drive result box is skipped: resuming goes straight to the decision.
+            self.playback.finish()
 
     # -- state -------------------------------------------------------------------
 
@@ -183,6 +188,10 @@ class FootballMatchScreen:
 
     def input_blocked(self) -> bool:
         return self.playback.blocking()
+
+    def close_drive_box(self) -> None:
+        """The result box's button: play the held possession change."""
+        self.playback.release(self.clock(), self._match_events)
 
     def display_match(self, match: FootballMatchState) -> FootballMatchState:
         if self.playback.shown <= 0 or self.playback.match_key != MatchPlayback._key(match):
@@ -311,9 +320,16 @@ class FootballMatchScreen:
         if escape:
             self.open_pause()
             return HandEvent(HandEventKind.HANDLED)
+        if self.playback.box_open:
+            if event.type == pygame.KEYDOWN and event.key in (
+                pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE,
+            ):
+                self.close_drive_box()
+                return HandEvent(HandEventKind.HANDLED)
         if self.playback.blocking():
             if event.type == pygame.KEYDOWN and event.key == pygame.K_s:
-                self.playback.skip()
+                if self.playback.replaying:
+                    self.playback.skip()
                 return HandEvent(HandEventKind.HANDLED)
             if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
                 return HandEvent(HandEventKind.HANDLED)
@@ -354,6 +370,9 @@ class FootballMatchScreen:
         if match is None:
             raise RuntimeError("The controller did not provide an active match state.")
         now = self.sync_playback(match)
+        self._match_events = match.match_events
+        playback = self.playback
+        box_open = playback.box_open
         display = self.display_match(match)
         kicking_next = (
             kickoff_pending(match, self.playback.shown)
@@ -374,10 +393,25 @@ class FootballMatchScreen:
         )
 
         events = display.match_events
-        current_index = len(events) - 1
         latest = latest_play_line(events)
         line = latest[1] if latest is not None else None
-        line_is_current = latest is not None and latest[0] == current_index
+        line_is_current = latest is not None and latest[0] >= playback.current_step_start()
+        chart: tuple = ()
+        chart_mode = playback.chart_visible and playback.match_key == MatchPlayback._key(match)
+        if chart_mode:
+            # The drive chart: every play of the rival's drive, then the released
+            # possession change joining its bottom while it animates.
+            assert playback.drive is not None
+            start, end = playback.chart_range()
+            chart = drive_chart_lines(match.match_events, start, end)
+            joins = (
+                playback.released and latest is not None and latest[0] >= playback.drive.hold
+                and line_is_current
+            )
+            if joins and chart:
+                chart, line = chart[:-1], chart[-1]
+            else:
+                line, line_is_current = None, False
         elapsed = max(0, now - self.playback.step_started)
         banner = None
         if events and elapsed < EVENT_DURATION_MS + 300:
@@ -390,6 +424,8 @@ class FootballMatchScreen:
             flash_elapsed_ms=elapsed if line_is_current else None,
             banner=banner,
             drop_hint=self.interaction.dragging and not blocked,
+            chart=chart,
+            chart_mode=chart_mode,
         )
         draw_match_field(
             surface, FIELD_RECT, display, self.theme.primary, overlay,
@@ -416,17 +452,23 @@ class FootballMatchScreen:
         )
         if blocked:
             prompt = ""
-            strip_actions = [StripAction("SKIP >>", self.playback.skip, "strip-skip")]
+            strip_actions: list[StripAction] = []
             playback_label = replay_label(
                 match.match_events, self.playback.origin, self.playback.shown, self.playback.target
-            )
+            ) if playback.replaying and playback.step_first is None else None
         else:
             prompt, strip_actions = decision_actions(state, callbacks)
             prompt = prompt or status_prompt(state)
             playback_label = None
         sub_lines = () if blocked else prompt_lines(state)
+        # A released possession change names itself while it animates, not the
+        # scheme call recorded after it.
+        told = (
+            playback.step_first
+            if playback.replaying and playback.step_first is not None else len(events) - 1
+        )
         current_outcome = (
-            outcome(events[-1], events[-2] if len(events) > 1 else None,
+            outcome(events[told], events[told - 1] if told > 0 else None,
                     match.team_a.team_name, match.team_b.team_name)
             if events else None
         )
@@ -443,12 +485,25 @@ class FootballMatchScreen:
             for action, rect in zip(strip_actions, rects)
         ]
         self._strip_actions = strip_actions
+        if playback.replaying:
+            label = SKIP_DRIVE_LABEL if playback.rival_drive_replay else SKIP_LABEL
+            buttons.append(Button(label, self.playback.skip, skip_button_rect(FIELD_RECT, label),
+                                  variant=SKIP_VARIANT))
+        if box_open:
+            assert playback.drive is not None
+            # The box's button and PAUSE are the only actions while it shows.
+            buttons.append(Button(playback.drive.button, self.close_drive_box,
+                                  box_button_rect(FIELD_RECT), variant=BOX_BUTTON_VARIANT))
+        under_focus = -1 if box_open else focus_index
+        under_hover = None if box_open else hover_index
+        under_pressed = None if box_open else pressed_index
+        live_offset = len(buttons)
 
         self.interaction.play_areas = (FIELD_RECT, STRIP_RECT)
         hand_buttons = self.hand.draw(
             surface, HAND_RECT, state, display, self.interaction,
             input_blocked=blocked,
-            focus_index=focus_index, hover_index=hover_index, pressed_index=pressed_index,
+            focus_index=under_focus, hover_index=under_hover, pressed_index=under_pressed,
             button_offset=len(buttons),
             choose_card=actions.play_card,
             choose_fallback=actions.fallback,
@@ -457,7 +512,7 @@ class FootballMatchScreen:
             button for button in hand_buttons if button.variant in ("hand-card", "hand-fallback")
         ]
         buttons.extend(hand_buttons)
-        buttons.extend(self._draw_tray(surface, display, len(buttons), focus_index, hover_index))
+        buttons.extend(self._draw_tray(surface, display, len(buttons), under_focus, under_hover))
 
         offense_deck, defense_deck = match.team_a_offense_deck, match.team_a_defense_deck
         assert offense_deck is not None and defense_deck is not None
@@ -470,10 +525,12 @@ class FootballMatchScreen:
                 draw_pile_panel(
                     surface, rect, deck, offensive=offensive,
                     back_color=self.theme.primary, back_ink=readable_ink(self.theme.primary),
-                    initial=initial, focus_index=focus_index, hover_index=hover_index,
-                    button_offset=len(buttons), open_pile=self.open_pile, enabled=True,
+                    initial=initial, focus_index=under_focus, hover_index=under_hover,
+                    button_offset=len(buttons), open_pile=self.open_pile, enabled=not box_open,
                 )
             )
+        if box_open:
+            buttons = buttons[:live_offset]
         buttons.append(Button("PAUSE", self.open_pause, PAUSE_RECT, variant="match-pause"))
 
         for index, button in enumerate(buttons):
@@ -488,8 +545,24 @@ class FootballMatchScreen:
                     surface, button, focused=focus_index == index,
                     hovered=hover_index == index, pressed=pressed_index == index,
                 )
+            elif button.variant == SKIP_VARIANT:
+                draw_kit_button(
+                    surface, button, focused=focus_index == index, hovered=hover_index == index,
+                    pressed=pressed_index == index, font_size=SKIP_FONT_SIZE,
+                )
+            elif button.variant == BOX_BUTTON_VARIANT:
+                assert playback.drive is not None
+                draw_drive_box(
+                    surface, FIELD_RECT, playback.drive,
+                    ScoreSide(match.team_a.team_name, display.team_a_score,
+                              self.theme.primary, self.theme.secondary),
+                    ScoreSide(match.team_b.team_name, display.team_b_score,
+                              opponent.primary, opponent.secondary),
+                    focused=focus_index == index, hovered=hover_index == index,
+                    pressed=pressed_index == index,
+                )
         if blocked:
-            self._draw_post_replay_marks(surface, opponent_hand_rect)
+            self._dim_hands_and_piles(surface, opponent_hand_rect)
         if error:
             self._draw_error(surface, error)
         self.card_tip_rect = None
@@ -497,7 +570,10 @@ class FootballMatchScreen:
             self._draw_card_tooltip(surface, display, buttons, focus_index, hover_index)
         else:
             self.card_tip.reset()
-        self._draw_perk_overlays(surface, display, buttons, focus_index, hover_index)
+        if box_open:
+            self.perk_tip.reset()
+        else:
+            self._draw_perk_overlays(surface, display, buttons, focus_index, hover_index)
 
         if self.popup.open:
             buttons = self._draw_popup(surface, state, display, focus_index, hover_index, pressed_index, actions)
@@ -646,9 +722,9 @@ class FootballMatchScreen:
         self.card_tip_rect = draw_card_tooltip(surface, lines, anchor, right_limit=limit)
 
     @staticmethod
-    def _draw_post_replay_marks(surface: pygame.Surface, opponent_hand: pygame.Rect) -> None:
+    def _dim_hands_and_piles(surface: pygame.Surface, opponent_hand: pygame.Rect) -> None:
         """Events carry no deck snapshots, so mid-replay hands, piles, and opponent
-        counts already show the post-replay state; dim them and say so once."""
+        counts already show the post-replay state; dim them until the replay ends."""
         for area, alpha in (
             (HAND_RECT, 120), (LEFT_PILES_RECT, 110), (RIGHT_PILES_RECT, 110),
             (opponent_hand.inflate(6, 6), 130),
@@ -656,14 +732,6 @@ class FootballMatchScreen:
             veil = pygame.Surface(area.size, pygame.SRCALPHA)
             veil.fill((*MATCH_CANVAS[:3], alpha))
             surface.blit(veil, area.topleft)
-        font = match_font(13)
-        text = POST_REPLAY_NOTE
-        plate = pygame.Rect((0, 0), font.size(text)).inflate(22, 10)
-        plate.center = (HAND_RECT.centerx, HAND_RECT.top + GROUP_NOTE_OFFSET)
-        pygame.draw.rect(surface, MATCH_INK, plate.inflate(2, 2), border_radius=9)
-        pygame.draw.rect(surface, MATCH_PANEL, plate, border_radius=8)
-        pygame.draw.rect(surface, MATCH_PANEL_EDGE, plate, 1, border_radius=8)
-        blit_text(surface, font, text, MATCH_TEXT, HAND_RECT, center=plate.center)
 
     @staticmethod
     def _draw_error(surface: pygame.Surface, message: str) -> None:

@@ -246,7 +246,22 @@ covers extracted interaction state.
   multi-event updates one event per second, blocks input until done or skipped,
   and always replays a match's final events before the result screen; its
   label counts only snaps and kicks, and hands, piles, and opponent counts are
-  dimmed with a note because they already show the post-replay decks.
+  dimmed (they already show the post-replay decks). A rival drive's replay
+  stops before the possession change (`rival_drive_end` in the events module:
+  kickoff after a score, punt, turnover, failed fourth down, missed field goal;
+  none for halftime, the end of the game, or a defensive touchdown) and opens
+  the drive result box (`box_open`); `release` plays the held events as one
+  step, and the drive chart (`chart_range`, built from every event since the
+  drive began, so Green Dog splits are included; `drive_chart_lines`) stays
+  until the human's next play. The field's bottom-right SKIP button (SKIP TO
+  END OF DRIVE for rival drives, S key) stops at the box; `finish` (used by
+  `settle` when leaving the match) skips the box, so a resume goes straight to
+  the decision. [football_match_drive.py](src/ui/football_match_drive.py) draws
+  the SKIP button and the translucent result box (headline, conversion or
+  turnover subline, team-colored outlined scores, grey KICKOFF / TAKE THE BALL /
+  CONTINUE button; Enter or Space presses it); `draw_drive_chart` in the field
+  module stacks one line-and-symbol row per play (no text tags). See
+  [test_rival_drive_end.py](tests/test_rival_drive_end.py).
   [football_match_scoreboard.py](src/ui/football_match_scoreboard.py) draws
   badges, scores, clock, situation, and the opponent's face-down hand counts
   (never identities); [football_match_field.py](src/ui/football_match_field.py)

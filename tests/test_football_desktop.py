@@ -86,7 +86,7 @@ from src.ui.football_match_scoreboard import (
     ball_spot_text, down_text, draw_scoreboard, opponent_hand_counts,
 )
 from src.ui.football_match_screen import (
-    FIELD_RECT, HAND_RECT, LEFT_PILES_RECT, POST_REPLAY_NOTE, RIGHT_PILES_RECT,
+    FIELD_RECT, HAND_RECT, LEFT_PILES_RECT, RIGHT_PILES_RECT,
     SCOREBOARD_RECT as SCOREBOARD_RECT_FOR_TESTS, STRIP_RECT, FootballMatchScreen, MatchActions,
 )
 from src.ui import player_art
@@ -157,9 +157,9 @@ def _activate(
 ) -> None:
     desktop.router.draw(_surface())
     screen = desktop.router.current
-    if screen is desktop.run_screen and label != "SKIP >>":
+    if screen is desktop.run_screen and label not in {"SKIP", "SKIP TO END OF DRIVE"}:
         if screen.match_screen.playback.blocking() and not screen.match_screen.popup.open:
-            screen.match_screen.playback.skip()
+            screen.match_screen.playback.finish()
             desktop.router.draw(_surface())
     matching = [button for button in screen.buttons if button.label == label]
     button = matching[index]
@@ -208,11 +208,11 @@ def _start_match(desktop: DesktopApplication) -> None:
 
 
 def _skip_match_playback(desktop: DesktopApplication) -> None:
-    """Press Skip if an AI replay is blocking input, leaving the screen drawn."""
+    """Finish any AI replay (and drive result box) blocking input, leaving the screen drawn."""
     desktop.router.draw(_surface())
     match_screen = desktop.run_screen.match_screen
     if match_screen.playback.blocking():
-        match_screen.playback.skip()
+        match_screen.playback.finish()
         desktop.router.draw(_surface())
 
 
@@ -1435,7 +1435,8 @@ def test_match_playback_replays_ai_drive_in_order_blocks_input_and_skips(
     assert playback.blocking()
     shown = [len(screen.match_screen.display_match(match).match_events)]
     labels = [button.label for button in screen.buttons]
-    assert labels[0] == "SKIP >>"
+    assert labels[0] == "SKIP TO END OF DRIVE"
+    assert screen.buttons[0].rect.bottom <= FIELD_RECT.bottom
     assert not any(button.variant == "hand-card" for button in screen.buttons)
     assert screen.match_interaction.card_rects == {}
     unchanged = controller.state
@@ -1454,15 +1455,15 @@ def test_match_playback_replays_ai_drive_in_order_blocks_input_and_skips(
     event = match.match_events[len(display.match_events) - 1]
     assert (display.team_a_score, display.team_b_score) == (event.team_a_score, event.team_b_score)
     assert display.game_clock_seconds == event.game_clock_seconds
-    if playback.blocking():
-        with text_audit() as records:
-            desktop.router.draw(_surface())
-        assert POST_REPLAY_NOTE in [text for text, _, _ in records]
+    if playback.replaying:
         desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_s}))
-    assert not playback.blocking()
-    with text_audit() as records:
+    if playback.box_open:
         desktop.router.draw(_surface())
-    assert POST_REPLAY_NOTE not in [text for text, _, _ in records]
+        assert not any(button.variant == "hand-card" for button in screen.buttons)
+        desktop.router.handle_event(pygame.event.Event(pygame.KEYDOWN, {"key": pygame.K_RETURN}))
+        now[0] += EVENT_DURATION_MS
+    desktop.router.draw(_surface())
+    assert not playback.blocking()
     assert len(screen.match_screen.display_match(match).match_events) == total
     assert any(button.variant == "hand-card" for button in screen.buttons)
 
@@ -1748,9 +1749,16 @@ def test_match_controls_follow_decisions_ai_advances_and_game_finishes(
     assert seen_offense and seen_defense and seen_ai_play and seen_two_point
     # The final plays replay on the match screen before the result appears.
     desktop.router.draw(_surface())
-    if screen.match_screen.playback.blocking():
-        assert screen.buttons[0].label == "SKIP >>"
+    playback = screen.match_screen.playback
+    if playback.replaying:
+        assert screen.buttons[0].label in {"SKIP", "SKIP TO END OF DRIVE"}
         screen.buttons[0].action()
+        desktop.router.draw(_surface())
+    if playback.box_open:
+        assert screen.buttons[0].label == "CONTINUE"
+        screen.buttons[0].action()
+    if playback.blocking():
+        playback.skip()  # the released last play's one-second animation
     desktop.router.draw(_surface())
     assert any(
         button.label in {"OPEN NEXT WEEK SHOP", "RETURN TO MAIN MENU"}
@@ -2198,7 +2206,7 @@ def test_replay_label_counts_real_plays_and_indicator_tracks_blocking(tmp_path: 
     assert screen.match_screen.playback.blocking()
     # The first replayed event is the scheme call, which is not counted as a play.
     assert f"REPLAYING · {len(plays)} PLAYS · [S] SKIP" in texts or f"REPLAYING · {len(plays)} PLAY · [S] SKIP" in texts
-    assert POST_REPLAY_NOTE in texts
+    assert "HANDS & PILES UPDATE AFTER REPLAY" not in texts
     assert not any(text.startswith("REPLAYING · PLAY 1 OF") and "DEFENSE" in text for text in texts)
     first_play = next(index for index, event in enumerate(new) if is_real_play(event))
     now[0] += EVENT_DURATION_MS * first_play
@@ -2206,14 +2214,13 @@ def test_replay_label_counts_real_plays_and_indicator_tracks_blocking(tmp_path: 
         desktop.router.draw(_surface())
     texts = [text for text, _, _ in records]
     assert f"REPLAYING · PLAY 1 OF {len(plays)} · [S] SKIP" in texts
-    assert POST_REPLAY_NOTE in texts
-    assert "SKIP >>" in [b.label for b in screen.buttons]
-    # The note disappears once the replay finishes on its own.
+    assert "SKIP TO END OF DRIVE" in [b.label for b in screen.buttons]
+    # The replay finishes on its own (at the drive result box when the drive ended).
     now[0] += EVENT_DURATION_MS * len(new)
-    with text_audit() as records:
-        desktop.router.draw(_surface())
-    assert not screen.match_screen.playback.blocking()
-    assert POST_REPLAY_NOTE not in [text for text, _, _ in records]
+    desktop.router.draw(_surface())
+    playback = screen.match_screen.playback
+    assert not playback.replaying
+    assert playback.box_open == (playback.drive is not None)
     assert replay_label(new, 0, 1, 1) == "REPLAYING · [S] SKIP"  # scheme-only replays
 
 

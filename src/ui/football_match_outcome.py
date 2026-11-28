@@ -45,7 +45,7 @@ HEADLINE_SIZES = (32, 28, 24, 20)
 class StripAction:
     label: str
     callback: Callable[[], None]
-    variant: str = "strip"  # "strip", "strip-primary", "strip-challenge", "strip-skip"
+    variant: str = "strip"  # "strip", "strip-primary", "strip-challenge"
     enabled: bool = True
 
 

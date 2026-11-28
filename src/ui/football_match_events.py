@@ -758,3 +758,171 @@ def overturned_sequences(events: tuple[FootballMatchEvent, ...]) -> frozenset[in
     return frozenset(
         sequence for event in events for sequence in event.reverses_event_sequences
     )
+
+
+# -- the end of a rival drive: drive chart and result box ---------------------------
+
+KICKOFF_BUTTON = "KICKOFF"
+TAKE_BALL_BUTTON = "TAKE THE BALL"
+CONTINUE_BUTTON = "CONTINUE"
+
+
+@dataclass(frozen=True)
+class RivalDriveEnd:
+    """Where a rival drive ends inside a run of recorded events, and how to announce it.
+
+    ``start`` is the drive's first event (it may come from an earlier update, before
+    a Green Dog decision). ``hold`` is the possession change: the event that hands
+    the ball to the human, held back until the result box is closed. It equals
+    ``end`` (no event held) when the drive ends without one (halftime, the end of the
+    game, or a defensive touchdown). ``end`` is the number of events considered.
+    """
+
+    start: int
+    hold: int
+    end: int
+    headline: str
+    detail: str
+    button: str
+
+
+def _rival_snap(events: tuple[FootballMatchEvent, ...], index: int) -> bool:
+    """True when ``events[index]`` is a snap or kick by the rival's offense."""
+    if index <= 0:
+        return False
+    event = events[index]
+    if events[index - 1].possession is not RIVAL_SIDE:
+        return False
+    return isinstance(event.action, OffensivePlayAction) or event.action in (
+        FootballFourthDownAction.PUNT, FootballFourthDownAction.FIELD_GOAL,
+    )
+
+
+def rival_drive_start(events: tuple[FootballMatchEvent, ...], index: int) -> int:
+    """The first event of the rival drive that ``events[index]`` belongs to."""
+    start = index
+    while start - 1 >= 1:
+        candidate = events[start - 1]
+        before = events[start - 2]
+        if (
+            before.possession is not RIVAL_SIDE
+            or candidate.action is FootballAutomaticAction.KICKOFF
+            or candidate.period != before.period
+        ):
+            break
+        start -= 1
+    return start
+
+
+def _clock_headline(event: FootballMatchEvent, previous: FootballMatchEvent) -> str | None:
+    if event.status is FootballMatchStatus.COMPLETED:
+        return "END OF GAME"
+    if event.period == previous.period:
+        return None
+    if event.period == 2:
+        return "HALFTIME"
+    return "END OF REGULATION" if previous.period == 2 else "END OF OVERTIME"
+
+
+def _conversion_detail(event: FootballMatchEvent) -> str:
+    kicked = event.action is FootballConversionAction.EXTRA_POINT
+    name = "EXTRA POINT" if kicked else "2-PT TRY"
+    if event.points_scored and event.scoring_team is RIVAL_SIDE:
+        return f"{name} GOOD"
+    returned = " · RETURNED FOR 2" if event.points_scored else ""
+    if kicked:
+        return f"EXTRA POINT {'BLOCKED' if event.blocked else 'MISSED'}{returned}"
+    return f"2-PT TRY FAILED{returned}"
+
+
+def rival_drive_end(
+    events: tuple[FootballMatchEvent, ...], origin: int, rival_name: str
+) -> RivalDriveEnd | None:
+    """The rival drive that ends in ``events[origin:]``, or ``None``.
+
+    Never reads or reveals the rival's defense call: only the rival's own offense.
+    """
+    rival = rival_name.upper()
+    total = len(events)
+    for index in range(max(origin, 1), total):
+        if not _rival_snap(events, index):
+            continue
+        event, previous = events[index], events[index - 1]
+        action = event.action
+        human_scored = bool(event.points_scored) and event.scoring_team is HUMAN_SIDE
+        rival_scored = bool(event.points_scored) and event.scoring_team is RIVAL_SIDE
+
+        def ends(hold: int, headline: str, detail: str, button: str) -> RivalDriveEnd:
+            hold = min(hold, total)
+            if hold >= total or events[-1].status is FootballMatchStatus.COMPLETED:
+                button = CONTINUE_BUTTON
+            return RivalDriveEnd(
+                rival_drive_start(events, index), hold, total, headline, detail, button
+            )
+
+        def kickoff_after(position: int) -> int:
+            """The kickoff following a score, else the end of these events."""
+            for later in range(position, total):
+                if events[later].action is FootballAutomaticAction.KICKOFF:
+                    return later
+            return total
+
+        if human_scored and event.points_scored != SAFETY_POINTS:
+            return ends(index + 1, "DEFENSIVE TOUCHDOWN", "", CONTINUE_BUTTON)
+        if human_scored:
+            return ends(kickoff_after(index + 1), "SAFETY", "", KICKOFF_BUTTON)
+        if isinstance(action, OffensivePlayAction):
+            result = event.play_result
+            assert result is not None
+            if rival_scored:
+                following = index + 1
+                detail = ""
+                if following < total and isinstance(events[following].action, FootballConversionAction):
+                    detail = _conversion_detail(events[following])
+                    following += 1
+                return ends(kickoff_after(following), f"{rival} TOUCHDOWN", detail, KICKOFF_BUTTON)
+            if result.turnover:
+                if result.turnover_type is not None:
+                    interception = result.turnover_type is FootballTurnoverType.INTERCEPTION
+                else:
+                    interception = play_kind(result.offensive_play) is PlayLineKind.PASS
+                detail = "INTERCEPTION" if interception else "FUMBLE"
+                return ends(index, f"{rival} TURNOVER", detail, TAKE_BALL_BUTTON)
+            if result.turnover_on_downs:
+                return ends(index, f"{rival} TURNOVER ON DOWNS", "", TAKE_BALL_BUTTON)
+        elif action is FootballFourthDownAction.PUNT:
+            return ends(index, f"{rival} PUNT", "BLOCKED" if event.blocked else "", TAKE_BALL_BUTTON)
+        elif action is FootballFourthDownAction.FIELD_GOAL:
+            if rival_scored:
+                return ends(kickoff_after(index + 1), f"{rival} FIELD GOAL", "", KICKOFF_BUTTON)
+            return ends(index, f"{rival} MISSED FIELD GOAL",
+                        "BLOCKED" if event.blocked else "", TAKE_BALL_BUTTON)
+        clock = _clock_headline(event, previous)
+        if clock is not None:
+            return ends(index + 1, clock, "", CONTINUE_BUTTON)
+    return None
+
+
+def rival_replay(events: tuple[FootballMatchEvent, ...], origin: int, target: int) -> bool:
+    """True when ``events[origin:target]`` include a snap or kick by the rival's offense."""
+    return any(_rival_snap(events, index) for index in range(max(origin, 1), target))
+
+
+def drive_chart_lines(
+    events: tuple[FootballMatchEvent, ...], start: int, end: int
+) -> tuple[PlayLine, ...]:
+    """One play line per drawable snap or kick in ``events[start:end]``, in order.
+
+    Plays a Challenge overturned are left out.
+    """
+    overturned = overturned_sequences(events)
+    lines: list[PlayLine] = []
+    for index in range(max(start, 0), min(end, len(events))):
+        event = events[index]
+        if event.sequence in overturned:
+            continue
+        line = play_line(event, events[index - 1] if index else None)
+        if line is None or line == CLEAR_LINE:
+            continue
+        lines.append(line)
+    return tuple(lines)

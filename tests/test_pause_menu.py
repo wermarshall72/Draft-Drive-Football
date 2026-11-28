@@ -402,7 +402,7 @@ def test_continue_returns_to_the_regular_result_screen(tmp_path: Path, monkeypat
     desktop.run_screen._result_view.clock = None
     _skip = desktop.run_screen.match_screen
     _draw(desktop)
-    _skip.playback.skip()
+    _skip.playback.finish()
     assert desktop.football_controller.state.phase is FootballRunPhase.READY_FOR_NEXT_GAME
     _round_trip(desktop)
     assert _labels(desktop) == ["OPEN NEXT WEEK SHOP", "PAUSE"]
@@ -421,7 +421,7 @@ def test_ended_runs_are_not_resumable(tmp_path: Path, monkeypatch) -> None:
             _activate(desktop, "OPEN NEXT WEEK SHOP")
             _activate(desktop, "FINISH SHOP / START MATCH")
     _draw(desktop)
-    desktop.run_screen.match_screen.playback.skip()
+    desktop.run_screen.match_screen.playback.finish()
     assert desktop.football_controller.state.phase is FootballRunPhase.FIRED
     assert "PAUSE" not in _labels(desktop)
     _esc(desktop)
